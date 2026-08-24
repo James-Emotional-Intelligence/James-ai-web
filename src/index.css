@@ -1,0 +1,94 @@
+@import "tailwindcss";
+@import "@fontsource/be-vietnam-pro/400.css";
+@import "@fontsource/be-vietnam-pro/500.css";
+@import "@fontsource/be-vietnam-pro/600.css";
+@import "@fontsource/be-vietnam-pro/700.css";
+
+:root {
+  --color-bg: #050806;
+  --color-bg-soft: #080D09;
+  --color-surface: #0B120D;
+  --color-surface-elevated: #101A13;
+  --color-surface-hover: #142219;
+  --color-primary: #16A34A;
+  --color-primary-hover: #22C55E;
+  --color-primary-strong: #15803D;
+  --color-green-dark: #14532D;
+  --color-green-muted: #86EFAC;
+  --color-text: #F3FAF5;
+  --color-text-muted: #A9B8AE;
+  --color-border: rgba(34, 197, 94, 0.22);
+  --color-focus: #4ADE80;
+}
+
+body {
+  font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* Accessible focus visible styles */
+*:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Custom Scrollbar for desktop */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: #1B3524;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #275236;
+}
+
+/* Reduced motion accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* PlayStation-inspired subtle mesh and emerald surface glow */
+.jami-bg-canvas {
+  background-color: var(--color-bg);
+}
+
+.jami-bg-surface {
+  background-color: var(--color-surface);
+}
+
+.jami-bg-elevated {
+  background-color: var(--color-surface-elevated);
+}
+
+.jami-mesh-gradient {
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(22, 163, 74, 0.15) 0px, transparent 55%),
+    radial-gradient(at 85% 20%, rgba(34, 197, 94, 0.12) 0px, transparent 50%),
+    radial-gradient(at 50% 80%, rgba(8, 13, 9, 0.95) 0px, transparent 100%);
+}
+
+.jami-card-hover {
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease;
+}
+
+.jami-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.4), 0 4px 12px -2px rgba(22, 163, 74, 0.1);
+  border-color: rgba(34, 197, 94, 0.4);
+}

@@ -1,0 +1,10 @@
+{
+  "name": "JAMI AI",
+  "description": "Trợ lý AI lập kế hoạch và đồng hành học tập cá nhân hóa cho học sinh Việt Nam",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

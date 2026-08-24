@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jami-ai",
+  "main": "worker/index.ts",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "<CLOUDFLARE_HYPERDRIVE_ID>"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "R2_MATERIALS",
+      "bucket_name": "jami-materials"
+    }
+  ],
+  "triggers": {
+    "crons": ["0 1 * * *"] // Daily exam milestone and reminder scheduler
+  },
+  "vars": {
+    "APP_MODE": "production",
+    "OPENAI_TEXT_MODEL": "gpt-4o-mini",
+    "OPENAI_TRANSCRIBE_MODEL": "gpt-transcribe",
+    "OPENAI_REALTIME_MODEL": "gpt-4o-realtime-preview"
+  }
+}
