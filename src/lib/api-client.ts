@@ -279,6 +279,43 @@ export const api = {
     const query = timetableId ? `?timetableId=${encodeURIComponent(timetableId)}` : '';
     return fetchJson<{ success: boolean; deletedCount: number }>(`/timetables-all-entries${query}`, { method: 'DELETE' });
   },
+  importTimetableOcr: (imageBase64: string, mimeType?: string) =>
+    fetchJson<{
+      success: boolean;
+      timetableName: string;
+      entries: Array<{
+        dayOfWeek: number;
+        title: string;
+        startLocalTime: string;
+        endLocalTime: string;
+        room?: string;
+        teacher?: string;
+      }>;
+    }>('/timetables/import-ocr', {
+      method: 'POST',
+      body: JSON.stringify({ imageBase64, mimeType }),
+    }),
+  confirmTimetableOcr: (data: {
+    timetableName?: string;
+    replaceExisting?: boolean;
+    entries: Array<{
+      dayOfWeek: number;
+      title: string;
+      startLocalTime: string;
+      endLocalTime: string;
+      room?: string;
+      teacher?: string;
+    }>;
+  }) =>
+    fetchJson<{
+      success: boolean;
+      timetable: SchoolTimetable;
+      savedCount: number;
+      entries: TimetableEntry[];
+    }>('/timetables/import-ocr/confirm', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   getBusyEvents: (params?: { from?: string; to?: string }) => {
     const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';

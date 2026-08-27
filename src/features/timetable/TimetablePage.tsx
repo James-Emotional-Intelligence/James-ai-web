@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   CalendarDays,
   Plus,
@@ -19,6 +19,11 @@ import {
   Calendar,
   School,
   Download,
+  Upload,
+  Image as ImageIcon,
+  Check,
+  Layers,
+  FileText,
 } from 'lucide-react';
 import { api, ApiError } from '../../lib/api-client';
 import {
@@ -51,6 +56,7 @@ export const TimetablePage: React.FC = () => {
   const [isReplanning, setIsReplanning] = useState(false);
   const [isConfirmingProposal, setIsConfirmingProposal] = useState(false);
   const [proposalDiff, setProposalDiff] = useState<ScheduleProposal | null>(null);
+  const [isDownloadingCsv, setIsDownloadingCsv] = useState(false);
 
   // Modals
   const [isAddEntryOpen, setIsAddEntryOpen] = useState(false);
@@ -68,15 +74,43 @@ export const TimetablePage: React.FC = () => {
   const [entryCommuteBefore, setEntryCommuteBefore] = useState(15);
   const [entryCommuteAfter, setEntryCommuteAfter] = useState(15);
 
-  // Form States - Busy Event
+  // Form States - Busy Event with Extended Recurrence
   const [eventTitle, setEventTitle] = useState('');
   const [eventType, setEventType] = useState<'extra_class' | 'meal' | 'sleep' | 'commute' | 'personal'>('extra_class');
   const [eventDate, setEventDate] = useState('');
   const [eventStartTime, setEventStartTime] = useState('17:30');
   const [eventEndTime, setEventEndTime] = useState('19:00');
-  const [eventRecurrence, setEventRecurrence] = useState<'none' | 'weekly' | 'daily'>('none');
+  const [eventRecurrence, setEventRecurrence] = useState<
+    'none' | 'daily' | 'weekdays' | 'weekends' | 'weekly' | 'biweekly' | 'monthly' | 'custom_days'
+  >('none');
+  const [customDays, setCustomDays] = useState<number[]>([1, 3, 5]);
+  const [recurrenceUntil, setRecurrenceUntil] = useState('');
   const [eventSubjectId, setEventSubjectId] = useState('');
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
+
+  // OCR Timetable Import Modal States
+  const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
+  const [ocrStep, setOcrStep] = useState<'upload' | 'analyzing' | 'preview'>('upload');
+  const [ocrFile, setOcrFile] = useState<File | null>(null);
+  const [ocrPreviewUrl, setOcrPreviewUrl] = useState<string | null>(null);
+  const [ocrBase64, setOcrBase64] = useState<string | null>(null);
+  const [ocrMimeType, setOcrMimeType] = useState<string>('image/jpeg');
+  const [ocrTimetableName, setOcrTimetableName] = useState('Thời khóa biểu trường');
+  const [ocrReplaceExisting, setOcrReplaceExisting] = useState(true);
+  const [ocrExtractedEntries, setOcrExtractedEntries] = useState<
+    Array<{
+      id: string;
+      dayOfWeek: number;
+      title: string;
+      startLocalTime: string;
+      endLocalTime: string;
+      room?: string;
+      teacher?: string;
+    }>
+  >([]);
+  const [ocrErrorMessage, setOcrErrorMessage] = useState<string | null>(null);
+  const [isOcrSaving, setIsOcrSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Calculate Week Days
   const weekDays = useMemo(() => {
@@ -244,7 +278,7 @@ export const TimetablePage: React.FC = () => {
     }
   };
 
-  // Busy Event CRUD Submit
+  // Busy Event CRUD Submit with Expanded Recurrence
   const handleSaveBusyEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!eventTitle.trim()) return;
@@ -261,13 +295,31 @@ export const TimetablePage: React.FC = () => {
       return;
     }
 
+    const dayMap = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+    const jsDayMap: Record<number, string> = { 1: 'MO', 2: 'TU', 3: 'WE', 4: 'TH', 5: 'FR', 6: 'SA', 7: 'SU' };
+
     let recurrenceRule: string | undefined = undefined;
     if (eventRecurrence === 'daily') {
       recurrenceRule = 'FREQ=DAILY';
+    } else if (eventRecurrence === 'weekdays') {
+      recurrenceRule = 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR';
+    } else if (eventRecurrence === 'weekends') {
+      recurrenceRule = 'FREQ=WEEKLY;BYDAY=SA,SU';
     } else if (eventRecurrence === 'weekly') {
-      const dayMap = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
       const dayCode = dayMap[start.getDay()];
       recurrenceRule = `FREQ=WEEKLY;BYDAY=${dayCode}`;
+    } else if (eventRecurrence === 'biweekly') {
+      const dayCode = dayMap[start.getDay()];
+      recurrenceRule = `FREQ=WEEKLY;INTERVAL=2;BYDAY=${dayCode}`;
+    } else if (eventRecurrence === 'monthly') {
+      recurrenceRule = `FREQ=MONTHLY;BYMONTHDAY=${start.getDate()}`;
+    } else if (eventRecurrence === 'custom_days') {
+      const dayCodes = (customDays.length > 0 ? customDays : [1]).sort().map((d) => jsDayMap[d]).join(',');
+      recurrenceRule = `FREQ=WEEKLY;BYDAY=${dayCodes}`;
+    }
+
+    if (recurrenceRule && recurrenceUntil) {
+      recurrenceRule += `;UNTIL=${recurrenceUntil.replace(/-/g, '')}T235959Z`;
     }
 
     setIsFormSubmitting(true);
@@ -348,7 +400,6 @@ export const TimetablePage: React.FC = () => {
     }
   };
 
-  const [isDownloadingCsv, setIsDownloadingCsv] = useState(false);
   const handleDownloadTimetable = async () => {
     setIsDownloadingCsv(true);
     try {
@@ -357,6 +408,79 @@ export const TimetablePage: React.FC = () => {
       alert(err.message || 'Không thể tải xuống thời khóa biểu');
     } finally {
       setIsDownloadingCsv(false);
+    }
+  };
+
+  // OCR Timetable Import Handlers
+  const handleOcrFileSelect = (file: File) => {
+    setOcrFile(file);
+    setOcrErrorMessage(null);
+    const mime = file.type || 'image/jpeg';
+    setOcrMimeType(mime);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = reader.result as string;
+      setOcrPreviewUrl(res);
+      setOcrBase64(res);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRunOcrAnalysis = async () => {
+    if (!ocrBase64) {
+      setOcrErrorMessage('Vui lòng chọn hoặc kéo thả hình ảnh thời khóa biểu.');
+      return;
+    }
+    setOcrStep('analyzing');
+    setOcrErrorMessage(null);
+    try {
+      const res = await api.importTimetableOcr(ocrBase64, ocrMimeType);
+      if (res.timetableName) {
+        setOcrTimetableName(res.timetableName);
+      }
+      const entriesWithId = (res.entries || []).map((e, idx) => ({
+        id: 'ocr_' + idx + '_' + Math.random().toString(36).substring(2, 7),
+        dayOfWeek: e.dayOfWeek,
+        title: e.title,
+        startLocalTime: e.startLocalTime,
+        endLocalTime: e.endLocalTime,
+        room: e.room,
+        teacher: e.teacher,
+      }));
+      setOcrExtractedEntries(entriesWithId);
+      setOcrStep('preview');
+    } catch (err: any) {
+      setOcrErrorMessage(err.message || 'Không thể nhận dạng thời khóa biểu từ ảnh.');
+      setOcrStep('upload');
+    }
+  };
+
+  const handleConfirmOcrSave = async () => {
+    if (ocrExtractedEntries.length === 0) {
+      alert('Không có tiết học nào để lưu.');
+      return;
+    }
+    setIsOcrSaving(true);
+    try {
+      await api.confirmTimetableOcr({
+        timetableName: ocrTimetableName.trim() || 'Thời khóa biểu chính khóa',
+        replaceExisting: ocrReplaceExisting,
+        entries: ocrExtractedEntries.map((e) => ({
+          dayOfWeek: e.dayOfWeek,
+          title: e.title,
+          startLocalTime: e.startLocalTime,
+          endLocalTime: e.endLocalTime,
+          room: e.room,
+          teacher: e.teacher,
+        })),
+      });
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.5 } });
+      setIsOcrModalOpen(false);
+      await fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Lỗi khi lưu thời khóa biểu.');
+    } finally {
+      setIsOcrSaving(false);
     }
   };
 
@@ -382,28 +506,88 @@ export const TimetablePage: React.FC = () => {
     setEventStartTime(`${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`);
     const end = new Date(evt.endsAt);
     setEventEndTime(`${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`);
-    if (evt.recurrenceRule?.includes('FREQ=DAILY')) {
-      setEventRecurrence('daily');
-    } else if (evt.recurrenceRule?.includes('FREQ=WEEKLY')) {
-      setEventRecurrence('weekly');
+    
+    if (evt.recurrenceRule) {
+      const rule = evt.recurrenceRule;
+      if (rule.includes('FREQ=DAILY')) {
+        setEventRecurrence('daily');
+      } else if (rule.includes('BYDAY=MO,TU,WE,TH,FR')) {
+        setEventRecurrence('weekdays');
+      } else if (rule.includes('BYDAY=SA,SU')) {
+        setEventRecurrence('weekends');
+      } else if (rule.includes('INTERVAL=2')) {
+        setEventRecurrence('biweekly');
+      } else if (rule.includes('FREQ=MONTHLY')) {
+        setEventRecurrence('monthly');
+      } else if (rule.includes('FREQ=WEEKLY')) {
+        const byDayMatch = rule.match(/BYDAY=([A-Z,]+)/);
+        if (byDayMatch && byDayMatch[1].includes(',')) {
+          setEventRecurrence('custom_days');
+          const revMap: Record<string, number> = { MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6, SU: 7 };
+          const parsed = byDayMatch[1].split(',').map((c) => revMap[c]).filter(Boolean);
+          setCustomDays(parsed.length > 0 ? parsed : [1]);
+        } else {
+          setEventRecurrence('weekly');
+        }
+      }
+
+      const untilMatch = rule.match(/UNTIL=(\d{4})(\d{2})(\d{2})/);
+      if (untilMatch) {
+        setRecurrenceUntil(`${untilMatch[1]}-${untilMatch[2]}-${untilMatch[3]}`);
+      } else {
+        setRecurrenceUntil('');
+      }
     } else {
       setEventRecurrence('none');
+      setRecurrenceUntil('');
     }
+
     setEventSubjectId(evt.subjectId || '');
     setIsAddEventOpen(true);
   };
 
-  // Filter items for a specific day
+  // Filter items for a specific day with rich recurrence engine
   const getItemsForDay = (dayOfWeek: number, dateStr: string) => {
+    const currentDayDate = new Date(dateStr + 'T00:00:00');
     const dayEntries = timetableEntries.filter((e) => e.dayOfWeek === dayOfWeek);
 
     const dayEvents = busyEvents.filter((b) => {
       if (b.recurrenceRule) {
-        if (b.recurrenceRule.includes('FREQ=DAILY')) return true;
-        if (b.recurrenceRule.includes('FREQ=WEEKLY')) {
+        const rule = b.recurrenceRule;
+        const start = new Date(b.startsAt);
+
+        // Check UNTIL date if present
+        const untilMatch = rule.match(/UNTIL=(\d{4})(\d{2})(\d{2})/);
+        if (untilMatch) {
+          const untilDate = new Date(Number(untilMatch[1]), Number(untilMatch[2]) - 1, Number(untilMatch[3]), 23, 59, 59);
+          if (currentDayDate > untilDate) return false;
+        }
+
+        // Check not before start date
+        const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+        if (currentDayDate < startDay) return false;
+
+        if (rule.includes('FREQ=DAILY')) return true;
+
+        if (rule.includes('FREQ=WEEKLY')) {
+          if (rule.includes('INTERVAL=2')) {
+            const diffMs = currentDayDate.getTime() - startDay.getTime();
+            const diffWeeks = Math.floor(diffMs / (7 * 86400000));
+            if (diffWeeks % 2 !== 0) return false;
+          }
+
           const jsDayMap: Record<number, string> = { 1: 'MO', 2: 'TU', 3: 'WE', 4: 'TH', 5: 'FR', 6: 'SA', 7: 'SU' };
           const target = jsDayMap[dayOfWeek];
-          return b.recurrenceRule.includes(target);
+          const byDayMatch = rule.match(/BYDAY=([A-Z,]+)/);
+          if (byDayMatch) {
+            const days = byDayMatch[1].split(',');
+            return days.includes(target);
+          }
+          return false;
+        }
+
+        if (rule.includes('FREQ=MONTHLY')) {
+          return currentDayDate.getDate() === start.getDate();
         }
       }
       return b.startsAt.startsWith(dateStr);
@@ -479,6 +663,24 @@ export const TimetablePage: React.FC = () => {
           </div>
 
           {/* Add Actions */}
+          <button
+            type="button"
+            onClick={() => {
+              setIsOcrModalOpen(true);
+              setOcrStep('upload');
+              setOcrFile(null);
+              setOcrPreviewUrl(null);
+              setOcrBase64(null);
+              setOcrExtractedEntries([]);
+              setOcrErrorMessage(null);
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] border border-[#22C55E]/40 text-xs font-bold transition-all cursor-pointer shadow-sm shadow-[#16A34A]/20"
+            title="Tự động nhận dạng và nhập thời khóa biểu từ hình ảnh hoặc PDF qua AI"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
+            <span>Nhập TKB bằng ảnh</span>
+          </button>
+
           <button
             onClick={() => {
               setEditingEntry(null);
@@ -1270,11 +1472,70 @@ export const TimetablePage: React.FC = () => {
                   onChange={(e) => setEventRecurrence(e.target.value as any)}
                   className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none cursor-pointer [&>option]:bg-[#0B120D] [&>option]:text-[#F3FAF5]"
                 >
-                  <option value="none">Không lặp (chỉ ngày này)</option>
-                  <option value="weekly">Hàng tuần vào ngày này</option>
-                  <option value="daily">Hàng ngày</option>
+                  <option value="none">Chỉ 1 lần (Không lặp lại)</option>
+                  <option value="daily">Hàng ngày (Mỗi ngày trong tuần)</option>
+                  <option value="weekdays">Các ngày trong tuần (Thứ 2 đến Thứ 6)</option>
+                  <option value="weekends">Cuối tuần (Thứ 7 & Chủ Nhật)</option>
+                  <option value="weekly">Hàng tuần (Vào thứ này hàng tuần)</option>
+                  <option value="biweekly">Cách tuần (2 tuần một lần)</option>
+                  <option value="monthly">Hàng tháng (Cùng ngày hàng tháng)</option>
+                  <option value="custom_days">Tùy chọn ngày trong tuần (T2, T3, T4...)</option>
                 </select>
               </div>
+
+              {eventRecurrence === 'custom_days' && (
+                <div className="bg-[#050806] p-3 rounded-xl border border-[rgba(34,197,94,0.2)] space-y-1.5">
+                  <label className="block font-bold text-[#86EFAC] text-[11px]">Chọn các thứ lặp lại trong tuần:</label>
+                  <div className="grid grid-cols-7 gap-1">
+                    {[
+                      { day: 1, label: 'T2' },
+                      { day: 2, label: 'T3' },
+                      { day: 3, label: 'T4' },
+                      { day: 4, label: 'T5' },
+                      { day: 5, label: 'T6' },
+                      { day: 6, label: 'T7' },
+                      { day: 7, label: 'CN' },
+                    ].map((d) => {
+                      const isSelected = customDays.includes(d.day);
+                      return (
+                        <button
+                          key={d.day}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              if (customDays.length > 1) {
+                                setCustomDays(customDays.filter((x) => x !== d.day));
+                              }
+                            } else {
+                              setCustomDays([...customDays, d.day]);
+                            }
+                          }}
+                          className={`py-1.5 rounded-lg text-xs font-bold text-center transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#16A34A] text-[#050806] shadow-sm'
+                              : 'bg-[#101A13] text-[#A9B8AE] hover:text-[#F3FAF5]'
+                          }`}
+                        >
+                          {d.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {eventRecurrence !== 'none' && (
+                <div>
+                  <label className="block font-bold text-[#F3FAF5] mb-1">Ngày kết thúc lặp (tùy chọn):</label>
+                  <input
+                    type="date"
+                    value={recurrenceUntil}
+                    onChange={(e) => setRecurrenceUntil(e.target.value)}
+                    className="w-full p-2 border border-[rgba(34,197,94,0.2)] bg-[#050806] text-[#F3FAF5] rounded-xl text-xs focus:border-[#22C55E] focus:outline-none"
+                    placeholder="Để trống nếu lặp vô hạn"
+                  />
+                </div>
+              )}
 
               <div className="flex items-center justify-between pt-3 border-t border-[rgba(34,197,94,0.15)]">
                 {editingEvent ? (
@@ -1307,6 +1568,338 @@ export const TimetablePage: React.FC = () => {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Nhập Thời Khóa Biểu Bằng Hình Ảnh (AI OCR) */}
+      {isOcrModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.35)] p-6 rounded-3xl max-w-2xl w-full shadow-2xl space-y-5 text-[#F3FAF5] my-auto max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-[rgba(34,197,94,0.18)] pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#16A34A] to-[#14532D] flex items-center justify-center text-[#F3FAF5] shadow-md">
+                  <Sparkles className="w-4 h-4 text-[#86EFAC]" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-[#F3FAF5]">
+                    Nhập Thời Khóa Biểu Bằng Hình Ảnh AI
+                  </h3>
+                  <p className="text-[11px] text-[#A9B8AE]">
+                    Tự động nhận dạng tiết học từ ảnh chụp hoặc file PDF
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsOcrModalOpen(false)}
+                className="p-1.5 rounded-lg text-[#A9B8AE] hover:text-white bg-[#101A13] border border-[rgba(34,197,94,0.15)] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Error message */}
+            {ocrErrorMessage && (
+              <div className="p-3.5 rounded-xl bg-rose-950/50 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{ocrErrorMessage}</span>
+              </div>
+            )}
+
+            {/* Step 1: Upload Image */}
+            {ocrStep === 'upload' && (
+              <div className="space-y-4">
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      handleOcrFileSelect(e.dataTransfer.files[0]);
+                    }
+                  }}
+                  className="border-2 border-dashed border-[rgba(34,197,94,0.35)] hover:border-[#22C55E] bg-[#050806] p-8 rounded-2xl flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:bg-[#101A13]/40 group"
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleOcrFileSelect(e.target.files[0]);
+                      }
+                    }}
+                  />
+
+                  {ocrPreviewUrl ? (
+                    <div className="space-y-3 w-full flex flex-col items-center">
+                      <img
+                        src={ocrPreviewUrl}
+                        alt="Thời khóa biểu preview"
+                        className="max-h-56 rounded-xl object-contain border border-[rgba(34,197,94,0.25)] shadow-lg"
+                      />
+                      <div className="text-xs font-bold text-[#86EFAC] flex items-center gap-1.5">
+                        <Check className="w-4 h-4 text-[#22C55E]" />
+                        <span>Đã chọn: {ocrFile?.name} ({(ocrFile!.size / 1024).toFixed(1)} KB)</span>
+                      </div>
+                      <span className="text-[11px] text-[#A9B8AE] underline group-hover:text-white">
+                        Bấm để đổi ảnh khác
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="w-14 h-14 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                        <Upload className="w-6 h-6 text-[#22C55E]" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold text-[#F3FAF5]">
+                          Kéo thả hoặc bấm để chọn ảnh Thời khóa biểu
+                        </div>
+                        <div className="text-xs text-[#A9B8AE] mt-1">
+                          Hỗ trợ định dạng PNG, JPG, JPEG, WEBP hoặc PDF
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-[#101A13] p-3.5 rounded-xl border border-[rgba(34,197,94,0.15)] text-xs text-[#A9B8AE] space-y-1">
+                  <div className="font-bold text-[#86EFAC] flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
+                    <span>Mẹo chụp ảnh thời khóa biểu rõ nét:</span>
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-[11px]">
+                    <li>Chụp đủ ánh sáng, thấy rõ các cột Thứ (T2-T7) và các tiết học.</li>
+                    <li>AI sẽ tự nhận dạng và hiển thị bảng kiểm tra để bạn sửa trước khi lưu.</li>
+                  </ul>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsOcrModalOpen(false)}
+                    className="px-4 py-2 text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] rounded-xl cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!ocrBase64}
+                    onClick={handleRunOcrAnalysis}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] text-xs font-black rounded-xl shadow-lg shadow-[#16A34A]/25 cursor-pointer disabled:opacity-40 transition-all"
+                  >
+                    <Sparkles className="w-4 h-4 fill-[#050806]" />
+                    <span>AI Nhận Dạng Thời Khóa Biểu</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Analyzing Loading State */}
+            {ocrStep === 'analyzing' && (
+              <div className="py-12 flex flex-col items-center justify-center text-center space-y-4">
+                <div className="relative">
+                  <div className="w-16 h-16 rounded-full border-4 border-[rgba(34,197,94,0.2)] border-t-[#22C55E] animate-spin" />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Sparkles className="w-6 h-6 text-[#22C55E] animate-pulse" />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-sm font-black text-[#F3FAF5]">
+                    Jami AI đang phân tích và trích xuất tiết học...
+                  </div>
+                  <div className="text-xs text-[#A9B8AE]">
+                    Đang đọc các cột ngày trong tuần, tên môn học, giờ bắt đầu và phòng học
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Preview and Confirmation Table */}
+            {ocrStep === 'preview' && (
+              <div className="space-y-4">
+                {/* Timetable Name & Options */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-[#050806] p-3.5 rounded-2xl border border-[rgba(34,197,94,0.2)]">
+                  <div>
+                    <label className="block text-[11px] font-bold text-[#86EFAC] mb-1">Tên thời khóa biểu:</label>
+                    <input
+                      type="text"
+                      value={ocrTimetableName}
+                      onChange={(e) => setOcrTimetableName(e.target.value)}
+                      className="w-full p-2 bg-[#101A13] border border-[rgba(34,197,94,0.25)] rounded-xl text-xs text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+                    />
+                  </div>
+                  <div className="flex items-center pt-4 sm:pt-6">
+                    <label className="flex items-center gap-2 text-xs text-[#F3FAF5] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={ocrReplaceExisting}
+                        onChange={(e) => setOcrReplaceExisting(e.target.checked)}
+                        className="w-4 h-4 rounded text-[#16A34A] focus:ring-[#22C55E] bg-[#101A13] border-[rgba(34,197,94,0.3)] cursor-pointer"
+                      />
+                      <span>Xóa tiết học cũ và lưu TKB mới này</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Extracted Entries List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-[#86EFAC]">
+                      Đã nhận dạng ({ocrExtractedEntries.length} tiết học):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newEntry = {
+                          id: 'manual_' + Math.random().toString(36).substring(2, 7),
+                          dayOfWeek: 1,
+                          title: 'Toán học',
+                          startLocalTime: '07:30',
+                          endLocalTime: '08:15',
+                          room: '',
+                        };
+                        setOcrExtractedEntries([...ocrExtractedEntries, newEntry]);
+                      }}
+                      className="text-[#22C55E] hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Thêm tiết</span>
+                    </button>
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto rounded-2xl border border-[rgba(34,197,94,0.2)] bg-[#050806] divide-y divide-[rgba(34,197,94,0.1)]">
+                    {ocrExtractedEntries.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-[#A9B8AE]">
+                        Chưa có tiết học nào. Hãy bấm "+ Thêm tiết" để nhập thủ công.
+                      </div>
+                    ) : (
+                      ocrExtractedEntries.map((item, index) => (
+                        <div key={item.id} className="p-2.5 flex flex-wrap sm:flex-nowrap items-center gap-2 text-xs">
+                          {/* Day Select */}
+                          <select
+                            value={item.dayOfWeek}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              setOcrExtractedEntries(
+                                ocrExtractedEntries.map((entry, idx) => (idx === index ? { ...entry, dayOfWeek: val } : entry))
+                              );
+                            }}
+                            className="bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-lg px-2 py-1 text-xs text-[#86EFAC] font-bold cursor-pointer [&>option]:bg-[#0B120D] [&>option]:text-[#F3FAF5]"
+                          >
+                            <option value={1}>Thứ 2</option>
+                            <option value={2}>Thứ 3</option>
+                            <option value={3}>Thứ 4</option>
+                            <option value={4}>Thứ 5</option>
+                            <option value={5}>Thứ 6</option>
+                            <option value={6}>Thứ 7</option>
+                            <option value={7}>Chủ Nhật</option>
+                          </select>
+
+                          {/* Subject / Title */}
+                          <input
+                            type="text"
+                            value={item.title}
+                            placeholder="Tên môn học"
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOcrExtractedEntries(
+                                ocrExtractedEntries.map((entry, idx) => (idx === index ? { ...entry, title: val } : entry))
+                              );
+                            }}
+                            className="flex-1 min-w-[120px] bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-lg px-2.5 py-1 text-xs text-[#F3FAF5] font-bold focus:border-[#22C55E] focus:outline-none"
+                          />
+
+                          {/* Time Inputs */}
+                          <div className="flex items-center gap-1 shrink-0">
+                            <input
+                              type="time"
+                              value={item.startLocalTime}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setOcrExtractedEntries(
+                                  ocrExtractedEntries.map((entry, idx) => (idx === index ? { ...entry, startLocalTime: val } : entry))
+                                );
+                              }}
+                              className="w-20 bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-lg px-1 py-1 text-xs text-[#F3FAF5] text-center"
+                            />
+                            <span className="text-[#A9B8AE]">-</span>
+                            <input
+                              type="time"
+                              value={item.endLocalTime}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setOcrExtractedEntries(
+                                  ocrExtractedEntries.map((entry, idx) => (idx === index ? { ...entry, endLocalTime: val } : entry))
+                                );
+                              }}
+                              className="w-20 bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-lg px-1 py-1 text-xs text-[#F3FAF5] text-center"
+                            />
+                          </div>
+
+                          {/* Room */}
+                          <input
+                            type="text"
+                            value={item.room || ''}
+                            placeholder="Phòng học"
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOcrExtractedEntries(
+                                ocrExtractedEntries.map((entry, idx) => (idx === index ? { ...entry, room: val } : entry))
+                              );
+                            }}
+                            className="w-20 bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-lg px-2 py-1 text-xs text-[#A9B8AE]"
+                          />
+
+                          {/* Delete Button */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOcrExtractedEntries(ocrExtractedEntries.filter((_, idx) => idx !== index));
+                            }}
+                            className="p-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/50 rounded-lg cursor-pointer shrink-0"
+                            title="Xóa tiết này"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Modal Footer Actions */}
+                <div className="flex items-center justify-between pt-3 border-t border-[rgba(34,197,94,0.18)]">
+                  <button
+                    type="button"
+                    onClick={() => setOcrStep('upload')}
+                    className="px-3.5 py-2 text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] rounded-xl cursor-pointer"
+                  >
+                    ← Chọn ảnh khác
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsOcrModalOpen(false)}
+                      className="px-4 py-2 text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] rounded-xl cursor-pointer"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isOcrSaving || ocrExtractedEntries.length === 0}
+                      onClick={handleConfirmOcrSave}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black rounded-xl shadow-lg shadow-[#16A34A]/30 cursor-pointer disabled:opacity-40 transition-all"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>{isOcrSaving ? 'Đang lưu vào MySQL...' : `Xác Nhận & Lưu (${ocrExtractedEntries.length} tiết)`}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

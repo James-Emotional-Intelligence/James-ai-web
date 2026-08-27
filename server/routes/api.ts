@@ -850,6 +850,69 @@ apiRouter.delete('/timetables-all-entries', requireAuth, asyncHandler(async (req
   res.json({ success: true, deletedCount });
 }));
 
+// Timetable OCR Import from Image (Preview)
+apiRouter.post('/timetables/import-ocr', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { imageBase64, mimeType } = req.body;
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Vui lòng cung cấp dữ liệu hình ảnh thời khóa biểu.');
+  }
+
+  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || 'image/jpeg');
+  res.json({
+    success: true,
+    timetableName: result.timetableName,
+    entries: result.entries,
+  });
+}));
+
+// Timetable OCR Confirm & Save
+apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { timetableName, replaceExisting, entries } = req.body;
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Danh sách tiết học không được để trống');
+  }
+
+  let activeTimetable = await timetableRepo.getActiveTimetable(userId);
+  if (!activeTimetable) {
+    activeTimetable = await timetableRepo.createTimetable(userId, {
+      name: timetableName || 'Thời khóa biểu chính khóa',
+      isActive: true,
+    });
+  } else if (timetableName) {
+    await timetableRepo.updateTimetable(userId, activeTimetable.id, { name: timetableName });
+  }
+
+  if (replaceExisting) {
+    await timetableRepo.deleteAllEntries(userId, activeTimetable.id);
+  }
+
+  const savedEntries = [];
+  for (const item of entries) {
+    if (!item.title) continue;
+    const entry = await timetableRepo.createTimetableEntry(userId, {
+      timetableId: activeTimetable.id,
+      dayOfWeek: Number(item.dayOfWeek) || 1,
+      title: item.title.trim(),
+      startLocalTime: item.startLocalTime || '07:30',
+      endLocalTime: item.endLocalTime || '08:15',
+      room: item.room?.trim() || undefined,
+      location: item.room?.trim() || undefined,
+      commuteBeforeMinutes: 15,
+      commuteAfterMinutes: 15,
+    });
+    savedEntries.push(entry);
+  }
+
+  res.status(201).json({
+    success: true,
+    timetable: activeTimetable,
+    savedCount: savedEntries.length,
+    entries: savedEntries,
+  });
+}));
+
 // Timetable CSV Export Route
 apiRouter.get('/timetables/export/csv', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
