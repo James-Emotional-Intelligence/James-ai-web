@@ -24,6 +24,7 @@ vi.mock('../../src/lib/api-client', () => ({
     previewReplan: vi.fn(),
     confirmProposal: vi.fn(),
     updateTask: vi.fn(),
+    getMaterials: vi.fn().mockResolvedValue({ materials: [] }),
   },
   ApiError: class ApiError extends Error {
     public status: number;
