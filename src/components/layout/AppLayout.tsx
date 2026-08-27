@@ -6,51 +6,57 @@ import { MobileTopMenu } from './MobileTopMenu';
 import { RobotJami, JamiState } from '../jami/RobotJami';
 import { VoiceGoalModal } from '../../features/planner/VoiceGoalModal';
 import { useAuth } from '../../features/auth/AuthProvider';
+import { VoiceJamiProvider, useVoiceJami } from '../../context/VoiceJamiContext';
+import { NotificationProvider } from '../../context/NotificationContext';
 
-export const AppLayout: React.FC = () => {
+const AppLayoutContent: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, profile, logout } = useAuth();
+  const voice = useVoiceJami();
 
   const [jamiState, setJamiState] = useState<JamiState>('idle');
-  const [bubbleMessage, setBubbleMessage] = useState<string | undefined>('Chào bạn! Mình cùng bắt đầu bước nhỏ đầu tiên nhé.');
+  const [bubbleMessage, setBubbleMessage] = useState<string | undefined>('Chào bạn! Nói "Jami ơi" khi bạn cần hỗ trợ.');
   const [bubbleActions, setBubbleActions] = useState<string[]>(['Lịch học', 'Hẹn giờ tập trung']);
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const studentName = user?.preferredName || user?.displayName || 'bạn';
 
-  // Update Jami state based on route
+  // Update default bubble message based on route if handsfree is not active
   useEffect(() => {
-    if (location.pathname.startsWith('/focus')) {
-      setJamiState('focus');
-      setBubbleMessage('Giữ tâm trí thư thái và tập trung nào!');
-      setBubbleActions([]);
-    } else if (location.pathname.startsWith('/tasks')) {
-      setJamiState('guiding');
-      setBubbleMessage('Jami đã chia nhỏ từng bước để bạn hoàn thành xuất sắc.');
-      setBubbleActions(['Xem bước 1', 'Bắt đầu Hẹn giờ']);
-    } else if (location.pathname.startsWith('/exams')) {
-      setJamiState('encouraging');
-      setBubbleMessage('Luyện tập đều đặn là bí quyết đạt điểm cao!');
-      setBubbleActions(['Làm bài kiểm tra D-7']);
-    } else {
-      setJamiState('idle');
-      setBubbleMessage(`Chào ${studentName}! Bạn cần Jami hỗ trợ lập lịch hay giải thích bài học nào?`);
-      setBubbleActions(['Lịch học thông minh', 'Nói mục tiêu']);
+    if (!voice.isHandsFreeEnabled) {
+      if (location.pathname.startsWith('/focus')) {
+        setJamiState('focus');
+        setBubbleMessage('Giữ tâm trí thư thái và tập trung nào!');
+        setBubbleActions([]);
+      } else if (location.pathname.startsWith('/tasks')) {
+        setJamiState('guiding');
+        setBubbleMessage('Jami đã chia nhỏ từng bước để bạn hoàn thành xuất sắc.');
+        setBubbleActions(['Xem bước 1', 'Bắt đầu Hẹn giờ']);
+      } else if (location.pathname.startsWith('/exams')) {
+        setJamiState('encouraging');
+        setBubbleMessage('Luyện tập đều đặn là bí quyết đạt điểm cao!');
+        setBubbleActions(['Làm bài kiểm tra D-7']);
+      } else {
+        setJamiState('idle');
+        setBubbleMessage(`Chào ${studentName}! Bạn cần Jami hỗ trợ lập lịch hay giải thích bài học nào?`);
+        setBubbleActions(['Lịch học thông minh', 'Nói mục tiêu']);
+      }
     }
-  }, [location.pathname, studentName]);
+  }, [location.pathname, studentName, voice.isHandsFreeEnabled]);
 
   const handleBubbleAction = (action: string) => {
     if (action.includes('Lịch')) navigate('/timetable');
     else if (action.includes('Hẹn giờ')) navigate('/focus');
     else if (action.includes('mục tiêu')) setIsVoiceModalOpen(true);
     else if (action.includes('kiểm tra')) navigate('/exams');
-    else if (action.includes('bước 1')) navigate('/tasks/task-math-1');
+    else if (action.includes('bước 1')) navigate('/tasks');
   };
 
   const handleLogout = async () => {
     try {
+      voice.disableHandsFree();
       await logout();
       navigate('/login');
     } catch {
@@ -62,7 +68,7 @@ export const AppLayout: React.FC = () => {
     <div className="min-h-screen bg-[#050806] text-[#F3FAF5] flex flex-col font-sans selection:bg-[#16A34A] selection:text-[#050806]">
       {/* 2-Tier Sticky Top Navigation */}
       <div className="sticky top-0 z-40 bg-[#050806] shadow-xl">
-        {/* Tier 1: Brand, Search/Voice CTA, Notifications, Profile */}
+        {/* Tier 1: Brand, Hands-Free Voice Status, Voice CTA, Notifications, Profile */}
         <TopAppBar
           user={user || undefined}
           profile={profile || undefined}
@@ -114,5 +120,15 @@ export const AppLayout: React.FC = () => {
         }}
       />
     </div>
+  );
+};
+
+export const AppLayout: React.FC = () => {
+  return (
+    <VoiceJamiProvider>
+      <NotificationProvider>
+        <AppLayoutContent />
+      </NotificationProvider>
+    </VoiceJamiProvider>
   );
 };

@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { db } from '../db/mysql';
-import { env } from '../config/env';
+import { env, isProduction } from '../config/env';
 
 export interface AuthSessionRecord {
   id: string;
@@ -53,18 +53,18 @@ export class SessionRepository {
     if (db.isHealthy()) {
       try {
         await db.execute(
-          `INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, revoked_at, created_at)
-           VALUES (?, ?, ?, ?, NULL, ?)`,
-          [id, userId, tokenHash, expiresAtDate, new Date(createdAt)]
+          `INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, revoked_at, is_demo, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+          [id, userId, tokenHash, expiresAtDate, isDemo ? 1 : 0, new Date(createdAt)]
         );
       } catch (err: any) {
-        if (env.APP_MODE === 'production') {
-          throw new Error(`Failed to create database session: ${err.message}`);
+        if (isProduction) {
+          throw new Error(`Failed to create database session: ${err.message}`, { cause: err });
         }
         this.demoSessions.set(tokenHash, record);
       }
     } else {
-      if (env.APP_MODE === 'production') {
+      if (isProduction) {
         throw new Error('Database is unreachable. Cannot create session in production mode.');
       }
       this.demoSessions.set(tokenHash, record);
@@ -80,10 +80,12 @@ export class SessionRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT s.id, s.user_id, s.token_hash, s.expires_at, s.revoked_at, s.created_at, u.status as user_status
+          `SELECT s.id, s.user_id, s.token_hash, s.expires_at, s.revoked_at, s.is_demo, s.created_at, u.status as user_status
            FROM auth_sessions s
            LEFT JOIN users u ON s.user_id = u.id
-           WHERE s.token_hash = ? AND s.revoked_at IS NULL`,
+           WHERE s.token_hash = ?
+             AND s.revoked_at IS NULL
+             AND s.expires_at > UTC_TIMESTAMP(3)`,
           [tokenHash]
         );
 
@@ -94,12 +96,6 @@ export class SessionRepository {
           }
 
           const expiresIso = r.expires_at ? (r.expires_at.toISOString?.() || String(r.expires_at)) : null;
-          if (expiresIso) {
-            const expiresTime = new Date(expiresIso).getTime();
-            if (!isNaN(expiresTime) && expiresTime <= Date.now()) {
-              return null; // Session expired
-            }
-          }
 
           return {
             id: r.id,
@@ -108,11 +104,12 @@ export class SessionRepository {
             expiresAt: expiresIso || new Date(Date.now() + 86400000).toISOString(),
             revokedAt: r.revoked_at ? (r.revoked_at?.toISOString?.() || String(r.revoked_at)) : null,
             createdAt: r.created_at ? (r.created_at?.toISOString?.() || String(r.created_at)) : new Date().toISOString(),
-            isDemo: false,
+            isDemo: Boolean(r.is_demo),
           };
         }
+        return null;
       } catch (err: any) {
-        if (env.APP_MODE === 'production') throw err;
+        if (isProduction) throw err;
       }
     }
 
@@ -137,7 +134,7 @@ export class SessionRepository {
       try {
         await db.execute('UPDATE auth_sessions SET revoked_at = NOW(3) WHERE token_hash = ?', [tokenHash]);
       } catch (err: any) {
-        if (env.APP_MODE === 'production') throw err;
+        if (isProduction) throw err;
       }
     }
 

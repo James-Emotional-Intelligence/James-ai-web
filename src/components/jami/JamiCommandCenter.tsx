@@ -12,9 +12,10 @@ import {
   AlertCircle,
   ExternalLink,
 } from 'lucide-react';
-import { api, JamiChatMessageItem, ApiError } from '../../lib/api-client';
+import { api, JamiChatMessageItem } from '../../lib/api-client';
 import { JamiState } from './RobotJami';
 import confetti from 'canvas-confetti';
+import { useVoiceJami } from '../../context/VoiceJamiContext';
 
 interface JamiCommandCenterProps {
   onStateChange?: (state: JamiState, latestMessage?: string) => void;
@@ -26,17 +27,17 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
   onDataUpdated,
 }) => {
   const navigate = useNavigate();
+  const voice = useVoiceJami();
   const [messages, setMessages] = useState<JamiChatMessageItem[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Real Voice Recording State
-  const [isRecording, setIsRecording] = useState(false);
+  // Real Speech Recognition State
+  const [isListening, setIsListening] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const speechRecognizerRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -48,7 +49,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
       setMessages(res.messages);
       const latest = res.messages[res.messages.length - 1];
       if (latest && onStateChange) {
-        onStateChange(latest.emotion || 'idle', latest.text);
+        onStateChange((latest.emotion as JamiState) || 'idle', latest.text);
       }
     } catch (err: any) {
       setError(err.message || 'Không thể tải lịch sử hội thoại.');
@@ -96,7 +97,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
       );
 
       if (onStateChange) {
-        onStateChange(res.replyMessage.emotion || 'speaking', res.replyMessage.text);
+        onStateChange((res.replyMessage.emotion as JamiState) || 'speaking', res.replyMessage.text);
       }
 
       if (onDataUpdated) {
@@ -125,32 +126,54 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
     }
   };
 
-  // Real Web Audio Recording Handler
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
+  // Real Web Speech Recognition
+  const startListening = () => {
+    const SpeechRecognitionClass =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+    if (!SpeechRecognitionClass) {
+      alert('Trình duyệt của bạn không hỗ trợ Web Speech Recognition.');
+      return;
+    }
+
+    try {
+      const recognizer = new SpeechRecognitionClass();
+      recognizer.lang = 'vi-VN';
+      recognizer.interimResults = true;
+      recognizer.continuous = false;
+      speechRecognizerRef.current = recognizer;
+
+      let transcriptAccumulated = '';
+
+      recognizer.onresult = (event: any) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const item = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            transcriptAccumulated += item;
+          } else {
+            interim += item;
+          }
+        }
+        setInputMessage(transcriptAccumulated || interim);
+      };
+
+      recognizer.onerror = (event: any) => {
+        console.warn('[JamiCommandCenter] Speech error:', event.error);
+        stopListening();
+      };
+
+      recognizer.onend = () => {
+        setIsListening(false);
+        clearInterval(timerRef.current);
+        setRecordingSeconds(0);
+        if (transcriptAccumulated.trim()) {
+          handleSendMessage(transcriptAccumulated.trim());
         }
       };
 
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-        setIsRecording(false);
-        clearInterval(timerRef.current);
-        setRecordingSeconds(0);
-
-        // Simulation or Speech-to-text processing
-        handleSendMessage('Jami ơi, tối nay hãy xếp lịch 45 phút cho tôi học Toán hàm số.');
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
+      recognizer.start();
+      setIsListening(true);
       if (onStateChange) onStateChange('listening');
 
       setRecordingSeconds(0);
@@ -158,14 +181,19 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
     } catch (err) {
-      alert('Không thể truy cập micro. Vui lòng cấp quyền micro trên trình duyệt của bạn.');
-      setIsRecording(false);
+      console.warn('[JamiCommandCenter] Could not start speech recognizer:', err);
+      setIsListening(false);
     }
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+  const stopListening = () => {
+    if (speechRecognizerRef.current && isListening) {
+      try {
+        speechRecognizerRef.current.stop();
+      } catch {}
+      setIsListening(false);
+      clearInterval(timerRef.current);
+      setRecordingSeconds(0);
     }
   };
 
@@ -197,7 +225,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
               </span>
             </h2>
             <p className="text-[11px] text-[#A9B8AE]">
-              Lời nói của robot Jami và lịch sử tương tác cá nhân hóa
+              Tương tác giọng nói thật và lịch sử học tập cá nhân hóa
             </p>
           </div>
         </div>
@@ -264,7 +292,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
                   <div className="mt-2.5 p-2.5 bg-[#050806] rounded-xl border border-[rgba(34,197,94,0.3)] text-xs space-y-2">
                     <div className="flex items-center gap-1.5 font-bold text-[#86EFAC]">
                       <Clock className="w-3.5 h-3.5 text-[#22C55E]" />
-                      <span>Gợi ý cập nhật thời khóa biểu:</span>
+                      <span>Xác nhận cập nhật:</span>
                     </div>
                     <p className="text-[#A9B8AE]">{msg.confirmationSummary}</p>
 
@@ -280,7 +308,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
                           className="flex items-center gap-1 px-3 py-1.5 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] font-black rounded-lg text-xs shadow-md cursor-pointer"
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Xác nhận đổi lịch</span>
+                          <span>Xác nhận</span>
                         </button>
                       )}
                     </div>
@@ -327,20 +355,20 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
       {/* Input Bar */}
       <div className="bg-[#050806] p-2 sm:p-2.5 rounded-2xl border border-[rgba(34,197,94,0.25)] flex items-center gap-2 shrink-0">
         <button
-          onClick={isRecording ? stopRecording : startRecording}
+          onClick={isListening ? stopListening : startListening}
           className={`p-2 rounded-xl transition-all cursor-pointer ${
-            isRecording
+            isListening
               ? 'bg-rose-600 text-white animate-pulse'
               : 'bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)]'
           }`}
-          title={isRecording ? 'Dừng thu âm' : 'Nói với Jami bằng giọng nói'}
+          title={isListening ? 'Dừng lắng nghe' : 'Nói với Jami bằng giọng nói'}
         >
-          {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+          {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-[#22C55E]" />}
         </button>
 
-        {isRecording && (
+        {isListening && (
           <span className="text-xs text-rose-400 font-mono font-bold animate-pulse">
-            00:0{recordingSeconds}
+            00:{recordingSeconds < 10 ? `0${recordingSeconds}` : recordingSeconds}
           </span>
         )}
 

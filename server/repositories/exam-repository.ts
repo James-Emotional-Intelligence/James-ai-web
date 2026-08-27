@@ -1,5 +1,6 @@
 import { db } from '../db/mysql';
-import { Exam, ExamTopic } from '../../shared/types';
+import { Exam, ExamTopic, ExamMilestone } from '../../shared/types';
+import { subjectRepo } from './subject-repository';
 import crypto from 'crypto';
 
 export class ExamRepository {
@@ -15,10 +16,57 @@ export class ExamRepository {
     return ExamRepository.instance;
   }
 
+  /**
+   * Helper to compute exact milestones for an exam date and check if related quizzes exist
+   */
+  public computeMilestones(examId: string, examAtIso: string, completedQuizMilestones: Set<string> = new Set()): ExamMilestone[] {
+    const examDate = new Date(examAtIso);
+    const now = Date.now();
+    const msInDay = 86400000;
+
+    const milestonesConfig: { type: 'D-14' | 'D-7' | 'D-3' | 'D-1'; daysBefore: number; label: string }[] = [
+      { type: 'D-14', daysBefore: 14, label: 'D-14: Đề chẩn đoán nền tảng' },
+      { type: 'D-7', daysBefore: 7, label: 'D-7: Luyện đề tổng hợp' },
+      { type: 'D-3', daysBefore: 3, label: 'D-3: Thi thử mô phỏng' },
+      { type: 'D-1', daysBefore: 1, label: 'D-1: Rà soát & ôn lỗi sai' },
+    ];
+
+    return milestonesConfig.map((cfg, idx) => {
+      const targetDate = new Date(examDate.getTime() - cfg.daysBefore * msInDay);
+      const isCompleted = completedQuizMilestones.has(cfg.type);
+
+      let status: ExamMilestone['status'];
+      if (isCompleted) {
+        status = 'completed';
+      } else {
+        const targetMs = targetDate.getTime();
+        const nextTargetMs = idx < milestonesConfig.length - 1
+          ? examDate.getTime() - milestonesConfig[idx + 1].daysBefore * msInDay
+          : examDate.getTime();
+
+        if (now >= targetMs && now < nextTargetMs) {
+          status = 'current';
+        } else if (now >= nextTargetMs) {
+          status = 'overdue';
+        } else {
+          status = 'pending';
+        }
+      }
+
+      return {
+        examId,
+        milestoneType: cfg.type,
+        name: cfg.label,
+        date: targetDate.toISOString(),
+        status,
+      };
+    });
+  }
+
   public async getByUserId(userId: string): Promise<Exam[]> {
     if (db.isHealthy()) {
       const rows = await db.query<any>(
-        `SELECT e.id, e.user_id, e.subject_id, e.title, e.exam_at, e.importance, e.scope_text, e.status,
+        `SELECT e.id, e.user_id, e.subject_id, e.title, e.exam_at, e.importance, e.scope_text, e.status, e.created_at, e.updated_at,
                 s.name as subject_name, s.color as subject_color
          FROM exams e
          JOIN subjects s ON e.subject_id = s.id
@@ -38,29 +86,38 @@ export class ExamRepository {
         const topics: ExamTopic[] = topicRows.map((t) => ({
           id: t.id,
           name: t.topic_name,
-          weight: t.weight,
-          notes: t.notes,
+          weight: Number(t.weight) || 1,
+          notes: t.notes || undefined,
         }));
 
+        // Check submitted quiz attempts for this exam
+        const completedMilestoneRows = await db.query<any>(
+          `SELECT DISTINCT q.milestone
+           FROM quizzes q
+           JOIN quiz_attempts qa ON q.id = qa.quiz_id
+           WHERE q.exam_id = ? AND qa.user_id = ? AND qa.status = 'submitted' AND q.milestone IS NOT NULL`,
+          [r.id, userId]
+        );
+
+        const completedSet = new Set<string>(completedMilestoneRows.map((m: any) => String(m.milestone)));
         const examAt = r.exam_at?.toISOString?.() || String(r.exam_at);
-        const daysRemaining = Math.max(0, Math.ceil((new Date(examAt).getTime() - Date.now()) / (24 * 3600 * 1000)));
+        const milestones = this.computeMilestones(r.id, examAt, completedSet);
 
         exams.push({
           id: r.id,
           userId: r.user_id,
           subjectId: r.subject_id,
           subjectName: r.subject_name || 'Môn học',
+          subjectColor: r.subject_color || '#22C55E',
           title: r.title,
           examAt,
           importance: r.importance || 'high',
           scopeText: r.scope_text || '',
           topics,
-          milestones: [
-            { name: 'D-14: Ôn tập nền tảng', date: new Date(new Date(examAt).getTime() - 14 * 86400000).toISOString(), status: daysRemaining <= 14 ? 'completed' : 'pending' },
-            { name: 'D-7: Luyện đề tổng hợp', date: new Date(new Date(examAt).getTime() - 7 * 86400000).toISOString(), status: daysRemaining <= 7 ? 'in_progress' : 'pending' },
-            { name: 'D-3: Rà soát lỗi sai', date: new Date(new Date(examAt).getTime() - 3 * 86400000).toISOString(), status: daysRemaining <= 3 ? 'pending' : 'pending' },
-            { name: 'D-1: Giữ tinh thần thoải mái', date: new Date(new Date(examAt).getTime() - 1 * 86400000).toISOString(), status: 'pending' },
-          ],
+          milestones,
+          status: r.status || 'upcoming',
+          createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+          updatedAt: r.updated_at?.toISOString?.() || String(r.updated_at),
         });
       }
 
@@ -70,27 +127,42 @@ export class ExamRepository {
     return this.demoExams.get(userId) || [];
   }
 
+  public async getById(userId: string, examId: string): Promise<Exam | null> {
+    const list = await this.getByUserId(userId);
+    return list.find((e) => e.id === examId) || null;
+  }
+
+  public async createExam(userId: string, data: Partial<Exam>): Promise<Exam> {
+    return this.create(userId, data);
+  }
+
   public async create(userId: string, data: Partial<Exam>): Promise<Exam> {
+    // 1. Verify subject ownership
+    const subjects = await subjectRepo.getByUserId(userId);
+    const targetSubject = subjects.find((s) => s.id === data.subjectId) || subjects[0];
+    const subjectId = targetSubject ? targetSubject.id : (data.subjectId || 'subj-math');
+    const subjectName = targetSubject ? targetSubject.name : (data.subjectName || 'Toán học');
+    const subjectColor = targetSubject ? targetSubject.color : '#22C55E';
+
     const id = 'exam_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const examAt = data.examAt || new Date(Date.now() + 7 * 86400000).toISOString();
-    const daysRemaining = Math.max(0, Math.ceil((new Date(examAt).getTime() - Date.now()) / (24 * 3600 * 1000)));
+    const milestones = this.computeMilestones(id, examAt);
 
     const created: Exam = {
       id,
       userId,
-      subjectId: data.subjectId || 'subj-math',
-      subjectName: data.subjectName || 'Toán học',
+      subjectId,
+      subjectName,
+      subjectColor,
       title: (data.title || 'Bài kiểm tra').trim(),
       examAt,
       importance: data.importance || 'high',
       scopeText: data.scopeText || '',
-      topics: data.topics || [],
-      milestones: [
-        { name: 'D-14: Ôn tập nền tảng', date: new Date(new Date(examAt).getTime() - 14 * 86400000).toISOString(), status: daysRemaining <= 14 ? 'completed' : 'pending' },
-        { name: 'D-7: Luyện đề tổng hợp', date: new Date(new Date(examAt).getTime() - 7 * 86400000).toISOString(), status: daysRemaining <= 7 ? 'in_progress' : 'pending' },
-        { name: 'D-3: Rà soát lỗi sai', date: new Date(new Date(examAt).getTime() - 3 * 86400000).toISOString(), status: 'pending' },
-        { name: 'D-1: Chuẩn bị dụng cụ & tâm lý', date: new Date(new Date(examAt).getTime() - 1 * 86400000).toISOString(), status: 'pending' },
-      ],
+      topics: data.topics && data.topics.length > 0 ? data.topics : [{ id: 'topic_1', name: subjectName, weight: 1 }],
+      milestones,
+      status: 'upcoming',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     if (db.isHealthy()) {
@@ -117,6 +189,16 @@ export class ExamRepository {
             [topicId, created.id, topic.name, topic.weight || 1, topic.notes || null]
           );
         }
+
+        // Insert / Upsert exam_milestones
+        for (const m of created.milestones || []) {
+          const msId = 'ms_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+          await conn.execute(
+            `INSERT INTO exam_milestones (id, exam_id, user_id, milestone_type, title, target_date, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+            [msId, created.id, userId, m.milestoneType, m.name, new Date(m.date), m.status]
+          );
+        }
       });
     } else {
       const list = this.demoExams.get(userId) || [];
@@ -127,10 +209,54 @@ export class ExamRepository {
     return created;
   }
 
+  public async update(userId: string, examId: string, data: Partial<Exam>): Promise<Exam | null> {
+    const existing = await this.getById(userId, examId);
+    if (!existing) return null;
+
+    const updated: Exam = {
+      ...existing,
+      ...data,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (data.examAt) {
+      updated.milestones = this.computeMilestones(examId, data.examAt);
+    }
+
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        await conn.execute(
+          `UPDATE exams 
+           SET title = ?, subject_id = ?, exam_at = ?, importance = ?, scope_text = ?, status = ?, updated_at = NOW(3)
+           WHERE id = ? AND user_id = ?`,
+          [
+            updated.title,
+            updated.subjectId,
+            new Date(updated.examAt),
+            updated.importance,
+            updated.scopeText,
+            updated.status || 'upcoming',
+            examId,
+            userId,
+          ]
+        );
+      });
+    } else {
+      const list = this.demoExams.get(userId) || [];
+      const idx = list.findIndex((e) => e.id === examId);
+      if (idx !== -1) {
+        list[idx] = updated;
+        this.demoExams.set(userId, list);
+      }
+    }
+
+    return updated;
+  }
+
   public async delete(userId: string, examId: string): Promise<boolean> {
     if (db.isHealthy()) {
       const res = await db.execute('DELETE FROM exams WHERE id = ? AND user_id = ?', [examId, userId]);
-      return res?.affectedRows > 0;
+      return (res?.affectedRows || 0) > 0;
     }
 
     const list = this.demoExams.get(userId) || [];

@@ -1,23 +1,36 @@
 import crypto from 'crypto';
 import { User, StudentProfile } from '../../shared/types';
 import { DEMO_USER, DEMO_PROFILE } from '../db/demo-data';
-import { db } from '../db/mysql';
-import { env } from '../config/env';
+import { db, DatabaseError } from '../db/mysql';
+import { env, isProduction } from '../config/env';
 import { DemoRepository } from './demo-repository';
+import { PasswordHasher, PasswordVerificationResult } from '../services/password-hasher';
 
 export interface StoredUser extends User {
   passwordHash: string;
   passwordSalt: string;
+  passwordScheme?: string;
+}
+
+interface DemoResetToken {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: number;
+  usedAt?: number | null;
 }
 
 export class UserRepository {
   private static instance: UserRepository;
-  // Ephemeral fallback cache for demo mode only
+  // Ephemeral fallback cache for demo/test mode only
   private demoUsers: Map<string, StoredUser> = new Map();
   private demoProfiles: Map<string, StudentProfile> = new Map();
+  private demoResetTokens: Map<string, DemoResetToken> = new Map();
 
   private constructor() {
-    this.seedDemoUserMemory();
+    if (!isProduction && env.DEMO_LOGIN_ENABLED) {
+      this.seedDemoUserMemory();
+    }
   }
 
   public static getInstance(): UserRepository {
@@ -28,48 +41,68 @@ export class UserRepository {
   }
 
   private seedDemoUserMemory() {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = this.hashPassword('Demo1234!', salt);
+    const salt = 'demo_salt_seed_minh_1234';
+    const computedHash = crypto.createHash('sha256').update('Demo1234!' + salt).digest('hex');
 
     const demoStored: StoredUser = {
       ...DEMO_USER,
-      passwordHash: hash,
+      passwordHash: computedHash,
       passwordSalt: salt,
+      passwordScheme: 'sha256',
     };
 
     this.demoUsers.set(DEMO_USER.email.toLowerCase(), demoStored);
     this.demoProfiles.set(DEMO_USER.id, { ...DEMO_PROFILE });
   }
 
-  public hashPassword(password: string, salt: string): string {
-    return crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  public async hashPassword(password: string): Promise<{ passwordHash: string; passwordSalt: string; scheme: string }> {
+    return PasswordHasher.hashPassword(password);
   }
 
-  public verifyPassword(plainPassword: string, salt: string, expectedHash: string): boolean {
-    if (!plainPassword || !salt || !expectedHash) return false;
-    const computed = this.hashPassword(plainPassword, salt);
-    try {
-      const bufA = Buffer.from(computed, 'hex');
-      const bufB = Buffer.from(expectedHash, 'hex');
-      if (bufA.length !== bufB.length) return false;
-      return crypto.timingSafeEqual(bufA, bufB);
-    } catch {
-      return computed === expectedHash;
+  public async verifyPassword(
+    plainPassword: string,
+    salt: string,
+    expectedHash: string,
+    scheme?: string
+  ): Promise<PasswordVerificationResult> {
+    return PasswordHasher.verifyPassword(plainPassword, salt, expectedHash, scheme);
+  }
+
+  public async rehashUserPassword(userId: string, newPlainPassword: string): Promise<void> {
+    const { passwordHash, passwordSalt } = await this.hashPassword(newPlainPassword);
+
+    if (db.isHealthy()) {
+      try {
+        await db.execute(
+          `UPDATE users SET password_hash = ?, password_salt = ?, password_scheme = 'scrypt', updated_at = NOW(3) WHERE id = ?`,
+          [passwordHash, passwordSalt, userId]
+        );
+      } catch (err: any) {
+        console.warn('[JAMI UserRepository] Warning rehashing password in DB:', err.message);
+      }
+    }
+
+    for (const u of this.demoUsers.values()) {
+      if (u.id === userId) {
+        u.passwordHash = passwordHash;
+        u.passwordSalt = passwordSalt;
+        u.passwordScheme = 'scrypt';
+      }
     }
   }
 
   public async syncWithMySQL() {
-    if (!db.isHealthy()) return;
+    if (isProduction || !env.DEMO_LOGIN_ENABLED || !db.isHealthy()) return;
 
     try {
-      // Seed demo user into MySQL if not existing
       const existingDemo = await db.query<any>('SELECT id FROM users WHERE email = ?', [DEMO_USER.email]);
-      const demoUser = this.demoUsers.get(DEMO_USER.email.toLowerCase())!;
+      const demoUser = this.demoUsers.get(DEMO_USER.email.toLowerCase());
+      if (!demoUser) return;
 
       if (existingDemo.length === 0) {
         await db.execute(
-          `INSERT INTO users (id, email, password_hash, password_salt, display_name, preferred_name, locale, timezone, age_band, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at)
+           VALUES (?, ?, ?, ?, 'sha256', ?, ?, ?, ?, ?, ?, ?)`,
           [
             demoUser.id,
             demoUser.email,
@@ -106,7 +139,6 @@ export class UserRepository {
           `UPDATE users SET password_hash = ?, password_salt = ? WHERE email = ?`,
           [demoUser.passwordHash, demoUser.passwordSalt, demoUser.email]
         );
-        console.log('[JAMI MySQL] Demo user credentials synchronized with MySQL.');
       }
     } catch (err: any) {
       console.warn('[JAMI MySQL] User repository sync notice:', err.message);
@@ -114,14 +146,15 @@ export class UserRepository {
   }
 
   public async findByEmail(email: string): Promise<StoredUser | undefined> {
+    if (!email) return undefined;
     const normalizedEmail = email.trim().toLowerCase();
 
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, email, password_hash, password_salt, display_name, preferred_name, locale, timezone, age_band, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at
            FROM users
-           WHERE email = ?`,
+           WHERE LOWER(email) = ?`,
           [normalizedEmail]
         );
 
@@ -141,6 +174,7 @@ export class UserRepository {
             email: r.email,
             passwordHash: hash,
             passwordSalt: salt,
+            passwordScheme: r.password_scheme || 'scrypt',
             displayName: r.display_name,
             preferredName: r.preferred_name,
             locale: r.locale,
@@ -151,11 +185,10 @@ export class UserRepository {
           };
         }
       } catch (err: any) {
-        if (env.APP_MODE === 'production') throw err;
+        if (isProduction) throw err;
       }
     }
 
-    // Demo in-memory fallback
     return this.demoUsers.get(normalizedEmail);
   }
 
@@ -165,7 +198,7 @@ export class UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, email, password_hash, password_salt, display_name, preferred_name, locale, timezone, age_band, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at
            FROM users
            WHERE id = ?`,
           [id]
@@ -187,6 +220,7 @@ export class UserRepository {
             email: r.email,
             passwordHash: hash,
             passwordSalt: salt,
+            passwordScheme: r.password_scheme || 'scrypt',
             displayName: r.display_name,
             preferredName: r.preferred_name,
             locale: r.locale,
@@ -197,14 +231,14 @@ export class UserRepository {
           };
         }
       } catch (err: any) {
-        if (env.APP_MODE === 'production') throw err;
+        if (isProduction) throw err;
       }
     }
 
-    // Demo fallback
     for (const u of this.demoUsers.values()) {
       if (u.id === id) return u;
     }
+
     return undefined;
   }
 
@@ -235,11 +269,10 @@ export class UserRepository {
           };
         }
       } catch (err: any) {
-        if (env.APP_MODE === 'production') throw err;
+        if (isProduction) throw err;
       }
     }
 
-    // Demo fallback
     return this.demoProfiles.get(userId);
   }
 
@@ -248,189 +281,271 @@ export class UserRepository {
       userId,
       gradeLevel: 9,
       schoolName: 'Trường THCS / THPT',
-      goals: ['Hoàn thành tốt chương trình học kì'],
+      goals: ['Đạt điểm khá giỏi các môn trọng tâm'],
       preferredSessionMinutes: 45,
       maxDailyStudyMinutes: 180,
-      energyPreferences: {
-        morning: 'medium',
-        afternoon: 'medium',
-        evening: 'high',
-      },
-      sleepSchedule: {
-        wakeTime: '06:00',
-        bedTime: '22:30',
-      },
-      mealTimes: {
-        lunch: '11:45',
-        dinner: '18:30',
-      },
+      energyPreferences: { morning: 'high', afternoon: 'medium', evening: 'high' },
+      sleepSchedule: { wakeTime: '06:00', bedTime: '22:30' },
+      mealTimes: { lunch: '12:00', dinner: '18:30' },
     };
 
     const updated: StudentProfile = {
       ...current,
       ...updates,
-      goals: updates.goals || current.goals,
-      energyPreferences: updates.energyPreferences || current.energyPreferences,
-      sleepSchedule: updates.sleepSchedule || current.sleepSchedule,
-      mealTimes: updates.mealTimes || current.mealTimes,
     };
 
     if (db.isHealthy()) {
-      try {
-        await db.execute(
-          `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE
-             grade_level = VALUES(grade_level),
-             school_name = VALUES(school_name),
-             goals_json = VALUES(goals_json),
-             preferred_session_minutes = VALUES(preferred_session_minutes),
-             max_daily_study_minutes = VALUES(max_daily_study_minutes),
-             energy_preferences_json = VALUES(energy_preferences_json),
-             sleep_schedule_json = VALUES(sleep_schedule_json),
-             meal_times_json = VALUES(meal_times_json)`,
-          [
-            userId,
-            updated.gradeLevel,
-            updated.schoolName,
-            JSON.stringify(updated.goals),
-            updated.preferredSessionMinutes,
-            updated.maxDailyStudyMinutes,
-            JSON.stringify(updated.energyPreferences),
-            JSON.stringify(updated.sleepSchedule),
-            JSON.stringify(updated.mealTimes),
-          ]
-        );
-      } catch (err: any) {
-        if (env.APP_MODE === 'production') throw err;
-      }
+      await db.execute(
+        `INSERT INTO student_profiles
+         (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json, onboarding_completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           grade_level = VALUES(grade_level),
+           school_name = VALUES(school_name),
+           goals_json = VALUES(goals_json),
+           preferred_session_minutes = VALUES(preferred_session_minutes),
+           max_daily_study_minutes = VALUES(max_daily_study_minutes),
+           energy_preferences_json = VALUES(energy_preferences_json),
+           sleep_schedule_json = VALUES(sleep_schedule_json),
+           meal_times_json = VALUES(meal_times_json),
+           onboarding_completed_at = VALUES(onboarding_completed_at)`,
+        [
+          userId,
+          updated.gradeLevel,
+          updated.schoolName,
+          JSON.stringify(updated.goals),
+          updated.preferredSessionMinutes,
+          updated.maxDailyStudyMinutes,
+          JSON.stringify(updated.energyPreferences),
+          JSON.stringify(updated.sleepSchedule),
+          JSON.stringify(updated.mealTimes),
+          updated.onboardingCompletedAt ? new Date(updated.onboardingCompletedAt) : new Date(),
+        ]
+      );
+    } else {
+      this.demoProfiles.set(userId, updated);
     }
 
-    this.demoProfiles.set(userId, updated);
     return updated;
   }
 
-  public async createUser(params: {
+  public async createUser(data: {
     email: string;
     password: string;
     displayName: string;
     preferredName?: string;
-    gradeLevel: number;
+    gradeLevel?: number;
   }): Promise<{ user: User; profile: StudentProfile }> {
-    const normalizedEmail = params.email.trim().toLowerCase();
-
-    // Check in-memory demo map first if running in demo mode
-    if (this.demoUsers.has(normalizedEmail)) {
-      throw new Error('Email này đã được đăng ký. Vui lòng chuyển sang trang Đăng nhập.');
+    const normalizedEmail = data.email.trim().toLowerCase();
+    const existing = await this.findByEmail(normalizedEmail);
+    if (existing) {
+      const err: any = new Error('Email này đã được đăng ký. Vui lòng đăng nhập.');
+      err.code = 'EMAIL_ALREADY_EXISTS';
+      throw err;
     }
 
-    const trimmedDisplayName = params.displayName.trim();
-    const nameParts = trimmedDisplayName.split(/\s+/);
-    const preferredName = (params.preferredName && params.preferredName.trim())
-      ? params.preferredName.trim()
-      : (nameParts[nameParts.length - 1] || 'Học sinh');
-
-    const grade = Number(params.gradeLevel) || 9;
     const userId = 'usr_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = this.hashPassword(params.password, salt);
+    const { passwordHash, passwordSalt, scheme } = await this.hashPassword(data.password);
+    const createdAt = new Date().toISOString();
 
-    const newUser: StoredUser = {
+    const user: User = {
       id: userId,
       email: normalizedEmail,
-      displayName: trimmedDisplayName,
-      preferredName: preferredName,
+      displayName: data.displayName.trim(),
+      preferredName: (data.preferredName || data.displayName.trim().split(/\s+/).pop() || 'Học sinh').trim(),
       locale: 'vi-VN',
       timezone: 'Asia/Ho_Chi_Minh',
-      ageBand: `grade_${grade}`,
+      ageBand: '14-17',
       status: 'active',
-      createdAt: new Date().toISOString(),
-      passwordHash: hash,
-      passwordSalt: salt,
+      createdAt,
     };
 
-    const newProfile: StudentProfile = {
+    const profile: StudentProfile = {
       userId,
-      gradeLevel: grade,
+      gradeLevel: Number(data.gradeLevel) || 9,
       schoolName: 'Trường THCS / THPT',
-      goals: ['Hoàn thành tốt chương trình học kì'],
+      goals: ['Lập kế hoạch và duy trì thói quen học tập hàng ngày cùng Jami'],
       preferredSessionMinutes: 45,
       maxDailyStudyMinutes: 180,
-      energyPreferences: {
-        morning: 'medium',
-        afternoon: 'medium',
-        evening: 'high',
-      },
-      sleepSchedule: {
-        wakeTime: '06:00',
-        bedTime: '22:30',
-      },
-      mealTimes: {
-        lunch: '11:45',
-        dinner: '18:30',
-      },
+      energyPreferences: { morning: 'high', afternoon: 'medium', evening: 'high' },
+      sleepSchedule: { wakeTime: '06:00', bedTime: '22:30' },
+      mealTimes: { lunch: '12:00', dinner: '18:30' },
+      onboardingCompletedAt: createdAt,
     };
 
-    // Save to MySQL in a Transaction
+    if (db.isHealthy()) {
+      try {
+        await db.withTransaction(async (conn) => {
+          await conn.execute(
+            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              userId,
+              normalizedEmail,
+              passwordHash,
+              passwordSalt,
+              scheme,
+              user.displayName,
+              user.preferredName,
+              user.locale,
+              user.timezone,
+              user.ageBand,
+              user.status,
+              new Date(createdAt),
+            ]
+          );
+
+          await conn.execute(
+            `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json, onboarding_completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              userId,
+              profile.gradeLevel,
+              profile.schoolName,
+              JSON.stringify(profile.goals),
+              profile.preferredSessionMinutes,
+              profile.maxDailyStudyMinutes,
+              JSON.stringify(profile.energyPreferences),
+              JSON.stringify(profile.sleepSchedule),
+              JSON.stringify(profile.mealTimes),
+              new Date(createdAt),
+            ]
+          );
+
+          // Seed default subjects for new student
+          const defaultSubjects = [
+            { id: `subj_toan_${userId.slice(-6)}`, name: 'Toán học', color: '#2563EB', icon: 'Calculator', order: 1 },
+            { id: `subj_van_${userId.slice(-6)}`, name: 'Ngữ văn', color: '#EA580C', icon: 'BookOpen', order: 2 },
+            { id: `subj_anh_${userId.slice(-6)}`, name: 'Tiếng Anh', color: '#16A34A', icon: 'Globe', order: 3 },
+          ];
+
+          for (const s of defaultSubjects) {
+            await conn.execute(
+              `INSERT INTO subjects (id, user_id, name, color, icon, sort_order) VALUES (?, ?, ?, ?, ?, ?)`,
+              [s.id, userId, s.name, s.color, s.icon, s.order]
+            );
+          }
+        });
+      } catch (err: any) {
+        if (err.code === 'ER_DUP_ENTRY' || err.message?.includes('Duplicate entry')) {
+          const dupErr: any = new Error('Email này đã được đăng ký. Vui lòng đăng nhập.');
+          dupErr.code = 'EMAIL_ALREADY_EXISTS';
+          throw dupErr;
+        }
+        throw new Error(`Tạo tài khoản thất bại: ${err.message}`, { cause: err });
+      }
+    } else {
+      if (isProduction) {
+        throw new Error('Cơ sở dữ liệu đang không khả dụng. Vui lòng thử lại sau.');
+      }
+      const storedUser: StoredUser = {
+        ...user,
+        passwordHash,
+        passwordSalt,
+        passwordScheme: scheme,
+      };
+      this.demoUsers.set(normalizedEmail, storedUser);
+      this.demoProfiles.set(userId, profile);
+    }
+
+    return { user, profile };
+  }
+
+  // ==========================================
+  // Password Reset Token Management
+  // ==========================================
+
+  public async createPasswordResetToken(userId: string): Promise<string> {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const pepper = env.SESSION_SECRET || 'jami-secret-salt-default-32';
+    const tokenHash = crypto.createHmac('sha256', pepper).update(rawToken).digest('hex');
+    const id = 'rst_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const expiresAt = Date.now() + 60 * 60 * 1000; // 60 minutes TTL
+
+    if (db.isHealthy()) {
+      await db.execute(`UPDATE password_reset_tokens SET used_at = NOW(3) WHERE user_id = ? AND used_at IS NULL`, [userId]);
+
+      await db.execute(
+        `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, NOW(3))`,
+        [id, userId, tokenHash, new Date(expiresAt)]
+      );
+    } else {
+      this.demoResetTokens.set(tokenHash, {
+        id,
+        userId,
+        tokenHash,
+        expiresAt,
+        usedAt: null,
+      });
+    }
+
+    return rawToken;
+  }
+
+  public async verifyPasswordResetToken(rawToken: string): Promise<{ userId: string; tokenId: string } | null> {
+    if (!rawToken || typeof rawToken !== 'string') return null;
+    const pepper = env.SESSION_SECRET || 'jami-secret-salt-default-32';
+    const tokenHash = crypto.createHmac('sha256', pepper).update(rawToken).digest('hex');
+
+    if (db.isHealthy()) {
+      try {
+        const rows = await db.query<any>(
+          `SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ? AND used_at IS NULL`,
+          [tokenHash]
+        );
+
+        if (rows.length > 0) {
+          const r = rows[0];
+          const expiresIso = r.expires_at ? (r.expires_at.toISOString?.() || String(r.expires_at)) : null;
+          if (expiresIso && new Date(expiresIso).getTime() > Date.now()) {
+            return { userId: r.user_id, tokenId: r.id };
+          }
+        }
+      } catch (err: any) {
+        if (isProduction) throw err;
+      }
+    }
+
+    const demo = this.demoResetTokens.get(tokenHash);
+    if (demo && !demo.usedAt && demo.expiresAt > Date.now()) {
+      return { userId: demo.userId, tokenId: demo.id };
+    }
+
+    return null;
+  }
+
+  public async resetPasswordWithToken(rawToken: string, newPassword: string): Promise<boolean> {
+    const record = await this.verifyPasswordResetToken(rawToken);
+    if (!record) return false;
+
+    const { passwordHash, passwordSalt, scheme } = await this.hashPassword(newPassword);
+
     if (db.isHealthy()) {
       await db.withTransaction(async (conn) => {
-        // Check email uniqueness within transaction
-        const [existing] = await conn.query<any>('SELECT id FROM users WHERE email = ?', [normalizedEmail]);
-        if (existing && (existing as any[]).length > 0) {
-          throw new Error('Email này đã được đăng ký. Vui lòng chuyển sang trang Đăng nhập.');
-        }
-
-        // Insert User
         await conn.execute(
-          `INSERT INTO users (id, email, password_hash, password_salt, display_name, preferred_name, locale, timezone, age_band, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            newUser.id,
-            newUser.email,
-            newUser.passwordHash,
-            newUser.passwordSalt,
-            newUser.displayName,
-            newUser.preferredName,
-            newUser.locale,
-            newUser.timezone,
-            newUser.ageBand,
-            newUser.status,
-            new Date(),
-          ]
+          `UPDATE users SET password_hash = ?, password_salt = ?, password_scheme = ?, updated_at = NOW(3) WHERE id = ?`,
+          [passwordHash, passwordSalt, scheme, record.userId]
         );
 
-        // Insert Profile
-        await conn.execute(
-          `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            newProfile.userId,
-            newProfile.gradeLevel,
-            newProfile.schoolName,
-            JSON.stringify(newProfile.goals),
-            newProfile.preferredSessionMinutes,
-            newProfile.maxDailyStudyMinutes,
-            JSON.stringify(newProfile.energyPreferences),
-            JSON.stringify(newProfile.sleepSchedule),
-            JSON.stringify(newProfile.mealTimes),
-          ]
-        );
+        await conn.execute(`UPDATE password_reset_tokens SET used_at = NOW(3) WHERE id = ?`, [record.tokenId]);
+        await conn.execute(`UPDATE auth_sessions SET revoked_at = NOW(3) WHERE user_id = ?`, [record.userId]);
       });
-    } else if (env.APP_MODE === 'production') {
-      throw new Error('Cơ sở dữ liệu đang không khả dụng. Vui lòng thử lại sau.');
+      return true;
+    } else {
+      for (const u of this.demoUsers.values()) {
+        if (u.id === record.userId) {
+          u.passwordHash = passwordHash;
+          u.passwordSalt = passwordSalt;
+          u.passwordScheme = scheme;
+        }
+      }
+      const pepper = env.SESSION_SECRET || 'jami-secret-salt-default-32';
+      const tokenHash = crypto.createHmac('sha256', pepper).update(rawToken).digest('hex');
+      const demo = this.demoResetTokens.get(tokenHash);
+      if (demo) demo.usedAt = Date.now();
+      return true;
     }
-
-    this.demoUsers.set(normalizedEmail, newUser);
-    this.demoProfiles.set(userId, newProfile);
-
-    // Seed default subjects and sample tasks for onboarding experience
-    try {
-      DemoRepository.seedUser(userId);
-    } catch {
-      // ignore
-    }
-
-    const { passwordHash, passwordSalt, ...safeUser } = newUser;
-    return { user: safeUser, profile: newProfile };
   }
 }
+
+export const userRepo = UserRepository.getInstance();

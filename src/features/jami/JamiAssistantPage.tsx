@@ -1,302 +1,523 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Bot,
   Send,
-  Mic,
-  MicOff,
+  Sparkles,
   CheckCircle2,
-  Info,
-  Clock,
-  RefreshCw,
+  XCircle,
+  Plus,
+  Trash2,
+  Edit2,
+  Calendar,
+  Layers,
+  ArrowRight,
+  MessageSquare,
   AlertCircle,
+  RefreshCw,
+  Clock,
 } from 'lucide-react';
-import { api, JamiChatMessageItem } from '../../lib/api-client';
+import { useNavigate } from 'react-router-dom';
+import { api } from '../../lib/api-client';
+import { JamiConversation, JamiMessageItem } from '../../../shared/types';
 import confetti from 'canvas-confetti';
 
 export const JamiAssistantPage: React.FC = () => {
-  const [messages, setMessages] = useState<JamiChatMessageItem[]>([]);
+  const navigate = useNavigate();
+
+  const [conversations, setConversations] = useState<JamiConversation[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<JamiMessageItem[]>([]);
   const [inputMessage, setInputMessage] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFetching, setIsFetching] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [confirmingMsgId, setConfirmingMsgId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<any>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  // Edit title state
+  const [editingConvId, setEditingConvId] = useState<string | null>(null);
+  const [newTitle, setNewTitle] = useState('');
 
-  const fetchHistory = async () => {
-    setIsFetching(true);
-    setError(null);
-    try {
-      const res = await api.getJamiMessages();
-      setMessages(res.messages);
-    } catch (err: any) {
-      setError(err.message || 'Không thể tải lịch sử tin nhắn.');
-    } finally {
-      setIsFetching(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchHistory();
-  }, []);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading]);
+  }, [messages, isSending]);
 
-  const handleSendMessage = async (textToSend?: string) => {
-    const text = textToSend || inputMessage;
-    if (!text.trim() || isLoading) return;
-
-    setInputMessage('');
+  // Load conversations on mount
+  const fetchConversations = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-
-    const tempUserMsg: JamiChatMessageItem = {
-      id: 'temp_user_' + Date.now(),
-      sender: 'user',
-      text: text.trim(),
-      createdAt: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, tempUserMsg]);
-
     try {
-      const res = await api.sendJamiChat(text.trim());
-      setMessages((prev) =>
-        prev.map((m) => (m.id === tempUserMsg.id ? res.userMessage : m)).concat([res.replyMessage])
-      );
+      const res = await api.getJamiConversations();
+      setConversations(res.conversations || []);
+
+      if (res.conversations && res.conversations.length > 0) {
+        setActiveConvId((prev) => prev || res.conversations[0].id);
+      } else {
+        // Automatically create initial conversation
+        const created = await api.createJamiConversation('Hội thoại chính');
+        setConversations([created.conversation]);
+        setActiveConvId(created.conversation.id);
+      }
     } catch (err: any) {
-      setError(err.message || 'Không thể kết nối máy chủ.');
+      setError(err.message || 'Không thể tải danh sách cuộc trò chuyện.');
     } finally {
       setIsLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    fetchConversations();
+  }, [fetchConversations]);
+
+  // Load messages whenever active conversation changes
+  const fetchMessages = useCallback(async (convId: string) => {
+    try {
+      const res = await api.getJamiMessages(convId);
+      setMessages(res.messages || []);
+    } catch (err: any) {
+      console.error('Error loading messages:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeConvId) {
+      fetchMessages(activeConvId);
+    }
+  }, [activeConvId, fetchMessages]);
+
+  const handleCreateConversation = async () => {
+    try {
+      const title = `Hội thoại mới ${new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`;
+      const res = await api.createJamiConversation(title);
+      setConversations((prev) => [res.conversation, ...prev]);
+      setActiveConvId(res.conversation.id);
+      setMessages([]);
+    } catch (err: any) {
+      alert(err.message || 'Không thể tạo cuộc trò chuyện mới.');
+    }
   };
 
-  const handleConfirmAction = async (msgId: string) => {
+  const handleRenameConversation = async (convId: string) => {
+    if (!newTitle.trim()) return;
     try {
-      const res = await api.confirmJamiAction(msgId);
-      if (res.success) {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === msgId ? { ...m, isConfirmed: true } : m))
-        );
-        confetti({ particleCount: 80, spread: 60 });
+      const res = await api.updateJamiConversation(convId, newTitle.trim());
+      setConversations((prev) => prev.map((c) => (c.id === convId ? res.conversation : c)));
+      setEditingConvId(null);
+      setNewTitle('');
+    } catch (err: any) {
+      alert(err.message || 'Không thể đổi tên cuộc trò chuyện.');
+    }
+  };
+
+  const handleDeleteConversation = async (convId: string) => {
+    if (!window.confirm('Em có chắc chắn muốn xóa cuộc trò chuyện này?')) return;
+    try {
+      await api.deleteJamiConversation(convId);
+      const remaining = conversations.filter((c) => c.id !== convId);
+      setConversations(remaining);
+      if (activeConvId === convId) {
+        if (remaining.length > 0) {
+          setActiveConvId(remaining[0].id);
+        } else {
+          handleCreateConversation();
+        }
       }
     } catch (err: any) {
-      alert(err.message || 'Không thể xác nhận thao tác.');
+      alert(err.message || 'Không thể xóa cuộc trò chuyện.');
     }
   };
 
-  const startVoiceRecord = async () => {
+  const handleSendMessage = async (textToSend?: string) => {
+    const text = (textToSend || inputMessage).trim();
+    if (!text || isSending || !activeConvId) return;
+
+    setInputMessage('');
+    setError(null);
+
+    const clientMessageId = 'cl_' + Date.now();
+    const optimisticUserMsg: JamiMessageItem = {
+      id: clientMessageId,
+      conversationId: activeConvId,
+      userId: '',
+      sender: 'user',
+      text,
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, optimisticUserMsg]);
+    setIsSending(true);
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
+      const res = await api.sendJamiChat(text, activeConvId, clientMessageId);
+      // Replace optimistic message with real message and add Jami reply
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== clientMessageId);
+        return [...filtered, res.userMessage, res.replyMessage];
+      });
 
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-        setIsRecording(false);
-        clearInterval(timerRef.current);
-        setRecordingSeconds(0);
-        handleSendMessage('Tuần sau tôi có bài kiểm tra 1 tiết Toán hàm số, hãy gợi ý lịch ôn luyện.');
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordingSeconds(0);
-      timerRef.current = setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
-      }, 1000);
-    } catch (err) {
-      alert('Không thể truy cập micro. Vui lòng cấp quyền micro trong cài đặt trình duyệt.');
-      setIsRecording(false);
+      if (res.clientAction?.route) {
+        // If Jami suggested client navigation
+        setTimeout(() => {
+          navigate(res.clientAction.route);
+        }, 1500);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Không thể gửi tin nhắn.');
+      // Rollback optimistic message on failure
+      setMessages((prev) => prev.filter((m) => m.id !== clientMessageId));
+    } finally {
+      setIsSending(false);
     }
   };
 
-  const stopVoiceRecord = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+  const handleConfirmAction = async (msg: JamiMessageItem, decision: 'confirm' | 'reject') => {
+    setConfirmingMsgId(msg.id);
+    try {
+      const res = await api.confirmJamiAction(msg.id, decision);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, isConfirmed: true } : m))
+      );
+
+      if (decision === 'confirm') {
+        confetti({ particleCount: 70, spread: 60 });
+      }
+
+      // If action had follow-up messages, refetch
+      if (activeConvId) {
+        fetchMessages(activeConvId);
+      }
+    } catch (err: any) {
+      alert(err.message || 'Không thể thực hiện xác nhận.');
+    } finally {
+      setConfirmingMsgId(null);
+    }
+  };
+
+  const handleActionClick = (action: any) => {
+    if (typeof action === 'string') {
+      handleSendMessage(action);
+      return;
+    }
+
+    if (action.route) {
+      navigate(action.route);
+      return;
+    }
+
+    if (action.label) {
+      handleSendMessage(action.label);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4 h-[calc(100vh-8.5rem)] flex flex-col">
-      {/* Assistant Header */}
-      <div className="bg-[#0B120D] p-4 sm:p-5 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-[#14532D] border border-[#22C55E]/40 flex items-center justify-center text-[#86EFAC] shadow-md">
-            <Bot className="w-6 h-6 text-[#22C55E]" />
+    <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-140px)] min-h-[550px]">
+      {/* Sidebar: Conversations List */}
+      <div className="w-full lg:w-72 bg-[#0B120D] p-4 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex flex-col justify-between shrink-0">
+        <div className="space-y-4 overflow-hidden flex flex-col flex-1">
+          <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.18)]">
+            <div className="flex items-center gap-2">
+              <Bot className="w-5 h-5 text-[#22C55E]" />
+              <h2 className="text-sm font-black text-[#F3FAF5]">Trợ Lý Jami AI</h2>
+            </div>
+            <button
+              onClick={handleCreateConversation}
+              className="p-1.5 rounded-xl bg-[#14532D] text-[#86EFAC] hover:bg-[#16A34A] hover:text-[#050806] transition-all cursor-pointer"
+              title="Cuộc trò chuyện mới"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
           </div>
-          <div>
-            <h1 className="text-base sm:text-lg font-black text-[#F3FAF5] flex items-center gap-2">
-              <span>Trợ Lý AI Jami</span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/30">
-                MySQL Persistence
-              </span>
-            </h1>
-            <p className="text-xs text-[#A9B8AE]">
-              Đồng hành hỏi đáp bài học, giải thích kiến thức & tối ưu thời gian học tập
-            </p>
+
+          <div className="text-[11px] font-bold text-[#A9B8AE] uppercase tracking-wider">
+            Lịch sử trò chuyện
           </div>
-        </div>
 
-        <div className="hidden md:flex items-center gap-1.5 px-3 py-1 bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-full text-[11px] text-[#A9B8AE] font-medium">
-          <Info className="w-3.5 h-3.5 text-[#22C55E]" />
-          <span>Giọng nói Jami tạo bởi trí tuệ nhân tạo</span>
-        </div>
-      </div>
+          {/* Conversations Scrollable List */}
+          <div className="space-y-1.5 overflow-y-auto pr-1 flex-1">
+            {conversations.map((c) => {
+              const isActive = c.id === activeConvId;
+              const isEditing = c.id === editingConvId;
 
-      {error && (
-        <div className="p-3 bg-rose-950/40 border border-rose-800 rounded-2xl text-rose-300 text-xs flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4" />
-            <span>{error}</span>
-          </div>
-          <button onClick={fetchHistory} className="px-3 py-1 bg-rose-900 text-white font-bold rounded-lg cursor-pointer">
-            Thử lại
-          </button>
-        </div>
-      )}
-
-      {/* Main Chat Thread */}
-      <div className="flex-1 bg-[#0B120D] rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl p-4 sm:p-6 overflow-y-auto space-y-4 flex flex-col justify-between">
-        {isFetching ? (
-          <div className="h-full flex items-center justify-center text-xs text-[#A9B8AE] gap-2">
-            <RefreshCw className="w-4 h-4 text-[#22C55E] animate-spin" />
-            <span>Đang tải hội thoại...</span>
-          </div>
-        ) : (
-          <div className="space-y-4 flex-1">
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex items-start gap-3 ${
-                  msg.sender === 'user' ? 'justify-end' : 'justify-start'
-                }`}
-              >
-                {msg.sender === 'jami' && (
-                  <div className="w-8 h-8 rounded-full bg-[#14532D] border border-[#22C55E]/40 flex items-center justify-center text-[#86EFAC] text-xs font-black shrink-0 mt-1 shadow-sm">
-                    J
-                  </div>
-                )}
-
+              return (
                 <div
-                  className={`max-w-xl rounded-2xl p-4 text-xs sm:text-sm leading-relaxed ${
-                    msg.sender === 'user'
-                      ? 'bg-[#16A34A] text-[#050806] font-bold shadow-md shadow-[#16A34A]/25'
-                      : 'bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#F3FAF5] shadow-sm'
+                  key={c.id}
+                  onClick={() => !isEditing && setActiveConvId(c.id)}
+                  className={`p-2.5 rounded-2xl border text-xs transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                    isActive
+                      ? 'bg-[#14532D] border-[#22C55E] text-[#86EFAC] font-bold shadow-md shadow-[#16A34A]/20'
+                      : 'bg-[#101A13] border-[rgba(34,197,94,0.15)] text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#142318]'
                   }`}
                 >
-                  <div className="whitespace-pre-line">{msg.text}</div>
-
-                  {/* Proposal Action Confirmation */}
-                  {msg.requiresConfirmation && (
-                    <div className="mt-3 p-3 bg-[#050806] rounded-xl border border-[rgba(34,197,94,0.25)] text-xs text-[#F3FAF5] space-y-2">
-                      <div className="flex items-center gap-1.5 font-bold text-[#86EFAC]">
-                        <Clock className="w-3.5 h-3.5 text-[#22C55E]" />
-                        <span>Xác nhận thao tác:</span>
+                  {isEditing ? (
+                    <div className="flex items-center gap-1 w-full" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        value={newTitle}
+                        onChange={(e) => setNewTitle(e.target.value)}
+                        className="w-full text-xs p-1 bg-[#050806] border border-[#22C55E] text-[#F3FAF5] rounded-lg focus:outline-none"
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => handleRenameConversation(c.id)}
+                        className="px-2 py-1 bg-[#16A34A] text-[#050806] rounded-md font-bold text-[10px]"
+                      >
+                        Lưu
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 truncate">
+                        <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                        <span className="truncate">{c.title}</span>
                       </div>
-                      <p className="text-[#A9B8AE]">{msg.confirmationSummary}</p>
 
-                      <div className="flex items-center gap-2 pt-1">
-                        {msg.isConfirmed ? (
-                          <div className="flex items-center gap-1 text-xs font-bold text-[#86EFAC] bg-[#14532D] border border-[#22C55E]/30 px-2.5 py-1 rounded-lg">
-                            <CheckCircle2 className="w-4 h-4 text-[#22C55E]" />
-                            <span>Đã xác nhận & lưu MySQL</span>
-                          </div>
-                        ) : (
+                      {isActive && (
+                        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                           <button
-                            onClick={() => handleConfirmAction(msg.id)}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] font-black rounded-lg shadow-sm cursor-pointer"
+                            onClick={() => {
+                              setEditingConvId(c.id);
+                              setNewTitle(c.title);
+                            }}
+                            className="p-1 hover:text-[#F3FAF5] rounded"
+                            title="Đổi tên"
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Xác nhận đổi lịch</span>
+                            <Edit2 className="w-3 h-3" />
                           </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Suggested Quick Actions */}
-                  {msg.suggestedActions && msg.suggestedActions.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-1.5 pt-2 border-t border-[rgba(34,197,94,0.15)]">
-                      {msg.suggestedActions.map((action, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => handleSendMessage(action)}
-                          className="px-2.5 py-1 bg-[#050806] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] rounded-lg text-xs font-medium transition-colors cursor-pointer"
-                        >
-                          {action}
-                        </button>
-                      ))}
-                    </div>
+                          <button
+                            onClick={() => handleDeleteConversation(c.id)}
+                            className="p-1 hover:text-rose-400 rounded"
+                            title="Xóa"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
-              </div>
-            ))}
-
-            {isLoading && (
-              <div className="flex items-center gap-2 text-xs text-[#86EFAC] pl-11">
-                <div className="w-4 h-4 border-2 border-[#22C55E] border-t-transparent rounded-full animate-spin" />
-                <span>Jami đang suy nghĩ câu trả lời...</span>
-              </div>
-            )}
-
-            <div ref={chatEndRef} />
+              );
+            })}
           </div>
-        )}
+        </div>
+
+        {/* Quick feature shortcuts */}
+        <div className="pt-3 border-t border-[rgba(34,197,94,0.18)] space-y-1.5">
+          <button
+            onClick={() => navigate('/focus')}
+            className="w-full text-left p-2 rounded-xl text-xs text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#101A13] transition-all flex items-center justify-between cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-[#22C55E]" />
+              <span>Hẹn giờ tập trung</span>
+            </span>
+            <ArrowRight className="w-3 h-3" />
+          </button>
+          <button
+            onClick={() => navigate('/timetable')}
+            className="w-full text-left p-2 rounded-xl text-xs text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#101A13] transition-all flex items-center justify-between cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Calendar className="w-3.5 h-3.5 text-[#22C55E]" />
+              <span>Thời khóa biểu</span>
+            </span>
+            <ArrowRight className="w-3 h-3" />
+          </button>
+        </div>
       </div>
 
-      {/* Input Bar */}
-      <div className="bg-[#0B120D] p-3 rounded-2xl border border-[rgba(34,197,94,0.25)] shadow-xl flex items-center gap-2 shrink-0">
-        <button
-          onClick={isRecording ? stopVoiceRecord : startVoiceRecord}
-          className={`p-2.5 rounded-xl transition-all cursor-pointer ${
-            isRecording
-              ? 'bg-rose-600 text-white animate-pulse'
-              : 'bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)]'
-          }`}
-          title={isRecording ? 'Dừng thu âm' : 'Nói với Jami qua giọng nói'}
-        >
-          {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-        </button>
+      {/* Main Chat Area */}
+      <div className="flex-1 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex flex-col justify-between overflow-hidden">
+        {/* Chat Messages Stream */}
+        <div className="flex-1 overflow-y-auto space-y-4 pr-2">
+          {isLoading ? (
+            <div className="h-full flex items-center justify-center text-xs text-[#A9B8AE] gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-[#22C55E]" />
+              <span>Đang kết nối với Jami...</span>
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
+              <div className="w-14 h-14 rounded-3xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center shadow-lg shadow-[#16A34A]/25 border border-[#22C55E]/30">
+                <Bot className="w-8 h-8" />
+              </div>
+              <h3 className="text-base font-bold text-[#F3FAF5]">Chào em! Jami có thể giúp gì cho việc học hôm nay?</h3>
+              <p className="text-xs text-[#A9B8AE] max-w-md">
+                Em có thể hỏi lịch học hôm nay, yêu cầu dời bài tập bận, giải thích công thức toán hoặc tạo đề kiểm tra ôn thi bất cứ lúc nào.
+              </p>
 
-        {isRecording && (
-          <span className="text-xs text-rose-400 font-mono font-bold animate-pulse">
-            00:0{recordingSeconds}
-          </span>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                <button
+                  onClick={() => handleSendMessage('Hôm nay em có những lịch học và nhiệm vụ nào?')}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
+                >
+                  📅 Hôm nay học gì?
+                </button>
+                <button
+                  onClick={() => handleSendMessage('Tối nay em bận đột xuất, hãy dời bài tập sang giờ trống khác giúp em.')}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
+                >
+                  ⚡ Dời lịch bài tập bận
+                </button>
+                <button
+                  onClick={() => handleSendMessage('Gợi ý cách ôn tập cho bài kiểm tra sắp tới.')}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
+                >
+                  🎯 Lập kế hoạch ôn thi
+                </button>
+              </div>
+            </div>
+          ) : (
+            messages.map((m) => {
+              const isUser = m.sender === 'user';
+
+              return (
+                <div
+                  key={m.id}
+                  className={`flex items-start gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
+                >
+                  {!isUser && (
+                    <div className="w-8 h-8 rounded-xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center text-xs font-black shrink-0 border border-[#22C55E]/30 mt-1">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                  )}
+
+                  <div className={`max-w-[85%] sm:max-w-[75%] space-y-2 ${isUser ? 'items-end' : 'items-start'}`}>
+                    <div
+                      className={`p-4 rounded-2xl text-xs sm:text-sm leading-relaxed ${
+                        isUser
+                          ? 'bg-[#16A34A] text-[#050806] font-semibold rounded-tr-none shadow-md shadow-[#16A34A]/20'
+                          : 'bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-tl-none space-y-2 shadow-lg'
+                      }`}
+                    >
+                      <div className="whitespace-pre-line">{m.text}</div>
+
+                      {/* Safe Mutation Preview & Confirmation Card */}
+                      {m.requiresConfirmation && (
+                        <div className="mt-3 p-3.5 rounded-xl bg-[#050806] border border-[#22C55E]/40 space-y-2.5">
+                          <div className="flex items-center gap-2 text-xs font-extrabold text-[#86EFAC]">
+                            <Sparkles className="w-4 h-4 text-[#22C55E]" />
+                            <span>Đề xuất hành động cần xác nhận:</span>
+                          </div>
+
+                          <div className="text-xs text-[#A9B8AE] bg-[#101A13] p-2.5 rounded-lg border border-[rgba(34,197,94,0.15)]">
+                            {m.confirmationSummary || 'Thực hiện cập nhật dữ liệu học tập theo yêu cầu.'}
+                          </div>
+
+                          {!m.isConfirmed ? (
+                            <div className="flex items-center justify-end gap-2 pt-1">
+                              <button
+                                onClick={() => handleConfirmAction(m, 'reject')}
+                                disabled={confirmingMsgId === m.id}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-800 text-rose-300 hover:bg-rose-950/40 text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                <span>Từ chối</span>
+                              </button>
+                              <button
+                                onClick={() => handleConfirmAction(m, 'confirm')}
+                                disabled={confirmingMsgId === m.id}
+                                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer disabled:opacity-50"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>{confirmingMsgId === m.id ? 'Đang thực hiện...' : 'Xác nhận thực hiện'}</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-xs text-[#86EFAC] font-bold pt-1">
+                              <CheckCircle2 className="w-4 h-4 text-[#22C55E]" />
+                              <span>Đã thực hiện và cập nhật vào hệ thống.</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Suggested Action Pills */}
+                    {!isUser && m.suggestedActions && Array.isArray(m.suggestedActions) && m.suggestedActions.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        {m.suggestedActions.map((action: any, actIdx: number) => {
+                          const label = typeof action === 'string' ? action : action.label;
+                          return (
+                            <button
+                              key={actIdx}
+                              onClick={() => handleActionClick(action)}
+                              className="px-3 py-1 rounded-full text-[11px] font-bold bg-[#050806] hover:bg-[#14532D] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] transition-all cursor-pointer"
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="text-[10px] text-[#A9B8AE]/60 px-1">
+                      {new Date(m.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+
+          {isSending && (
+            <div className="flex items-start gap-3 justify-start">
+              <div className="w-8 h-8 rounded-xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center text-xs font-black shrink-0 border border-[#22C55E]/30 mt-1">
+                <Bot className="w-4 h-4" />
+              </div>
+              <div className="p-3.5 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-xs text-[#A9B8AE] flex items-center gap-2">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#22C55E]" />
+                <span>Jami đang suy nghĩ và tra cứu dữ liệu...</span>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Error banner */}
+        {error && (
+          <div className="p-3 mt-2 bg-rose-950/40 border border-rose-800 rounded-xl text-rose-300 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              className="text-[11px] font-bold underline cursor-pointer"
+            >
+              Đóng
+            </button>
+          </div>
         )}
 
-        <input
-          type="text"
-          value={inputMessage}
-          onChange={(e) => setInputMessage(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-          placeholder="Hỏi Jami về bài tập, lịch học hoặc phương pháp ôn thi..."
-          className="flex-1 text-xs sm:text-sm px-3 py-2 border-none focus:outline-none bg-transparent text-[#F3FAF5] placeholder-[#526356]"
-        />
-
-        <button
-          onClick={() => handleSendMessage()}
-          disabled={!inputMessage.trim() || isLoading}
-          className="flex items-center gap-1.5 px-4 py-2.5 bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] disabled:opacity-40 text-[#050806] text-xs font-black rounded-xl shadow-md transition-all hover:scale-105 active:scale-95 cursor-pointer"
+        {/* Input Bar */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendMessage();
+          }}
+          className="pt-4 mt-2 border-t border-[rgba(34,197,94,0.18)] flex items-center gap-2"
         >
-          <span>Gửi</span>
-          <Send className="w-3.5 h-3.5" />
-        </button>
+          <input
+            type="text"
+            placeholder="Nhắn tin với Jami (ví dụ: 'Hôm nay học gì?', 'Dời bài tập Toán tối nay'...)"
+            value={inputMessage}
+            onChange={(e) => setInputMessage(e.target.value)}
+            className="flex-1 text-xs sm:text-sm p-3.5 bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-2xl focus:border-[#22C55E] focus:outline-none"
+            disabled={isSending}
+          />
+          <button
+            type="submit"
+            disabled={!inputMessage.trim() || isSending}
+            className="p-3.5 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] transition-all shadow-md shadow-[#16A34A]/25 cursor-pointer disabled:opacity-40 shrink-0 font-bold"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </form>
       </div>
     </div>
   );

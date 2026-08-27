@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { RegisterRequestSchema } from '../../../shared/schemas';
 import { useAuth } from './AuthProvider';
 import { Eye, EyeOff, Lock, Mail, User as UserIcon, GraduationCap, ArrowRight, AlertCircle, Check } from 'lucide-react';
+import { ApiError } from '../../lib/api-client';
 
 type SignupFormData = z.infer<typeof RegisterRequestSchema>;
 
@@ -15,12 +16,14 @@ export const SignupPage: React.FC = () => {
 
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isConflict409, setIsConflict409] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
     register,
     handleSubmit,
     watch,
+    setValue,
     formState: { errors },
   } = useForm<SignupFormData>({
     resolver: zodResolver(RegisterRequestSchema) as any,
@@ -31,16 +34,18 @@ export const SignupPage: React.FC = () => {
       gradeLevel: 9,
       password: '',
       confirmPassword: '',
-      termsAccepted: true,
+      termsAccepted: false, // Default is false per security requirements
     },
   });
 
+  const currentEmail = watch('email');
   const passwordVal = watch('password') || '';
   const hasMinLen = passwordVal.length >= 6;
   const hasNum = /\d/.test(passwordVal);
 
   const onSubmit = async (data: SignupFormData) => {
     setErrorMessage(null);
+    setIsConflict409(false);
     setIsSubmitting(true);
     try {
       const payload = {
@@ -50,10 +55,33 @@ export const SignupPage: React.FC = () => {
       await registerUser(payload);
       navigate('/today', { replace: true });
     } catch (err: any) {
-      setErrorMessage(err.message || 'Đăng ký không thành công. Vui lòng kiểm tra lại thông tin.');
+      if (err instanceof ApiError) {
+        if (err.status === 409 || err.code === 'EMAIL_ALREADY_EXISTS') {
+          setIsConflict409(true);
+          setErrorMessage('Email này đã được đăng ký. Vui lòng chuyển sang trang Đăng nhập.');
+          // Clear sensitive password fields for safety while retaining name, email, gradeLevel, and terms
+          setValue('password', '');
+          setValue('confirmPassword', '');
+        } else if (err.status === 429 || err.code === 'RATE_LIMITED') {
+          setErrorMessage(err.message || 'Thao tác quá nhiều lần. Vui lòng thử lại sau.');
+        } else if (err.status === 503 || err.code === 'DATABASE_UNAVAILABLE') {
+          const reqId = err.data?.error?.requestId ? ` (Mã yêu cầu: ${err.data.error.requestId})` : '';
+          setErrorMessage(`Hệ thống đăng nhập đang tạm gián đoạn. Vui lòng thử lại sau.${reqId}`);
+        } else {
+          setErrorMessage(err.message || 'Đăng ký không thành công. Vui lòng kiểm tra lại thông tin.');
+        }
+      } else {
+        setErrorMessage('Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại kết nối mạng.');
+      }
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleNavigateToLogin = () => {
+    navigate('/login', {
+      state: { prefillEmail: currentEmail },
+    });
   };
 
   return (
@@ -76,15 +104,24 @@ export const SignupPage: React.FC = () => {
         </div>
 
         {errorMessage && (
-          <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex items-start gap-2.5">
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex items-start gap-2.5"
+          >
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div className="flex-1">
               <div>{errorMessage}</div>
-              {errorMessage.includes('đăng ký') && (
-                <div className="mt-1.5">
-                  <Link to="/login" className="font-bold text-[#86EFAC] underline hover:text-[#F3FAF5]">
-                    Bấm vào đây để chuyển sang trang Đăng nhập &rarr;
-                  </Link>
+              {isConflict409 && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={handleNavigateToLogin}
+                    className="px-3 py-1.5 rounded-lg bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] font-bold text-xs transition-all inline-flex items-center gap-1 cursor-pointer border border-[#22C55E]/30"
+                  >
+                    <span>Đi đến Đăng nhập</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               )}
             </div>
@@ -95,12 +132,14 @@ export const SignupPage: React.FC = () => {
           {/* Display Name & Preferred Name */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1">
+              <label htmlFor="displayName" className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1">
                 <UserIcon className="w-3.5 h-3.5 text-[#A9B8AE]" />
                 <span>Họ và tên</span>
               </label>
               <input
+                id="displayName"
                 type="text"
+                autoComplete="name"
                 placeholder="Nguyễn Văn Minh"
                 {...register('displayName')}
                 className={`w-full px-3.5 py-2.5 rounded-xl border bg-[#050806] text-sm text-[#F3FAF5] focus:outline-none ${
@@ -115,9 +154,11 @@ export const SignupPage: React.FC = () => {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-bold text-[#F3FAF5]">Tên Jami gọi em (tùy chọn)</label>
+              <label htmlFor="preferredName" className="text-xs font-bold text-[#F3FAF5]">Tên Jami gọi em (tùy chọn)</label>
               <input
+                id="preferredName"
                 type="text"
+                autoComplete="nickname"
                 placeholder="Ví dụ: Minh"
                 {...register('preferredName')}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-[rgba(34,197,94,0.25)] bg-[#050806] text-sm text-[#F3FAF5] focus:border-[#22C55E] focus:outline-none"
@@ -127,12 +168,14 @@ export const SignupPage: React.FC = () => {
 
           {/* Email */}
           <div className="space-y-1">
-            <label className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1">
+            <label htmlFor="signup-email" className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1">
               <Mail className="w-3.5 h-3.5 text-[#A9B8AE]" />
               <span>Email học sinh</span>
             </label>
             <input
+              id="signup-email"
               type="email"
+              autoComplete="email"
               placeholder="minh.hocsinh@gmail.com"
               {...register('email')}
               className={`w-full px-3.5 py-2.5 rounded-xl border bg-[#050806] text-sm text-[#F3FAF5] focus:outline-none ${
@@ -178,13 +221,15 @@ export const SignupPage: React.FC = () => {
           {/* Password & Confirm Password */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1">
+              <label htmlFor="signup-password" className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1">
                 <Lock className="w-3.5 h-3.5 text-[#A9B8AE]" />
                 <span>Mật khẩu</span>
               </label>
               <div className="relative">
                 <input
+                  id="signup-password"
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
                   placeholder="Tối thiểu 6 ký tự"
                   {...register('password')}
                   className={`w-full px-3.5 py-2.5 pr-10 rounded-xl border bg-[#050806] text-sm text-[#F3FAF5] focus:outline-none ${
@@ -195,6 +240,7 @@ export const SignupPage: React.FC = () => {
                 />
                 <button
                   type="button"
+                  aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
                   onClick={() => setShowPassword(!showPassword)}
                   className="p-1.5 text-[#A9B8AE] hover:text-[#F3FAF5] absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer"
                 >
@@ -207,9 +253,11 @@ export const SignupPage: React.FC = () => {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-bold text-[#F3FAF5]">Xác nhận mật khẩu</label>
+              <label htmlFor="confirmPassword" className="text-xs font-bold text-[#F3FAF5]">Xác nhận mật khẩu</label>
               <input
+                id="confirmPassword"
                 type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
                 placeholder="Nhập lại mật khẩu"
                 {...register('confirmPassword')}
                 className={`w-full px-3.5 py-2.5 rounded-xl border bg-[#050806] text-sm text-[#F3FAF5] focus:outline-none ${
@@ -258,7 +306,7 @@ export const SignupPage: React.FC = () => {
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] font-extrabold text-sm shadow-lg shadow-[#16A34A]/25 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] font-extrabold text-sm shadow-lg shadow-[#16A34A]/25 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           >
             <span>{isSubmitting ? 'Đang tạo tài khoản...' : 'Hoàn tất đăng ký & Bắt đầu học'}</span>
             <ArrowRight className="w-4 h-4" />

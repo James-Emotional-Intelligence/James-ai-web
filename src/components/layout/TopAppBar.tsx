@@ -13,6 +13,10 @@ import {
 } from 'lucide-react';
 import { User, StudentProfile } from '../../../shared/types';
 
+import { useVoiceJami } from '../../context/VoiceJamiContext';
+import { useNotifications } from '../../context/NotificationContext';
+import { Power } from 'lucide-react';
+
 interface TopAppBarProps {
   user?: User;
   profile?: StudentProfile;
@@ -29,8 +33,16 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   onLogout,
 }) => {
   const navigate = useNavigate();
+  const voice = useVoiceJami();
+  const { unreadCount } = useNotifications();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -78,33 +90,58 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
 
         {/* Right: Actions, Voice Goal, Notifications, Profile */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Hands-Free Jami Voice Status / Toggle */}
+          {voice.isHandsFreeEnabled ? (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#14532D]/80 border border-[#22C55E]/40 text-[#86EFAC] text-xs font-bold shadow-md shadow-[#16A34A]/20">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#22C55E] opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#22C55E]" />
+              </span>
+              <span className="hidden md:inline font-semibold">Đang nghe "Jami ơi"</span>
+              <span className="font-mono text-[11px] text-[#22C55E]">({formatDuration(voice.sessionDuration)})</span>
+              <button
+                onClick={voice.disableHandsFree}
+                className="ml-1 px-2 py-0.5 rounded-md bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-extrabold flex items-center gap-1 cursor-pointer transition-colors"
+                title="Tắt chế độ rảnh tay và giải phóng micro"
+              >
+                <Power className="w-3 h-3" />
+                <span>Tắt</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={voice.enableHandsFree}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#101A13] hover:bg-[#142219] border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E] text-[#86EFAC] font-bold text-xs shadow-sm transition-all hover:scale-[1.02] cursor-pointer"
+              title="Bật lắng nghe từ khóa Jami ơi rảnh tay"
+            >
+              <Mic className="w-3.5 h-3.5 text-[#22C55E]" />
+              <span className="hidden sm:inline">Bật Jami rảnh tay</span>
+              <span className="sm:hidden">Rảnh tay</span>
+            </button>
+          )}
+
           {/* Nói mục tiêu với Jami Button */}
           <button
             onClick={onOpenVoiceModal}
-            className="hidden sm:flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] font-bold text-xs shadow-md shadow-[#16A34A]/25 transition-all hover:scale-[1.02] cursor-pointer"
+            className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] font-bold text-xs shadow-md shadow-[#16A34A]/25 transition-all hover:scale-[1.02] cursor-pointer"
             title="Lên lịch học tự động bằng giọng nói"
           >
-            <Mic className="w-4 h-4 text-[#050806]" />
-            <span className="font-extrabold tracking-wide">Nói mục tiêu với Jami</span>
-          </button>
-
-          {/* Mobile small mic button */}
-          <button
-            onClick={onOpenVoiceModal}
-            className="sm:hidden p-2 rounded-xl bg-[#16A34A] text-[#050806] shadow-md shadow-[#16A34A]/20 cursor-pointer"
-            aria-label="Nói mục tiêu"
-          >
-            <Mic className="w-4 h-4" />
+            <Sparkles className="w-3.5 h-3.5 text-[#050806]" />
+            <span className="font-extrabold tracking-wide">Nói mục tiêu</span>
           </button>
 
           {/* Notifications Bell */}
           <Link
             to="/notifications"
             className="relative p-2 rounded-xl text-[#A9B8AE] hover:text-[#F3FAF5] bg-[#101A13] hover:bg-[#142219] border border-[rgba(34,197,94,0.18)] transition-colors"
-            aria-label="Thông báo"
+            aria-label={`Thông báo (${unreadCount} chưa đọc)`}
           >
             <Bell className="w-4 h-4" />
-            <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#22C55E] ring-2 ring-[#050806]" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#22C55E] text-[#050806] font-black text-[10px] flex items-center justify-center ring-2 ring-[#050806] shadow-sm">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
           </Link>
 
           {/* User Profile Dropdown */}

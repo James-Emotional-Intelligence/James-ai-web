@@ -1,5 +1,6 @@
 import mysql from 'mysql2/promise';
-import { env } from '../config/env';
+import fs from 'fs';
+import { env, isProduction } from '../config/env';
 
 export class DatabaseError extends Error {
   public code?: string;
@@ -45,6 +46,26 @@ class MySQLClient {
     return this.initError;
   }
 
+  public async pingCheck(timeoutMs = 2000): Promise<boolean> {
+    if (!this.pool || !this.isConnected) {
+      return false;
+    }
+
+    try {
+      const pingPromise = this.pool.query('SELECT UTC_TIMESTAMP() as pingTime');
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Ping timeout')), timeoutMs)
+      );
+
+      await Promise.race([pingPromise, timeoutPromise]);
+      return true;
+    } catch (err: any) {
+      console.warn('[JAMI MySQL] Readiness ping check failed:', err.message);
+      this.isConnected = false;
+      return false;
+    }
+  }
+
   public async init(): Promise<boolean> {
     if (this.isConnected) return true;
     if (this.isInitializing) return false;
@@ -53,8 +74,8 @@ class MySQLClient {
     if (!env.AIVEN_MYSQL_HOST || !env.AIVEN_APP_USER) {
       this.isConnected = false;
       this.initError = 'AIVEN_MYSQL_HOST or AIVEN_APP_USER not configured';
-      if (env.APP_MODE === 'production') {
-        console.error('[JAMI MySQL ERROR] Production mode requires valid AIVEN_MYSQL credentials.');
+      if (isProduction) {
+        throw new DatabaseError('[JAMI MySQL ERROR] Production mode requires valid AIVEN_MYSQL credentials.');
       } else {
         console.log('[JAMI MySQL] External MySQL credentials not configured. Running in Demo / Standalone Mode.');
       }
@@ -63,16 +84,31 @@ class MySQLClient {
 
     this.isInitializing = true;
     this.initError = null;
-    const maskedHost = env.AIVEN_MYSQL_HOST ? `${env.AIVEN_MYSQL_HOST.substring(0, 8)}...` : 'none';
+    const maskedHost = env.AIVEN_MYSQL_HOST ? `${env.AIVEN_MYSQL_HOST.substring(0, 6)}...` : 'none';
     console.log(`[JAMI MySQL] Connecting to Aiven MySQL (${maskedHost}:${env.AIVEN_MYSQL_PORT}/${env.AIVEN_MYSQL_DATABASE})...`);
 
     try {
+      let caCert: string | undefined = undefined;
+      if (env.AIVEN_CA_CERT) {
+        caCert = env.AIVEN_CA_CERT.replace(/\\n/g, '\n');
+      } else if (env.AIVEN_CA_CERT_PATH && fs.existsSync(env.AIVEN_CA_CERT_PATH)) {
+        caCert = fs.readFileSync(env.AIVEN_CA_CERT_PATH, 'utf-8');
+      }
+
+      if (!caCert && isProduction) {
+        throw new DatabaseError('[JAMI MySQL ERROR: CONFIG_AIVEN_CA_MISSING] Production environment connecting to Aiven MySQL requires a valid AIVEN_CA_CERT or AIVEN_CA_CERT_PATH.');
+      }
+
       const sslConfig: { rejectUnauthorized: boolean; ca?: string } = {
-        rejectUnauthorized: Boolean(env.AIVEN_CA_CERT),
+        rejectUnauthorized: Boolean(caCert),
       };
 
-      if (env.AIVEN_CA_CERT) {
-        sslConfig.ca = env.AIVEN_CA_CERT.replace(/\\n/g, '\n');
+      if (caCert) {
+        sslConfig.ca = caCert;
+        sslConfig.rejectUnauthorized = true;
+      } else {
+        console.warn('[JAMI MySQL WARNING] Connecting without verified CA certificate chain (rejectUnauthorized: false). Not recommended for production.');
+        sslConfig.rejectUnauthorized = false;
       }
 
       this.pool = mysql.createPool({
@@ -86,6 +122,7 @@ class MySQLClient {
         connectionLimit: 10,
         maxIdle: 5,
         idleTimeout: 60000,
+        connectTimeout: 10000,
         queueLimit: 0,
         enableKeepAlive: true,
         keepAliveInitialDelay: 10000,
@@ -103,7 +140,7 @@ class MySQLClient {
       this.isConnected = false;
       this.initError = err.message;
       console.error('[JAMI MySQL] Connection failed:', err.message);
-      if (env.APP_MODE === 'production') {
+      if (isProduction) {
         throw new DatabaseError(`Failed to connect to production MySQL: ${err.message}`, err);
       }
       return false;
@@ -114,7 +151,7 @@ class MySQLClient {
 
   public async query<T = any>(sql: string, params?: any[]): Promise<T[]> {
     if (!this.pool || !this.isConnected) {
-      if (env.APP_MODE === 'production') {
+      if (isProduction) {
         throw new DatabaseError('Database pool is not ready or connection was lost');
       }
       return [];
@@ -130,7 +167,7 @@ class MySQLClient {
 
   public async execute(sql: string, params?: any[]): Promise<any> {
     if (!this.pool || !this.isConnected) {
-      if (env.APP_MODE === 'production') {
+      if (isProduction) {
         throw new DatabaseError('Database pool is not ready or connection was lost');
       }
       return null;

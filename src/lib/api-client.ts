@@ -5,7 +5,9 @@ import {
   StudentProfile,
   Subject,
   TimetableEntry,
+  SchoolTimetable,
   BusyEvent,
+  AvailabilityRule,
   Exam,
   StudyTask,
   FocusSession,
@@ -13,18 +15,40 @@ import {
   QuizAttempt,
   LearningMaterial,
   NotificationItem,
+  NotificationPreferences,
   JamiMemorySummary,
+  JamiConversation,
+  JamiMessageItem,
   ScheduleProposal,
+  ReportOverviewResponse,
+  TodayDashboardOverview,
+  ExecutionGuide,
+  TaskEvidence,
 } from '../../shared/types';
 import { z } from 'zod';
 import { LoginRequestSchema, RegisterRequestSchema } from '../../shared/schemas';
 
+export function normalizeApiBaseUrl(url?: string): string {
+  if (!url) return '/api/v1';
+  let clean = String(url).trim();
+  if (clean.endsWith('/')) {
+    clean = clean.slice(0, -1);
+  }
+  if (clean.endsWith('/api/v1')) {
+    return clean;
+  }
+  if (clean.startsWith('http://') || clean.startsWith('https://')) {
+    return `${clean}/api/v1`;
+  }
+  if (clean === '/api' || clean === '/api/v1') {
+    return '/api/v1';
+  }
+  return `${clean}/api/v1`;
+}
+
 const getBaseUrl = (): string => {
   const envUrl = (import.meta as any).env?.VITE_API_BASE_URL;
-  if (!envUrl) return '/api/v1';
-  let clean = String(envUrl).trim();
-  if (clean.endsWith('/')) clean = clean.slice(0, -1);
-  return clean;
+  return normalizeApiBaseUrl(envUrl);
 };
 
 const API_BASE = getBaseUrl();
@@ -98,7 +122,7 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> {
-  let relativePath = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
+  const relativePath = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
   
   let fullUrl: string;
   if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
@@ -112,13 +136,14 @@ async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> 
     }
   }
 
-  const token = typeof window !== 'undefined' ? localStorage.getItem('jami_session_token') : null;
   const isBodyObject = options?.body && typeof options.body === 'string';
   const headers: Record<string, string> = {
     ...(isBodyObject ? { 'Content-Type': 'application/json' } : {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options?.headers as Record<string, string>),
   };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
   let response: Response;
   try {
@@ -126,22 +151,29 @@ async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> 
       ...options,
       credentials: 'include',
       headers,
+      signal: controller.signal,
     });
   } catch (netErr: any) {
-    throw new ApiError('Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.', 0, netErr, 'NETWORK_ERROR');
+    clearTimeout(timeoutId);
+    if (netErr.name === 'AbortError') {
+      throw new ApiError('Kết nối tới máy chủ quá thời hạn (Timeout). Vui lòng thử lại.', 0, null, 'TIMEOUT');
+    }
+    throw new ApiError('Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại kết nối mạng.', 0, netErr, 'NETWORK_ERROR');
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
     throw new ApiError(
-      `Máy chủ phản hồi với định dạng không phải JSON (${contentType || 'không xác định'}). Vui lòng kiểm tra lại cấu hình backend.`,
+      `Máy chủ phản hồi với định dạng không phải JSON (${contentType || 'không xác định'}).`,
       response.status,
       null,
       'INVALID_RESPONSE_FORMAT'
     );
   }
 
-  let result: any = null;
+  let result: any;
   try {
     result = await response.json();
   } catch {
@@ -161,50 +193,45 @@ async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> 
     throw new ApiError(message, response.status, result, code);
   }
 
-  if (result?.token && typeof window !== 'undefined') {
-    localStorage.setItem('jami_session_token', result.token);
-  }
-
   return result;
 }
 
 export const api = {
   // Auth & Identity
+  getSession: () =>
+    fetchJson<{
+      authenticated: boolean;
+      user?: User;
+      profile?: StudentProfile;
+      isDemo?: boolean;
+      demoLoginEnabled?: boolean;
+    }>('/auth/session'),
   getMe: () => fetchJson<{ user: User; profile: StudentProfile; isDemo: boolean }>('/me'),
-  login: async (data: z.infer<typeof LoginRequestSchema>) => {
-    const res = await fetchJson<{ user: User; profile: StudentProfile; isDemo: boolean; token?: string; message: string }>('/auth/login', {
+  login: (data: z.infer<typeof LoginRequestSchema>) =>
+    fetchJson<{ user: User; profile: StudentProfile; isDemo: boolean; message: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify(data),
-    });
-    if (res.token) localStorage.setItem('jami_session_token', res.token);
-    return res;
-  },
-  loginDemo: async () => {
-    const res = await fetchJson<{ user: User; profile: StudentProfile; isDemo: boolean; token?: string; message: string }>('/auth/demo-login', {
+    }),
+  loginDemo: () =>
+    fetchJson<{ user: User; profile: StudentProfile; isDemo: boolean; message: string }>('/auth/demo-login', {
       method: 'POST',
-    });
-    if (res.token) localStorage.setItem('jami_session_token', res.token);
-    return res;
-  },
-  register: async (data: z.infer<typeof RegisterRequestSchema>) => {
-    const res = await fetchJson<{ user: User; profile: StudentProfile; isDemo: boolean; token?: string; message: string }>('/auth/register', {
+    }),
+  register: (data: z.infer<typeof RegisterRequestSchema>) =>
+    fetchJson<{ user: User; profile: StudentProfile; isDemo: boolean; message: string }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
-    });
-    if (res.token) localStorage.setItem('jami_session_token', res.token);
-    return res;
-  },
-  logout: async () => {
-    try {
-      await fetchJson<{ success: boolean; message: string }>('/auth/logout', { method: 'POST' });
-    } finally {
-      if (typeof window !== 'undefined') localStorage.removeItem('jami_session_token');
-    }
-  },
+    }),
+  logout: () =>
+    fetchJson<{ success: boolean; message: string }>('/auth/logout', { method: 'POST' }),
   forgotPassword: (email: string) =>
     fetchJson<{ success: boolean; message: string; emailServiceConfigured: boolean }>('/auth/forgot-password', {
       method: 'POST',
       body: JSON.stringify({ email }),
+    }),
+  resetPassword: (token: string, newPassword: string) =>
+    fetchJson<{ success: boolean; message: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, newPassword }),
     }),
   updateProfile: (data: Partial<StudentProfile>) =>
     fetchJson<{ profile: StudentProfile }>('/profile', { method: 'PATCH', body: JSON.stringify(data) }),
@@ -215,24 +242,120 @@ export const api = {
     }),
 
   // Dashboard Overview
-  getDashboardOverview: () => fetchJson<DashboardOverviewData>('/dashboard/overview'),
+  getDashboardOverview: () => fetchJson<TodayDashboardOverview>('/dashboard/overview'),
 
   // Subjects
   getSubjects: () => fetchJson<{ subjects: Subject[] }>('/subjects'),
 
-  // Timetable
-  getTimetable: () => fetchJson<{ entries: TimetableEntry[]; busyEvents: BusyEvent[] }>('/timetables'),
+  // Timetable & Schedule Management
+  getTimetable: (params?: { from?: string; to?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';
+    return fetchJson<{
+      timetables: SchoolTimetable[];
+      activeTimetable: SchoolTimetable | null;
+      entries: TimetableEntry[];
+      busyEvents: BusyEvent[];
+      availabilityRules: AvailabilityRule[];
+    }>(`/timetables${query}`);
+  },
+  createTimetable: (data: Partial<SchoolTimetable>) =>
+    fetchJson<{ timetable: SchoolTimetable }>('/timetables', { method: 'POST', body: JSON.stringify(data) }),
+  updateTimetable: (id: string, data: Partial<SchoolTimetable>) =>
+    fetchJson<{ timetable: SchoolTimetable }>(`/timetables/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteTimetable: (id: string) =>
+    fetchJson<{ success: boolean }>(`/timetables/${id}`, { method: 'DELETE' }),
+
+  createTimetableEntry: (data: Partial<TimetableEntry>) =>
+    fetchJson<{ entry: TimetableEntry }>('/timetables/entries', { method: 'POST', body: JSON.stringify(data) }),
+  updateTimetableEntry: (id: string, data: Partial<TimetableEntry>) =>
+    fetchJson<{ entry: TimetableEntry }>(`/timetables/entries/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteTimetableEntry: (id: string) =>
+    fetchJson<{ success: boolean }>(`/timetables/entries/${id}`, { method: 'DELETE' }),
+  deleteEntriesByDay: (dayOfWeek: number, timetableId?: string) => {
+    const query = timetableId ? `?timetableId=${encodeURIComponent(timetableId)}` : '';
+    return fetchJson<{ success: boolean; deletedCount: number }>(`/timetables/entries-by-day/${dayOfWeek}${query}`, { method: 'DELETE' });
+  },
+  deleteAllTimetableEntries: (timetableId?: string) => {
+    const query = timetableId ? `?timetableId=${encodeURIComponent(timetableId)}` : '';
+    return fetchJson<{ success: boolean; deletedCount: number }>(`/timetables-all-entries${query}`, { method: 'DELETE' });
+  },
+
+  getBusyEvents: (params?: { from?: string; to?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';
+    return fetchJson<{ events: BusyEvent[] }>(`/busy-events${query}`);
+  },
   addBusyEvent: (event: Partial<BusyEvent>) =>
     fetchJson<{ event: BusyEvent }>('/busy-events', { method: 'POST', body: JSON.stringify(event) }),
-  deleteBusyEvent: (id: string) => fetchJson<{ success: boolean }>(`/busy-events/${id}`, { method: 'DELETE' }),
+  updateBusyEvent: (id: string, updates: Partial<BusyEvent>) =>
+    fetchJson<{ event: BusyEvent }>(`/busy-events/${id}`, { method: 'PATCH', body: JSON.stringify(updates) }),
+  deleteBusyEvent: (id: string) =>
+    fetchJson<{ success: boolean }>(`/busy-events/${id}`, { method: 'DELETE' }),
+  downloadTimetableCsv: async () => {
+    const response = await fetch(`${API_BASE}/timetables/export/csv`, { credentials: 'include' });
+    if (!response.ok) throw new Error('Không thể tải xuống thời khóa biểu');
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `jami_tkb_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
+  getAvailabilityRules: () =>
+    fetchJson<{ rules: AvailabilityRule[] }>('/availability-rules'),
+  saveAvailabilityRules: (rules: AvailabilityRule[]) =>
+    fetchJson<{ rules: AvailabilityRule[] }>('/availability-rules', { method: 'PUT', body: JSON.stringify({ rules }) }),
 
   // Tasks
-  getTasks: () => fetchJson<{ tasks: StudyTask[] }>('/tasks'),
-  getTask: (id: string) => fetchJson<{ task: StudyTask }>(`/tasks/${id}`),
+  getTasks: (params?: { status?: string; subjectId?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';
+    return fetchJson<{ tasks: StudyTask[] }>(`/tasks${query}`);
+  },
+  createTask: (data: Partial<StudyTask>) =>
+    fetchJson<{ task: StudyTask }>('/tasks', { method: 'POST', body: JSON.stringify(data) }),
+  getTask: (id: string) =>
+    fetchJson<{ task: StudyTask; executionGuide?: ExecutionGuide; evidence?: TaskEvidence[] }>(`/tasks/${id}`),
   updateTask: (id: string, updates: Partial<StudyTask>) =>
     fetchJson<{ task: StudyTask }>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(updates) }),
-  completeTaskStep: (taskId: string, stepId: string) =>
-    fetchJson<{ task: StudyTask }>(`/tasks/${taskId}/steps/${stepId}/complete`, { method: 'POST' }),
+  deleteTask: (id: string) =>
+    fetchJson<{ success: boolean }>(`/tasks/${id}`, { method: 'DELETE' }),
+  unscheduleTask: (taskId: string) =>
+    fetchJson<{ task: StudyTask }>(`/tasks/${taskId}/unschedule`, { method: 'POST' }),
+  downloadTasksCsv: async () => {
+    const response = await fetch(`${API_BASE}/tasks/export/csv`, { credentials: 'include' });
+    if (!response.ok) throw new Error('Không thể tải xuống danh sách nhiệm vụ');
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `jami_nhiem_vu_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+  generateExecutionGuide: (taskId: string, additionalNotes?: string) =>
+    fetchJson<{ guide: ExecutionGuide; isDemoMode: boolean }>(`/tasks/${taskId}/execution-guide/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ additionalNotes }),
+    }),
+  updateChecklistItem: (taskId: string, itemId: string, checked: boolean) =>
+    fetchJson<{ success: boolean; checked: boolean }>(`/tasks/${taskId}/checklist/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ checked }),
+    }),
+  startTaskStep: (taskId: string, stepId: string) =>
+    fetchJson<{ task: StudyTask; guide: ExecutionGuide }>(`/tasks/${taskId}/steps/${stepId}/start`, { method: 'POST' }),
+  completeTaskStep: (taskId: string, stepId: string, actualMinutes?: number) =>
+    fetchJson<{ task: StudyTask; guide: ExecutionGuide }>(`/tasks/${taskId}/steps/${stepId}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ actualMinutes }),
+    }),
+  submitTaskEvidence: (taskId: string, data: { rating: number; evidenceNote: string; type?: string; fileUrl?: string }) =>
+    fetchJson<{ evidence: TaskEvidence }>(`/tasks/${taskId}/evidence`, { method: 'POST', body: JSON.stringify(data) }),
   completeTask: (taskId: string) => fetchJson<{ task: StudyTask }>(`/tasks/${taskId}/complete`, { method: 'POST' }),
 
   // Focus
@@ -261,51 +384,266 @@ export const api = {
       '/planner/voice-goal/preview',
       { method: 'POST', body: JSON.stringify({ transcript }) }
     ),
-  confirmProposal: (proposalId: string) =>
-    fetchJson<{ success: boolean; tasks: StudyTask[] }>(`/planner/proposals/${proposalId}/confirm`, {
+  confirmProposal: (proposalId: string, idempotencyKey?: string) =>
+    fetchJson<{ success: boolean; tasks: StudyTask[]; proposal: ScheduleProposal }>(
+      `/planner/proposals/${proposalId}/confirm`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ idempotencyKey }),
+      }
+    ),
+  cancelProposal: (proposalId: string) =>
+    fetchJson<{ success: boolean }>(`/planner/proposals/${proposalId}/cancel`, {
       method: 'POST',
     }),
-  previewReplan: () => fetchJson<{ proposal: ScheduleProposal }>('/planner/replan/preview', { method: 'POST' }),
+  previewReplan: (data?: { startDate?: string; daysCount?: number; reason?: string }) =>
+    fetchJson<{ proposal: ScheduleProposal }>('/planner/replan/preview', {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    }),
 
   // Exams & Quizzes
   getExams: () => fetchJson<{ exams: Exam[] }>('/exams'),
+  getExam: (id: string) => fetchJson<{ exam: Exam }>(`/exams/${id}`),
   addExam: (data: Partial<Exam>) => fetchJson<{ exam: Exam }>('/exams', { method: 'POST', body: JSON.stringify(data) }),
-  getQuizzes: () => fetchJson<{ quizzes: Quiz[] }>('/quizzes'),
+  updateExam: (id: string, data: Partial<Exam>) =>
+    fetchJson<{ exam: Exam }>(`/exams/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteExam: (id: string) => fetchJson<{ success: boolean }>(`/exams/${id}`, { method: 'DELETE' }),
+  generateExamQuiz: (
+    examId: string,
+    options?: { milestone?: 'D-14' | 'D-7' | 'D-3' | 'D-1'; questionCount?: number; difficulty?: 'easy' | 'medium' | 'hard'; title?: string }
+  ) =>
+    fetchJson<{ success: boolean; quiz: Quiz }>(`/exams/${examId}/quizzes/generate`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    }),
+  getQuizzes: (examId?: string) =>
+    fetchJson<{ quizzes: Quiz[] }>(`/quizzes${examId ? `?examId=${encodeURIComponent(examId)}` : ''}`),
   getQuiz: (id: string) => fetchJson<{ quiz: Quiz }>(`/quizzes/${id}`),
-  submitQuiz: (quizId: string, answers: { questionId: string; answer: string }[]) =>
+  startQuizAttempt: (quizId: string) =>
+    fetchJson<{ attempt: QuizAttempt }>(`/quizzes/${quizId}/attempts`, { method: 'POST' }),
+  submitQuiz: (quizId: string, answers: { questionId: string; answer: string }[], attemptId?: string) =>
     fetchJson<{ attempt: QuizAttempt; answersFeedback: any[] }>(`/quizzes/${quizId}/attempts/submit`, {
       method: 'POST',
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ answers, attemptId }),
     }),
 
-  // Materials
+  // Learning Materials
   getMaterials: () => fetchJson<{ materials: LearningMaterial[] }>('/materials'),
-  addMaterial: (data: Partial<LearningMaterial>) =>
-    fetchJson<{ material: LearningMaterial }>('/materials', { method: 'POST', body: JSON.stringify(data) }),
+  getMaterial: (id: string) => fetchJson<{ material: LearningMaterial }>(`/materials/${id}`),
+  createMaterialUploadIntent: (data: {
+    title: string;
+    subjectId: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+  }) =>
+    fetchJson<{ material: LearningMaterial; uploadUrl: string; r2ObjectKey: string }>('/materials/upload-intent', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  uploadMaterialDirect: async (key: string, fileData: Blob | ArrayBuffer, contentType: string) => {
+    const res = await fetch(`/api/v1/materials/upload-direct?key=${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': contentType,
+      },
+      body: fileData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || 'Tải lên tài liệu thất bại.');
+    }
+    return res.json();
+  },
+  createMaterialNote: (data: { title: string; subjectId: string; contentText: string }) =>
+    fetchJson<{ success: boolean; material: LearningMaterial }>('/materials/note', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  finalizeMaterialUpload: (id: string, meta?: { sizeBytes?: number; sha256?: string }) =>
+    fetchJson<{ success: boolean; material: LearningMaterial }>(`/materials/${id}/finalize`, {
+      method: 'POST',
+      body: JSON.stringify(meta || {}),
+    }),
+  reprocessMaterial: (id: string) =>
+    fetchJson<{ success: boolean; summary?: any }>(`/materials/${id}/reprocess`, { method: 'POST' }),
+  generateQuizFromMaterial: (
+    id: string,
+    options?: { questionCount?: number; difficulty?: string; title?: string }
+  ) =>
+    fetchJson<{ success: boolean; quizId: string; quiz?: any }>(`/materials/${id}/quizzes/generate`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    }),
   deleteMaterial: (id: string) => fetchJson<{ success: boolean }>(`/materials/${id}`, { method: 'DELETE' }),
 
   // Reports
-  getReportsOverview: () => fetchJson<any>('/reports/overview'),
+  getReportsOverview: (params?: { period?: 'week' | 'month' | 'custom'; from?: string; to?: string; timezone?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.period) query.set('period', params.period);
+    if (params?.from) query.set('from', params.from);
+    if (params?.to) query.set('to', params.to);
+    if (params?.timezone) query.set('timezone', params.timezone);
+    const qs = query.toString();
+    return fetchJson<ReportOverviewResponse>(`/reports/overview${qs ? `?${qs}` : ''}`);
+  },
+  getReportsExportUrl: (params?: { period?: 'week' | 'month' | 'custom'; from?: string; to?: string; timezone?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.period) query.set('period', params.period);
+    if (params?.from) query.set('from', params.from);
+    if (params?.to) query.set('to', params.to);
+    if (params?.timezone) query.set('timezone', params.timezone);
+    const qs = query.toString();
+    return `/api/v1/reports/export${qs ? `?${qs}` : ''}`;
+  },
+  downloadReportsCsv: async (params?: { period?: 'week' | 'month' | 'custom'; from?: string; to?: string; timezone?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.period) query.set('period', params.period);
+    if (params?.from) query.set('from', params.from);
+    if (params?.to) query.set('to', params.to);
+    if (params?.timezone) query.set('timezone', params.timezone);
+    const qs = query.toString();
 
-  // Notifications
-  getNotifications: () => fetchJson<{ notifications: NotificationItem[] }>('/notifications'),
-  markNotificationRead: (id: string) => fetchJson<{ success: boolean }>(`/notifications/${id}/read`, { method: 'POST' }),
-  markAllNotificationsRead: () => fetchJson<{ success: boolean }>('/notifications/read-all', { method: 'POST' }),
+    const response = await fetch(`${API_BASE}/reports/export${qs ? `?${qs}` : ''}`, {
+      credentials: 'include',
+    });
 
-  // Jami Chat & Messages
-  getJamiMessages: () => fetchJson<{ messages: JamiChatMessageItem[] }>('/jami/messages'),
-  sendJamiChat: (message: string) =>
-    fetchJson<{ userMessage: JamiChatMessageItem; replyMessage: JamiChatMessageItem; isDemoMode: boolean }>('/jami/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message }),
+    if (!response.ok) {
+      throw new Error('Không thể xuất tệp CSV báo cáo');
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `jami_report_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+  downloadMaterialFile: async (materialId: string, fallbackFileName?: string) => {
+    const response = await fetch(`${API_BASE}/materials/${materialId}/content`, {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error('Không thể tải xuống nội dung tài liệu này.');
+    }
+
+    const disposition = response.headers.get('content-disposition');
+    let fileName = fallbackFileName || 'tai_lieu_jami';
+    if (disposition && disposition.includes('filename=')) {
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      if (match && match[1]) fileName = match[1];
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
+  // Notifications & Preferences
+  getNotifications: (params?: { status?: string; type?: string; cursor?: string; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.status) query.set('status', params.status);
+    if (params?.type) query.set('type', params.type);
+    if (params?.cursor) query.set('cursor', params.cursor);
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return fetchJson<{
+      notifications: NotificationItem[];
+      unreadCount: number;
+      nextCursor?: string;
+      total: number;
+    }>(`/notifications${qs ? `?${qs}` : ''}`);
+  },
+  getUnreadNotificationCount: () => fetchJson<{ unreadCount: number }>('/notifications/unread-count'),
+  getNotificationPreferences: () => fetchJson<{ preferences: NotificationPreferences }>('/notifications/preferences'),
+  updateNotificationPreferences: (preferences: Partial<NotificationPreferences>) =>
+    fetchJson<{ preferences: NotificationPreferences }>('/notifications/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(preferences),
     }),
-  confirmJamiAction: (messageId: string) =>
-    fetchJson<{ success: boolean; message: JamiChatMessageItem }>(`/jami/messages/${messageId}/confirm`, {
+  markNotificationRead: (id: string) => fetchJson<{ success: boolean; unreadCount: number }>(`/notifications/${id}/read`, { method: 'POST' }),
+  markAllNotificationsRead: () => fetchJson<{ success: boolean; count: number; unreadCount: number }>('/notifications/read-all', { method: 'POST' }),
+  deleteNotification: (id: string) => fetchJson<{ success: boolean; unreadCount: number }>(`/notifications/${id}`, { method: 'DELETE' }),
+
+  // Jami Assistant & Conversations
+  getJamiConversations: () => fetchJson<{ conversations: JamiConversation[] }>('/jami/conversations'),
+  createJamiConversation: (title?: string) =>
+    fetchJson<{ conversation: JamiConversation }>('/jami/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  updateJamiConversation: (id: string, title: string) =>
+    fetchJson<{ conversation: JamiConversation }>(`/jami/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  deleteJamiConversation: (id: string) =>
+    fetchJson<{ success: boolean }>(`/jami/conversations/${id}`, { method: 'DELETE' }),
+
+  getJamiMessages: (conversationId?: string) =>
+    fetchJson<{ messages: JamiMessageItem[] }>(
+      `/jami/messages${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`
+    ),
+  sendJamiChat: (message: string, conversationId?: string, clientMessageId?: string) =>
+    fetchJson<{
+      userMessage: JamiMessageItem;
+      replyMessage: JamiMessageItem;
+      clientAction?: any;
+      proposal?: any;
+      isDemoMode: boolean;
+    }>('/jami/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, conversationId, clientMessageId }),
+    }),
+  confirmJamiAction: (messageId: string, decision: 'confirm' | 'reject' = 'confirm') =>
+    fetchJson<{ success: boolean; message: JamiMessageItem; actionResult?: any }>(
+      `/jami/messages/${messageId}/confirm`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      }
+    ),
+  getRealtimeSession: () =>
+    fetchJson<{ clientSecret?: string; mode: string; message: string; expiresAt?: number; model?: string; voice?: string }>('/jami/realtime/client-secret', {
       method: 'POST',
     }),
-  getRealtimeSession: () => fetchJson<{ clientSecret?: string; mode: string; message: string }>('/jami/realtime/session', {
-    method: 'POST',
-  }),
+  getRealtimeClientSecret: () =>
+    fetchJson<{ clientSecret?: string; mode: string; message: string; expiresAt?: number; model?: string; voice?: string }>('/jami/realtime/client-secret', {
+      method: 'POST',
+    }),
+  sendVoiceCommand: (transcript: string, clientTurnId?: string, mode?: string, conversationId?: string) =>
+    fetchJson<{
+      replyText: string;
+      emotion: string;
+      requiresConfirmation?: boolean;
+      proposal?: any;
+      clientAction?: { type: string; route?: string; sessionId?: string; params?: any };
+      replyMessage?: JamiMessageItem;
+    }>('/jami/voice/command', {
+      method: 'POST',
+      body: JSON.stringify({ transcript, clientTurnId, mode, conversationId }),
+    }),
+  confirmVoiceProposal: (decision: 'confirm' | 'reject' = 'confirm', proposalId?: string, conversationId?: string) =>
+    fetchJson<{ success: boolean; message: string; clientAction?: any }>('/jami/voice/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ decision, proposalId, conversationId }),
+    }),
+  logVoiceRequest: (data: any) =>
+    fetchJson<{ success: boolean; log: any }>('/jami/voice/log', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   getJamiPreferences: () => fetchJson<{ preferences: any; memories: JamiMemorySummary[] }>('/jami/preferences'),
   updateJamiPreferences: (prefs: any) =>
     fetchJson<{ preferences: any }>('/jami/preferences', { method: 'PATCH', body: JSON.stringify(prefs) }),

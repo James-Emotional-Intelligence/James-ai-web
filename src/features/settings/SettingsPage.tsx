@@ -50,15 +50,15 @@ export const SettingsPage: React.FC = () => {
     setIsExporting(true);
     try {
       const data = await api.exportMyData();
-      const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
-        JSON.stringify(data, null, 2)
-      )}`;
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = window.URL.createObjectURL(blob);
       const downloadAnchor = document.createElement('a');
-      downloadAnchor.setAttribute('href', jsonString);
-      downloadAnchor.setAttribute('download', `jami_data_export_${Date.now()}.json`);
+      downloadAnchor.href = url;
+      downloadAnchor.download = `jami_data_export_${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(downloadAnchor);
       downloadAnchor.click();
       downloadAnchor.remove();
+      window.URL.revokeObjectURL(url);
 
       setExported(true);
       confetti({ particleCount: 60, spread: 50 });

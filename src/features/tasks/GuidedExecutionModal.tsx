@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'motion/react';
 import {
   Play,
@@ -12,6 +12,7 @@ import {
   X,
   Star,
   FileText,
+  RefreshCw,
 } from 'lucide-react';
 import { StudyTask, ExecutionStep } from '../../../shared/types';
 import { api } from '../../lib/api-client';
@@ -31,49 +32,110 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
   onCompleted,
 }) => {
   const steps = task.executionGuide?.steps || [];
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [secondsRemaining, setSecondsRemaining] = useState(300); // 5 mins default
-  const [isRunning, setIsRunning] = useState(true);
-  const [showStuckHelp, setShowStuckHelp] = useState(false);
-  const [isFinished, setIsFinished] = useState(false);
-  const [rating, setRating] = useState(5);
-  const [evidenceNote, setEvidenceNote] = useState('Đã hoàn thành các bài tập và nắm vững kiến thức trọng tâm.');
+
+  // Resume from first incomplete step
+  const initialIndex = Math.max(0, steps.findIndex((s) => s.status !== 'completed'));
+  const [currentStepIndex, setCurrentStepIndex] = useState(initialIndex >= 0 ? initialIndex : 0);
 
   const currentStep: ExecutionStep | undefined = steps[currentStepIndex];
 
+  const [secondsRemaining, setSecondsRemaining] = useState(
+    currentStep ? currentStep.plannedMinutes * 60 : 300
+  );
+  const [isRunning, setIsRunning] = useState(true);
+  const [showStuckHelp, setShowStuckHelp] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Final reflection fields
+  const [rating, setRating] = useState(5);
+  const [evidenceNote, setEvidenceNote] = useState('Đã hoàn thành các bài tập và nắm vững kiến thức trọng tâm.');
+
+  // Time tracking
+  const stepStartTimeRef = useRef<number>(Date.now());
+  const targetEndTimeRef = useRef<number>(Date.now() + (currentStep ? currentStep.plannedMinutes * 60 * 1000 : 300000));
+
   useEffect(() => {
-    if (currentStep) {
-      setSecondsRemaining(currentStep.plannedMinutes * 60);
+    if (isOpen && currentStep) {
+      const stepSeconds = currentStep.plannedMinutes * 60;
+      setSecondsRemaining(stepSeconds);
       setIsRunning(true);
+      stepStartTimeRef.current = Date.now();
+      targetEndTimeRef.current = Date.now() + stepSeconds * 1000;
+      setIsFinished(false);
+
+      // Start step in API
+      api.startTaskStep(task.id, currentStep.id).catch(() => {});
     }
-  }, [currentStepIndex]);
+  }, [currentStepIndex, isOpen, task.id]);
 
   useEffect(() => {
     let interval: any;
-    if (isRunning && secondsRemaining > 0 && !isFinished) {
+    if (isRunning && secondsRemaining > 0 && !isFinished && isOpen) {
       interval = setInterval(() => {
-        setSecondsRemaining((prev) => prev - 1);
-      }, 1000);
+        const remaining = Math.max(0, Math.ceil((targetEndTimeRef.current - Date.now()) / 1000));
+        setSecondsRemaining(remaining);
+      }, 500);
     }
     return () => clearInterval(interval);
-  }, [isRunning, secondsRemaining, isFinished]);
+  }, [isRunning, secondsRemaining, isFinished, isOpen]);
+
+  const handleToggleTimer = () => {
+    if (isRunning) {
+      setIsRunning(false);
+    } else {
+      setIsRunning(true);
+      targetEndTimeRef.current = Date.now() + secondsRemaining * 1000;
+    }
+  };
 
   const handleNextStep = async () => {
     if (!currentStep) return;
-    await api.completeTaskStep(task.id, currentStep.id);
+    setIsSubmitting(true);
+    setSubmitError(null);
 
-    if (currentStepIndex < steps.length - 1) {
-      setCurrentStepIndex((prev) => prev + 1);
-    } else {
-      setIsFinished(true);
-      confetti({ particleCount: 100, spread: 70 });
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - stepStartTimeRef.current) / 1000));
+    const actualMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
+
+    try {
+      await api.completeTaskStep(task.id, currentStep.id, actualMinutes);
+
+      if (currentStepIndex < steps.length - 1) {
+        setCurrentStepIndex((prev) => prev + 1);
+      } else {
+        setIsFinished(true);
+        confetti({ particleCount: 80, spread: 60 });
+      }
+    } catch (err: any) {
+      setSubmitError(err.message || 'Không thể ghi nhận hoàn tất bước này.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleFinalSubmit = async () => {
-    await api.completeTask(task.id);
-    onCompleted?.();
-    onClose();
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      // 1. Submit evidence and reflection rating
+      await api.submitTaskEvidence(task.id, {
+        rating,
+        evidenceNote: evidenceNote.trim() || 'Đã hoàn thành toàn bộ các bước của bài học.',
+      });
+
+      // 2. Mark task as completed
+      await api.completeTask(task.id);
+
+      confetti({ particleCount: 100, spread: 70 });
+      onCompleted?.();
+      onClose();
+    } catch (err: any) {
+      setSubmitError(err.message || 'Không thể lưu minh chứng hoặc hoàn tất nhiệm vụ.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!isOpen || !currentStep) return null;
@@ -93,7 +155,7 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
         <div className="px-6 py-4 border-b border-[rgba(34,197,94,0.18)] flex items-center justify-between bg-[#101A13] text-[#F3FAF5]">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/30 flex items-center justify-center font-bold text-sm">
-              {currentStepIndex + 1}/{steps.length}
+              {isFinished ? steps.length : currentStepIndex + 1}/{steps.length}
             </div>
             <div>
               <div className="text-xs text-[#86EFAC] font-semibold uppercase tracking-wider">
@@ -109,6 +171,13 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
+          {submitError && (
+            <div className="p-3 bg-rose-950/40 border border-rose-800 text-rose-300 rounded-2xl text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{submitError}</span>
+            </div>
+          )}
+
           {!isFinished ? (
             <>
               {/* Active Step Hero Card */}
@@ -145,7 +214,7 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
                   </div>
 
                   <button
-                    onClick={() => setIsRunning(!isRunning)}
+                    onClick={handleToggleTimer}
                     className="mt-3 p-2 rounded-full bg-[#101A13] hover:bg-[#142219] text-[#F3FAF5] border border-[rgba(34,197,94,0.2)] transition-colors cursor-pointer"
                   >
                     {isRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-[#F3FAF5]" />}
@@ -175,9 +244,9 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
               </div>
 
               <div>
-                <h3 className="text-xl font-extrabold text-[#F3FAF5]">Chúc mừng bạn đã hoàn thành xuất sắc!</h3>
+                <h3 className="text-xl font-extrabold text-[#F3FAF5]">Chúc mừng em đã hoàn thành xuất sắc!</h3>
                 <p className="text-xs text-[#A9B8AE] mt-1">
-                  Bạn đã hoàn tất trọn vẹn các bước theo đúng lộ trình khoa học của Jami.
+                  Em đã hoàn tất trọn vẹn các bước theo đúng lộ trình khoa học của Jami.
                 </p>
               </div>
 
@@ -190,6 +259,7 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
                   {[1, 2, 3, 4, 5].map((star) => (
                     <button
                       key={star}
+                      type="button"
                       onClick={() => setRating(star)}
                       className={`p-1.5 rounded-lg transition-transform hover:scale-110 cursor-pointer ${
                         star <= rating ? 'text-amber-400' : 'text-[#526356]'
@@ -211,8 +281,9 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
                 <textarea
                   value={evidenceNote}
                   onChange={(e) => setEvidenceNote(e.target.value)}
-                  rows={2}
+                  rows={3}
                   className="w-full text-xs p-3 bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
+                  placeholder="Ghi chú các bài tập đã giải xong hoặc phần kiến thức tâm đắc..."
                 />
               </div>
             </div>
@@ -224,6 +295,7 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
           {!isFinished ? (
             <>
               <button
+                type="button"
                 onClick={() => setShowStuckHelp(!showStuckHelp)}
                 className="flex items-center gap-1.5 text-xs font-semibold text-amber-300 hover:underline cursor-pointer"
               >
@@ -232,21 +304,35 @@ export const GuidedExecutionModal: React.FC<GuidedExecutionModalProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={handleNextStep}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-md shadow-[#16A34A]/25 transition-all hover:scale-[1.02] active:scale-95 cursor-pointer"
+                disabled={isSubmitting}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-md shadow-[#16A34A]/25 transition-all hover:scale-[1.02] active:scale-95 cursor-pointer disabled:opacity-50"
               >
-                <span>
-                  {currentStepIndex < steps.length - 1 ? 'Hoàn thành bước này' : 'Tổng kết phiên học'}
-                </span>
-                <ArrowRight className="w-4 h-4" />
+                {isSubmitting ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <span>
+                      {currentStepIndex < steps.length - 1 ? 'Hoàn thành bước này' : 'Tổng kết phiên học'}
+                    </span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </>
           ) : (
             <button
+              type="button"
               onClick={handleFinalSubmit}
-              className="w-full py-3 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black rounded-xl shadow-md transition-all cursor-pointer"
+              disabled={isSubmitting}
+              className="w-full py-3 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              Lưu kết quả & Đóng
+              {isSubmitting ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <span>Lưu kết quả & Hoàn tất nhiệm vụ</span>
+              )}
             </button>
           )}
         </div>

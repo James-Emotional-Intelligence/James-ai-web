@@ -8,14 +8,14 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
-    "lint": "tsc --noEmit",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:e2e": "vitest run tests/e2e",
+    "test:e2e": "playwright test",
     "db:migrate": "tsx -e \"import { Migrator } from './server/db/migrator'; Migrator.run().then(console.log);\"",
     "db:doctor": "tsx server/db/doctor.ts",
-    "worker:dry-run": "tsc --noEmit worker/index.ts"
+    "worker:dry-run": "npx wrangler deploy --dry-run"
   },
   "dependencies": {
     "@fontsource/be-vietnam-pro": "^5.3.0",
@@ -43,13 +43,23 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.6",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/supertest": "^7.2.1",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "eslint": "^10.9.1",
+    "jsdom": "^30.0.1",
+    "supertest": "^7.2.2",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
+    "typescript-eslint": "^8.68.0",
     "vite": "^6.2.3",
     "vitest": "^4.1.11"
   }

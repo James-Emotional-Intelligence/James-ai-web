@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { db } from './mysql';
-import { env } from '../config/env';
+import { env, isProduction } from '../config/env';
 
 export interface MigrationRecord {
   id: number;
@@ -145,18 +145,14 @@ export class Migrator {
   }
 
   public static async getAppliedMigrations(): Promise<MigrationRecord[]> {
-    try {
-      await this.initMigrationTable();
-      const rows = await db.query<any>('SELECT id, name, checksum, applied_at as appliedAt FROM schema_migrations ORDER BY id ASC');
-      return rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        checksum: r.checksum,
-        appliedAt: r.appliedAt?.toISOString?.() || String(r.appliedAt),
-      }));
-    } catch {
-      return [];
-    }
+    await this.initMigrationTable();
+    const rows = await db.query<any>('SELECT id, name, checksum, applied_at as appliedAt FROM schema_migrations ORDER BY id ASC');
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      checksum: r.checksum,
+      appliedAt: r.appliedAt?.toISOString?.() || String(r.appliedAt),
+    }));
   }
 
   public static async run(): Promise<{ applied: string[]; alreadyUpToDate: boolean }> {
@@ -168,71 +164,91 @@ export class Migrator {
       throw new Error(`Database is not connected. Cannot run migrations: ${err}`);
     }
 
-    await this.initMigrationTable();
-    const applied = await this.getAppliedMigrations();
-    const appliedMap = new Map<string, string>();
-    for (const m of applied) {
-      appliedMap.set(m.name, m.checksum);
-    }
+    // Acquire MySQL named lock to prevent concurrent migrations
+    let lockAcquired = false;
+    try {
+      const lockRes = await db.query<any>('SELECT GET_LOCK("jami_migration_lock", 10) as lockAcquired');
+      if (lockRes[0]?.lockAcquired === 1) {
+        lockAcquired = true;
+      }
+    } catch {}
 
-    const migrationsDir = path.join(process.cwd(), 'server', 'db', 'migrations');
-    if (!fs.existsSync(migrationsDir)) {
-      return { applied: [], alreadyUpToDate: true };
-    }
+    try {
+      await this.initMigrationTable();
+      const applied = await this.getAppliedMigrations();
+      const appliedMap = new Map<string, string>();
+      for (const m of applied) {
+        appliedMap.set(m.name, m.checksum);
+      }
 
-    const files = fs
-      .readdirSync(migrationsDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort();
+      const migrationsDir = path.join(process.cwd(), 'server', 'db', 'migrations');
+      if (!fs.existsSync(migrationsDir)) {
+        return { applied: [], alreadyUpToDate: true };
+      }
 
-    const newlyApplied: string[] = [];
+      const files = fs
+        .readdirSync(migrationsDir)
+        .filter((f) => f.endsWith('.sql'))
+        .sort();
 
-    for (const file of files) {
-      const filePath = path.join(migrationsDir, file);
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const checksum = crypto.createHash('sha256').update(content).digest('hex');
+      const newlyApplied: string[] = [];
 
-      if (appliedMap.has(file)) {
-        const existingChecksum = appliedMap.get(file);
-        if (existingChecksum && existingChecksum !== checksum) {
-          const isProd = env.APP_MODE === 'production' || env.NODE_ENV === 'production';
-          const errorMsg = `Migration ${file} checksum mismatch! Applied: ${existingChecksum.substring(0, 8)}, Current file: ${checksum.substring(0, 8)}`;
-          if (isProd) {
-            throw new Error(`[JAMI Migrator FATAL] ${errorMsg}. Unapproved migration modification in Production.`);
-          } else {
-            console.warn(`[JAMI Migrator] Notice: ${errorMsg}`);
+      for (const file of files) {
+        const filePath = path.join(migrationsDir, file);
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const checksum = crypto.createHash('sha256').update(content).digest('hex');
+
+        if (appliedMap.has(file)) {
+          const existingChecksum = appliedMap.get(file);
+          if (existingChecksum && existingChecksum !== checksum) {
+            const errorMsg = `Migration ${file} checksum mismatch! Applied: ${existingChecksum.substring(0, 8)}, Current file: ${checksum.substring(0, 8)}`;
+            if (isProduction) {
+              throw new Error(`[JAMI Migrator FATAL] ${errorMsg}. Unapproved migration modification in Production.`);
+            } else {
+              console.warn(`[JAMI Migrator] Notice: ${errorMsg}`);
+            }
+          }
+          continue;
+        }
+
+        console.log(`[JAMI Migrator] Applying migration: ${file}...`);
+        const statements = splitSqlStatements(content);
+        console.log(`[JAMI Migrator] Found ${statements.length} executable SQL statements in ${file}`);
+
+        for (let i = 0; i < statements.length; i++) {
+          const stmt = statements[i];
+          try {
+            await db.execute(stmt);
+          } catch (stmtErr: any) {
+            if (stmtErr.code === 'ER_DUP_FIELDNAME' || stmtErr.code === 'ER_DUP_KEYNAME' || stmtErr.errno === 1060 || stmtErr.errno === 1061) {
+              console.log(`[JAMI Migrator] Notice: Column/Key already exists in statement #${i + 1}, continuing idempotently.`);
+            } else {
+              console.error(`[JAMI Migrator ERROR] Statement ${i + 1}/${statements.length} failed in ${file}:`, stmtErr.message);
+              throw new Error(`Migration ${file} failed at statement #${i + 1}: ${stmtErr.message}`, { cause: stmtErr });
+            }
           }
         }
-        continue;
+
+        await db.execute(
+          'INSERT INTO schema_migrations (name, checksum, applied_at) VALUES (?, ?, ?)',
+          [file, checksum, new Date()]
+        );
+
+        newlyApplied.push(file);
+        console.log(`[JAMI Migrator] Successfully applied: ${file} (checksum: ${checksum.substring(0, 10)})`);
       }
 
-      console.log(`[JAMI Migrator] Applying migration: ${file}...`);
-      const statements = splitSqlStatements(content);
-      console.log(`[JAMI Migrator] Found ${statements.length} executable SQL statements in ${file}`);
-
-      for (let i = 0; i < statements.length; i++) {
-        const stmt = statements[i];
+      return {
+        applied: newlyApplied,
+        alreadyUpToDate: newlyApplied.length === 0,
+      };
+    } finally {
+      if (lockAcquired) {
         try {
-          await db.execute(stmt);
-        } catch (stmtErr: any) {
-          console.error(`[JAMI Migrator ERROR] Statement ${i + 1}/${statements.length} failed in ${file}:`, stmtErr.message);
-          throw new Error(`Migration ${file} failed at statement #${i + 1}: ${stmtErr.message}`);
-        }
+          await db.query('SELECT RELEASE_LOCK("jami_migration_lock")');
+        } catch {}
       }
-
-      await db.execute(
-        'INSERT INTO schema_migrations (name, checksum, applied_at) VALUES (?, ?, ?)',
-        [file, checksum, new Date()]
-      );
-
-      newlyApplied.push(file);
-      console.log(`[JAMI Migrator] Successfully applied: ${file} (checksum: ${checksum.substring(0, 10)})`);
     }
-
-    return {
-      applied: newlyApplied,
-      alreadyUpToDate: newlyApplied.length === 0,
-    };
   }
 
   public static async status(): Promise<{ total: number; applied: MigrationRecord[]; pending: string[] }> {
@@ -240,24 +256,28 @@ export class Migrator {
       return { total: 0, applied: [], pending: [] };
     }
 
-    const applied = await this.getAppliedMigrations();
-    const appliedNames = new Set(applied.map((m) => m.name));
+    try {
+      const applied = await this.getAppliedMigrations();
+      const appliedNames = new Set(applied.map((m) => m.name));
 
-    const migrationsDir = path.join(process.cwd(), 'server', 'db', 'migrations');
-    let files: string[] = [];
-    if (fs.existsSync(migrationsDir)) {
-      files = fs
-        .readdirSync(migrationsDir)
-        .filter((f) => f.endsWith('.sql'))
-        .sort();
+      const migrationsDir = path.join(process.cwd(), 'server', 'db', 'migrations');
+      let files: string[] = [];
+      if (fs.existsSync(migrationsDir)) {
+        files = fs
+          .readdirSync(migrationsDir)
+          .filter((f) => f.endsWith('.sql'))
+          .sort();
+      }
+
+      const pending = files.filter((f) => !appliedNames.has(f));
+
+      return {
+        total: files.length,
+        applied,
+        pending,
+      };
+    } catch {
+      return { total: 0, applied: [], pending: [] };
     }
-
-    const pending = files.filter((f) => !appliedNames.has(f));
-
-    return {
-      total: files.length,
-      applied,
-      pending,
-    };
   }
 }

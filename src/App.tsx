@@ -11,6 +11,7 @@ const LandingPage = lazy(() => import('./features/landing/LandingPage').then((m)
 const LoginPage = lazy(() => import('./features/auth/LoginPage').then((m) => ({ default: m.LoginPage })));
 const SignupPage = lazy(() => import('./features/auth/SignupPage').then((m) => ({ default: m.SignupPage })));
 const ForgotPasswordPage = lazy(() => import('./features/auth/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage })));
+const ResetPasswordPage = lazy(() => import('./features/auth/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage })));
 const TodayDashboard = lazy(() => import('./features/today/TodayDashboard').then((m) => ({ default: m.TodayDashboard })));
 const TimetablePage = lazy(() => import('./features/timetable/TimetablePage').then((m) => ({ default: m.TimetablePage })));
 const TasksPage = lazy(() => import('./features/tasks/TasksPage').then((m) => ({ default: m.TasksPage })));
@@ -62,6 +63,14 @@ export default function App() {
               element={
                 <GuestOnlyRoute>
                   <ForgotPasswordPage />
+                </GuestOnlyRoute>
+              }
+            />
+            <Route
+              path="/reset-password"
+              element={
+                <GuestOnlyRoute>
+                  <ResetPasswordPage />
                 </GuestOnlyRoute>
               }
             />

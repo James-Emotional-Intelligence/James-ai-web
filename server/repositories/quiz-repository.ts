@@ -1,5 +1,8 @@
 import { db } from '../db/mysql';
-import { Quiz, QuizQuestion, QuizSubmission, QuizAttemptResult } from '../../shared/types';
+import { Quiz, QuizQuestion, QuizSubmission, QuizAttemptResult, QuizAttempt } from '../../shared/types';
+import { examRepo } from './exam-repository';
+import { subjectRepo } from './subject-repository';
+import { AiAdapter } from '../services/ai-adapter';
 import crypto from 'crypto';
 
 export class QuizRepository {
@@ -7,6 +10,7 @@ export class QuizRepository {
   private demoQuizzes: Map<string, Quiz[]> = new Map();
   private demoQuestions: Map<string, QuizQuestion[]> = new Map();
   private demoAttempts: Map<string, QuizAttemptResult[]> = new Map();
+  private demoActiveAttempts: Map<string, QuizAttempt> = new Map();
 
   private constructor() {}
 
@@ -17,19 +21,27 @@ export class QuizRepository {
     return QuizRepository.instance;
   }
 
-  public async getByUserId(userId: string): Promise<Quiz[]> {
+  public async getByUserId(userId: string, examId?: string): Promise<Quiz[]> {
     if (db.isHealthy()) {
-      const rows = await db.query<any>(
-        `SELECT q.id, q.user_id, q.exam_id, q.subject_id, q.title, q.type, q.milestone, q.difficulty, q.status,
-                s.name as subject_name,
-                (SELECT COUNT(*) FROM quiz_questions WHERE quiz_id = q.id) as question_count,
-                (SELECT MAX(score) FROM quiz_attempts WHERE quiz_id = q.id AND user_id = q.user_id AND status = 'submitted') as last_score
-         FROM quizzes q
-         JOIN subjects s ON q.subject_id = s.id
-         WHERE q.user_id = ?
-         ORDER BY q.created_at DESC`,
-        [userId]
-      );
+      let sql = `
+        SELECT q.id, q.user_id, q.exam_id, q.subject_id, q.title, q.type, q.milestone, q.difficulty, q.status, q.created_at,
+               s.name as subject_name,
+               (SELECT COUNT(*) FROM quiz_questions WHERE quiz_id = q.id) as question_count,
+               (SELECT MAX(score) FROM quiz_attempts WHERE quiz_id = q.id AND user_id = q.user_id AND status = 'submitted') as last_score
+        FROM quizzes q
+        JOIN subjects s ON q.subject_id = s.id
+        WHERE q.user_id = ?
+      `;
+      const params: any[] = [userId];
+
+      if (examId) {
+        sql += ` AND q.exam_id = ?`;
+        params.push(examId);
+      }
+
+      sql += ` ORDER BY q.created_at DESC`;
+
+      const rows = await db.query<any>(sql, params);
 
       return rows.map((r) => ({
         id: r.id,
@@ -44,18 +56,82 @@ export class QuizRepository {
         status: r.status,
         questionCount: Number(r.question_count) || 5,
         lastScore: r.last_score !== null ? Number(r.last_score) : undefined,
+        createdAt: r.created_at?.toISOString?.() || String(r.created_at),
       }));
     }
 
-    return this.demoQuizzes.get(userId) || [];
+    const list = this.demoQuizzes.get(userId) || [];
+    if (examId) {
+      return list.filter((q) => q.examId === examId);
+    }
+    return list;
   }
 
-  public async getById(userId: string, quizId: string): Promise<(Quiz & { questions: QuizQuestion[] }) | null> {
+  public async getAttemptsByUserId(userId: string): Promise<QuizAttemptResult[]> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT qa.id as attempt_id, qa.quiz_id, qa.score, qa.max_score, qa.status, qa.feedback_summary, qa.submitted_at
+         FROM quiz_attempts qa
+         WHERE qa.user_id = ? AND qa.status = 'submitted'
+         ORDER BY qa.submitted_at DESC`,
+        [userId]
+      );
+      return rows.map((r) => ({
+        attemptId: r.attempt_id,
+        quizId: r.quiz_id,
+        score: Number(r.score) || 0,
+        maxScore: Number(r.max_score) || 10,
+        feedbackSummary: r.feedback_summary || '',
+        submittedAt: r.submitted_at ? (r.submitted_at.toISOString?.() || String(r.submitted_at)) : new Date().toISOString(),
+        answers: [],
+      }));
+    }
+
+    const quizzes = this.demoQuizzes.get(userId) || [];
+    const attempts: QuizAttemptResult[] = [];
+    for (const q of quizzes) {
+      const list = this.demoAttempts.get(q.id) || [];
+      attempts.push(...list);
+    }
+    return attempts;
+  }
+
+  public async getById(userId: string, quizId: string, includeAnswers = false): Promise<(Quiz & { questions: QuizQuestion[] }) | null> {
+    if (db.isHealthy()) {
+      const [quizRow] = await db.query<any>(
+        `SELECT q.id, q.user_id, q.exam_id, q.subject_id, q.title, q.type, q.milestone, q.difficulty, q.status, q.created_at,
+                s.name as subject_name
+         FROM quizzes q
+         JOIN subjects s ON q.subject_id = s.id
+         WHERE q.id = ? AND q.user_id = ?`,
+        [quizId, userId]
+      );
+
+      if (!quizRow) return null;
+
+      const questions = await this.getQuizQuestions(userId, quizId, includeAnswers);
+      return {
+        id: quizRow.id,
+        userId: quizRow.user_id,
+        examId: quizRow.exam_id,
+        subjectId: quizRow.subject_id,
+        subjectName: quizRow.subject_name || 'Môn học',
+        title: quizRow.title,
+        type: quizRow.type,
+        milestone: quizRow.milestone,
+        difficulty: quizRow.difficulty,
+        status: quizRow.status,
+        questionCount: questions.length,
+        questions,
+        createdAt: quizRow.created_at?.toISOString?.() || String(quizRow.created_at),
+      };
+    }
+
     const list = await this.getByUserId(userId);
     const quiz = list.find((q) => q.id === quizId);
     if (!quiz) return null;
 
-    const questions = await this.getQuizQuestions(userId, quizId, false);
+    const questions = await this.getQuizQuestions(userId, quizId, includeAnswers);
     return {
       ...quiz,
       questions,
@@ -111,47 +187,242 @@ export class QuizRepository {
     return questions;
   }
 
-  public async submitQuizAttempt(userId: string, submission: QuizSubmission): Promise<QuizAttemptResult> {
-    const questions = await this.getQuizQuestions(userId, submission.quizId, true);
-    if (questions.length === 0) {
-      throw new Error('Quiz not found or contains no questions');
+  /**
+   * Generates AI Quiz Draft for an Exam milestone and persists in MySQL transaction
+   */
+  public async generateQuizForExam(
+    userId: string,
+    examId: string,
+    options: {
+      milestone?: 'D-14' | 'D-7' | 'D-3' | 'D-1';
+      questionCount?: number;
+      difficulty?: 'easy' | 'medium' | 'hard';
+      title?: string;
+    } = {}
+  ): Promise<Quiz> {
+    const exam = await examRepo.getById(userId, examId);
+    if (!exam) {
+      throw new Error('Kỳ kiểm tra không tồn tại hoặc không thuộc quyền sở hữu');
     }
 
+    const milestone = options.milestone || 'D-7';
+    const questionCount = options.questionCount || 5;
+    const difficulty = options.difficulty || 'medium';
+
+    // 1. Generate structured draft via OpenAI
+    const draft = await AiAdapter.generateQuizDraft({
+      subject: exam.subjectName || 'Toán học',
+      scope: exam.scopeText || '',
+      topics: (exam.topics || []).map((t) => t.name),
+      milestone,
+      questionCount,
+      difficulty,
+    });
+
+    const quizTitle = options.title || draft.title || `Đề Ôn Tập ${milestone} - ${exam.title}`;
+    const quizId = 'quiz_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+
+    const questions: QuizQuestion[] = (draft.questions || []).map((q, idx) => ({
+      id: `q_${quizId}_${idx + 1}`,
+      quizId,
+      order: idx + 1,
+      type: q.type || 'multiple_choice',
+      prompt: q.prompt,
+      options: q.options || [],
+      correctAnswer: q.correctAnswer,
+      explanation: q.explanation,
+      difficulty: q.difficulty || difficulty,
+      topicRef: q.topicRef || exam.topics?.[0]?.name || 'Kiến thức trọng tâm',
+    }));
+
+    const quiz: Quiz = {
+      id: quizId,
+      userId,
+      examId,
+      subjectId: exam.subjectId,
+      subjectName: exam.subjectName,
+      title: quizTitle,
+      type: milestone === 'D-14' ? 'diagnostic' : milestone === 'D-7' ? 'practice' : milestone === 'D-3' ? 'simulation' : 'quick_review',
+      milestone,
+      difficulty,
+      status: 'ready',
+      questionCount: questions.length,
+      questions,
+      generatedByAi: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        await conn.execute(
+          `INSERT INTO quizzes (id, user_id, exam_id, subject_id, title, type, milestone, difficulty, status, generated_by_ai, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', 1, NOW(3))`,
+          [quiz.id, userId, examId, quiz.subjectId, quiz.title, quiz.type, milestone, quiz.difficulty]
+        );
+
+        for (const q of questions) {
+          await conn.execute(
+            `INSERT INTO quiz_questions (id, quiz_id, question_order, type, prompt, options_json, correct_answer_server_only, explanation_server_only, difficulty, topic_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              q.id,
+              quiz.id,
+              q.order,
+              q.type,
+              q.prompt,
+              JSON.stringify(q.options || []),
+              q.correctAnswer || '',
+              q.explanation || '',
+              q.difficulty,
+              q.topicRef || null,
+            ]
+          );
+        }
+
+        // Link to exam_milestones
+        await conn.execute(
+          `UPDATE exam_milestones 
+           SET related_quiz_id = ?, updated_at = NOW(3)
+           WHERE exam_id = ? AND user_id = ? AND milestone_type = ?`,
+          [quiz.id, examId, userId, milestone]
+        );
+      });
+    } else {
+      const list = this.demoQuizzes.get(userId) || [];
+      list.unshift(quiz);
+      this.demoQuizzes.set(userId, list);
+      this.demoQuestions.set(quiz.id, questions);
+    }
+
+    return quiz;
+  }
+
+  /**
+   * Starts a new in-progress attempt for a quiz
+   */
+  public async startAttempt(userId: string, quizId: string): Promise<QuizAttempt> {
+    const quiz = await this.getById(userId, quizId, false);
+    if (!quiz) {
+      throw new Error('Đề ôn tập không tồn tại hoặc không thuộc quyền sở hữu');
+    }
+
+    const attemptId = 'att_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const startedAt = new Date().toISOString();
+
+    const attempt: QuizAttempt = {
+      id: attemptId,
+      quizId,
+      userId,
+      startedAt,
+      maxScore: 10,
+      status: 'in_progress',
+      answers: [],
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO quiz_attempts (id, quiz_id, user_id, started_at, score, max_score, status)
+         VALUES (?, ?, ?, NOW(3), NULL, 10.00, 'in_progress')`,
+        [attemptId, quizId, userId]
+      );
+    } else {
+      this.demoActiveAttempts.set(attemptId, attempt);
+    }
+
+    return attempt;
+  }
+
+  /**
+   * Submits and grades quiz attempt, updates topic mastery per topic, and marks milestone completed
+   */
+  public async submitQuizAttempt(
+    userId: string,
+    submission: {
+      attemptId?: string;
+      quizId: string;
+      answers: { questionId: string; answer: string }[];
+    }
+  ): Promise<QuizAttemptResult> {
+    const questions = await this.getQuizQuestions(userId, submission.quizId, true);
+    if (questions.length === 0) {
+      throw new Error('Đề thi không tồn tại hoặc không có câu hỏi');
+    }
+
+    const [quizRow] = db.isHealthy()
+      ? await db.query<any>('SELECT exam_id, subject_id, milestone FROM quizzes WHERE id = ? AND user_id = ?', [submission.quizId, userId])
+      : [{ exam_id: null, subject_id: 'subj-math', milestone: null }];
+
     const answersMap: Record<string, string> = {};
-    if (Array.isArray(submission.answers)) {
-      for (const a of submission.answers) {
-        answersMap[a.questionId] = a.answer;
-      }
-    } else if (typeof submission.answers === 'object' && submission.answers !== null) {
-      Object.assign(answersMap, submission.answers);
+    for (const a of submission.answers || []) {
+      answersMap[a.questionId] = a.answer;
     }
 
     let correctCount = 0;
     const scoredAnswers: QuizAttemptResult['answers'] = [];
+    const topicPerformance: Record<string, { total: number; correct: number }> = {};
 
     for (const q of questions) {
-      const userAns = answersMap[q.id];
-      const isCorrect = String(userAns || '').trim().toLowerCase() === String(q.correctAnswer || '').trim().toLowerCase();
-      if (isCorrect) correctCount++;
+      const userAns = answersMap[q.id] || '';
+      const topic = q.topicRef || 'Kiến thức chung';
+      if (!topicPerformance[topic]) {
+        topicPerformance[topic] = { total: 0, correct: 0 };
+      }
+      topicPerformance[topic].total++;
+
+      let isCorrect: boolean;
+      let explanation = q.explanation || 'Đáp án chính xác.';
+
+      if (q.type === 'multiple_choice' || q.type === 'true_false') {
+        const cleanUser = String(userAns).trim().toLowerCase();
+        const cleanCorrect = String(q.correctAnswer || '').trim().toLowerCase();
+
+        // Check ID match ("A") or option text match
+        isCorrect = cleanUser === cleanCorrect;
+        if (!isCorrect && Array.isArray(q.options)) {
+          const matchedOpt = q.options.find(
+            (o: any) =>
+              (o.id && String(o.id).toLowerCase() === cleanCorrect && String(o.text || '').toLowerCase() === cleanUser) ||
+              (o.id && String(o.id).toLowerCase() === cleanUser && String(o.text || '').toLowerCase() === cleanCorrect)
+          );
+          if (matchedOpt) isCorrect = true;
+        }
+      } else {
+        // Short answer grading
+        const gradeRes = await AiAdapter.gradeShortAnswer({
+          questionPrompt: q.prompt,
+          userAnswer: userAns,
+          correctAnswer: q.correctAnswer || '',
+        });
+        isCorrect = gradeRes.isCorrect;
+        if (gradeRes.feedback) {
+          explanation += ` [Nhận xét: ${gradeRes.feedback}]`;
+        }
+      }
+
+      if (isCorrect) {
+        correctCount++;
+        topicPerformance[topic].correct++;
+      }
 
       scoredAnswers.push({
         questionId: q.id,
-        userAnswer: userAns || '',
+        userAnswer: userAns,
         correctAnswer: q.correctAnswer || '',
         isCorrect,
-        explanation: q.explanation || 'Đáp án chính xác.',
+        explanation,
       });
     }
 
     const score = Number(((correctCount / questions.length) * 10).toFixed(2));
-    const attemptId = 'att_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const attemptId = submission.attemptId || 'att_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const submittedAt = new Date().toISOString();
 
     const feedbackSummary =
       score >= 8
-        ? 'Xuất sắc! Em đã nắm rất vững kiến thức và kỹ năng giải bài.'
-        : score >= 6
-        ? 'Khá tốt! Em hãy chú ý xem lại những câu sai để củng cố thêm nhé.'
-        : 'Cần ôn tập thêm! Jami khuyên em nên đọc lại lý thuyết trọng tâm trước khi làm lại.';
+        ? 'Xuất sắc! Em đã nắm rất vững kiến thức và làm chủ các dạng bài.'
+        : score >= 6.5
+        ? 'Khá tốt! Em hãy chú ý xem lại những câu sai và củng cố phương pháp giải.'
+        : 'Cần ôn tập thêm! Hãy đọc lại tóm tắt tài liệu lý thuyết trọng tâm trước khi làm lại đề mới.';
 
     const result: QuizAttemptResult = {
       attemptId,
@@ -162,17 +433,28 @@ export class QuizRepository {
       correctCount,
       feedbackSummary,
       answers: scoredAnswers,
-      submittedAt: new Date().toISOString(),
+      submittedAt,
     };
 
     if (db.isHealthy()) {
       await db.withTransaction(async (conn) => {
-        await conn.execute(
-          `INSERT INTO quiz_attempts (id, quiz_id, user_id, started_at, submitted_at, score, max_score, status, feedback_summary)
-           VALUES (?, ?, ?, NOW(3), NOW(3), ?, 10.00, 'submitted', ?)`,
-          [attemptId, submission.quizId, userId, score, feedbackSummary]
-        );
+        // Insert or update attempt
+        if (submission.attemptId) {
+          await conn.execute(
+            `UPDATE quiz_attempts 
+             SET score = ?, status = 'submitted', submitted_at = NOW(3), feedback_summary = ?
+             WHERE id = ? AND user_id = ?`,
+            [score, feedbackSummary, submission.attemptId, userId]
+          );
+        } else {
+          await conn.execute(
+            `INSERT INTO quiz_attempts (id, quiz_id, user_id, started_at, submitted_at, score, max_score, status, feedback_summary)
+             VALUES (?, ?, ?, NOW(3), NOW(3), ?, 10.00, 'submitted', ?)`,
+            [attemptId, submission.quizId, userId, score, feedbackSummary]
+          );
+        }
 
+        // Save answers
         for (const ans of scoredAnswers) {
           const ansId = 'ans_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
           await conn.execute(
@@ -190,15 +472,32 @@ export class QuizRepository {
           );
         }
 
-        const [quizMeta] = await conn.query<any>('SELECT subject_id FROM quizzes WHERE id = ?', [submission.quizId]);
-        if (quizMeta?.length > 0) {
-          const subjectId = quizMeta[0].subject_id;
-          const masteryScore = Math.min(100, Math.round(score * 10));
+        // Update Topic Mastery per topic
+        const subjectId = quizRow?.subject_id || 'subj-math';
+        for (const [topicKey, perf] of Object.entries(topicPerformance)) {
+          const topicScore = Math.round((perf.correct / perf.total) * 100);
+          const mastId = 'mast_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+
           await conn.execute(
             `INSERT INTO topic_mastery (id, user_id, subject_id, topic_key, mastery_score, confidence, evidence_count, last_practiced_at, updated_at)
-             VALUES (?, ?, ?, 'Tổng hợp kiến thức', ?, 75, 1, NOW(3), NOW(3))
-             ON DUPLICATE KEY UPDATE mastery_score = VALUES(mastery_score), evidence_count = evidence_count + 1, last_practiced_at = NOW(3), updated_at = NOW(3)`,
-            ['mast_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24), userId, subjectId, masteryScore]
+             VALUES (?, ?, ?, ?, ?, 80, 1, NOW(3), NOW(3))
+             ON DUPLICATE KEY UPDATE 
+               mastery_score = ROUND((mastery_score * evidence_count + VALUES(mastery_score)) / (evidence_count + 1)),
+               evidence_count = evidence_count + 1,
+               confidence = LEAST(95, confidence + 5),
+               last_practiced_at = NOW(3),
+               updated_at = NOW(3)`,
+            [mastId, userId, subjectId, topicKey, topicScore]
+          );
+        }
+
+        // Mark exam milestone completed
+        if (quizRow?.exam_id && quizRow?.milestone) {
+          await conn.execute(
+            `UPDATE exam_milestones 
+             SET status = 'completed', completed_at = NOW(3), updated_at = NOW(3)
+             WHERE exam_id = ? AND user_id = ? AND milestone_type = ?`,
+            [quizRow.exam_id, userId, quizRow.milestone]
           );
         }
       });
@@ -211,8 +510,13 @@ export class QuizRepository {
     return result;
   }
 
-  public async submitAttempt(userId: string, quizId: string, answers: { questionId: string; answer: string }[]) {
-    const attemptResult = await this.submitQuizAttempt(userId, { quizId, answers });
+  public async submitAttempt(
+    userId: string,
+    quizId: string,
+    answers: { questionId: string; answer: string }[],
+    attemptId?: string
+  ) {
+    const attemptResult = await this.submitQuizAttempt(userId, { quizId, attemptId, answers });
     return {
       attempt: {
         id: attemptResult.attemptId,
@@ -230,23 +534,18 @@ export class QuizRepository {
 
   public async createQuizWithQuestions(userId: string, quizData: Partial<Quiz>, questions: Partial<QuizQuestion>[]): Promise<Quiz> {
     const id = quizData.id || 'quiz_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-    const formattedQuestions: QuizQuestion[] = questions.map((q, i) => {
-      const validQuestionType: 'multiple_choice' | 'true_false' | 'short_answer' =
-        q.type === 'true_false' || q.type === 'short_answer' ? q.type : 'multiple_choice';
-
-      return {
-        id: q.id || `q_${id}_${i + 1}`,
-        quizId: id,
-        order: q.order || i + 1,
-        type: validQuestionType,
-        prompt: q.prompt || (q as any).questionText || 'Câu hỏi',
-        options: q.options || [],
-        correctAnswer: q.correctAnswer || '',
-        explanation: q.explanation || '',
-        difficulty: q.difficulty || 'medium',
-        topicRef: q.topicRef,
-      };
-    });
+    const formattedQuestions: QuizQuestion[] = questions.map((q, i) => ({
+      id: q.id || `q_${id}_${i + 1}`,
+      quizId: id,
+      order: q.order || i + 1,
+      type: q.type === 'true_false' || q.type === 'short_answer' ? q.type : 'multiple_choice',
+      prompt: q.prompt || (q as any).questionText || 'Câu hỏi',
+      options: q.options || [],
+      correctAnswer: q.correctAnswer || '',
+      explanation: q.explanation || '',
+      difficulty: q.difficulty || 'medium',
+      topicRef: q.topicRef,
+    }));
 
     const quiz: Quiz = {
       id,
@@ -260,6 +559,7 @@ export class QuizRepository {
       difficulty: quizData.difficulty || 'medium',
       status: 'ready',
       questionCount: formattedQuestions.length,
+      questions: formattedQuestions,
     };
 
     if (db.isHealthy()) {

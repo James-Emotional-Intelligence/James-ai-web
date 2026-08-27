@@ -44,11 +44,23 @@ export interface Subject {
   sortOrder?: number;
 }
 
+export interface SchoolTimetable {
+  id: string;
+  userId: string;
+  name: string;
+  validFrom?: string;
+  validTo?: string;
+  timezone: string;
+  isActive: boolean;
+  entries?: Partial<TimetableEntry>[];
+}
+
 export interface TimetableEntry {
   id: string;
   timetableId?: string;
   subjectId?: string;
   subjectName?: string;
+  subjectColor?: string;
   title: string;
   dayOfWeek: number; // 1 = Monday, ..., 7 = Sunday
   period?: number;
@@ -71,26 +83,35 @@ export interface BusyEvent {
   timezone: string;
   isFixed: boolean;
   subjectId?: string;
+  subjectName?: string;
   source?: string;
 }
 
 export interface AvailabilityRule {
   id: string;
   userId: string;
-  dayOfWeek: number;
-  startLocalTime: string;
-  endLocalTime: string;
+  dayOfWeek: number; // 1..7
+  startLocalTime: string; // "07:00"
+  endLocalTime: string;   // "22:00"
+  effectiveFrom?: string;
+  effectiveTo?: string;
   type: 'available' | 'preferred' | 'blocked';
+  isEnabled: boolean;
 }
 
 export interface ExamMilestone {
+  id?: string;
+  examId?: string;
+  milestoneType: 'D-14' | 'D-7' | 'D-3' | 'D-1';
   name: string;
   date: string;
-  status: 'completed' | 'in_progress' | 'pending';
+  status: 'pending' | 'current' | 'completed' | 'overdue';
+  relatedQuizId?: string;
+  completedAt?: string;
 }
 
 export interface ExamTopic {
-  id: string;
+  id?: string;
   name: string;
   weight: number;
   notes?: string;
@@ -101,6 +122,7 @@ export interface Exam {
   userId: string;
   subjectId: string;
   subjectName?: string;
+  subjectColor?: string;
   title: string;
   examAt: string; // ISO String
   importance: 'low' | 'medium' | 'high' | 'critical';
@@ -108,15 +130,15 @@ export interface Exam {
   topics: ExamTopic[];
   milestones?: ExamMilestone[];
   status?: 'upcoming' | 'completed' | 'cancelled';
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ExecutionStep {
   id: string;
-  order?: number;
-  stepOrder?: number;
+  stepOrder: number;
   title: string;
-  minutes?: number;
-  plannedMinutes?: number;
+  plannedMinutes: number;
   instruction: string;
   expectedOutput: string;
   tips: string[];
@@ -127,11 +149,10 @@ export interface ExecutionStep {
 }
 
 export interface PreparationChecklistItem {
-  id?: string;
-  item?: string;
-  text?: string;
-  completed?: boolean;
-  checked?: boolean;
+  id: string;
+  text: string;
+  checked: boolean;
+  checkedAt?: string;
 }
 
 export interface ExecutionGuide {
@@ -199,20 +220,79 @@ export interface FocusSession {
   id: string;
   userId: string;
   taskId?: string;
+  taskTitle?: string;
+  subjectName?: string;
   mode: '25_5' | '45_10' | 'custom';
+  phase?: 'work' | 'break';
   plannedMinutes: number;
+  breakMinutes?: number;
   actualMinutes?: number;
+  actualFocusSeconds?: number;
   durationMinutes?: number;
   state: 'ready' | 'running' | 'paused' | 'break' | 'completed' | 'abandoned';
   startedAt?: string;
   pausedAt?: string;
   endedAt?: string;
+  lastResumedAt?: string;
+  targetEndAt?: string;
+  remainingSecondsAtPause?: number;
   pauseCount?: number;
-  accumulatedPauseSeconds: number;
-  targetEndTime?: string;
+  accumulatedPauseSeconds?: number;
   notes?: string;
   outcome?: string;
+  idempotencyKey?: string;
+  serverNow?: string;
+  createdAt?: string;
 }
+
+export interface TodayDashboardOverview {
+  studentName: string;
+  gradeLevel: number;
+  greetingMessage?: string;
+  todayDateFormatted?: string;
+  timetable: {
+    nextSessionTitle?: string;
+    nextSessionTime?: string;
+    todaySessionsCount: number;
+    todaySessions: { title: string; time: string; subject?: string; isBusyEvent?: boolean }[];
+  };
+  tasks: {
+    priorityTaskTitle?: string;
+    priorityTaskId?: string;
+    pendingCount: number;
+    todayTasksCount: number;
+    overdueCount: number;
+  };
+  todayStudy: {
+    actualFocusMinutes: number;
+    completedMinutes: number;
+    plannedMinutes: number;
+    completedPercent: number;
+    streakDays: number;
+  };
+  jami: {
+    latestMessage: string;
+    conversationStatus: string;
+  };
+  exams: {
+    upcomingTitle?: string;
+    daysRemaining: number;
+  };
+  reports: {
+    totalFocusMinutes7Days: number;
+    totalFocusMinutesPrev7Days: number;
+    trendLabel: string;
+  };
+  materials: {
+    totalMaterialsCount: number;
+    latestMaterialTitle?: string;
+  };
+  notifications: {
+    unreadCount: number;
+    latestTitle?: string;
+  };
+}
+
 
 export interface QuizQuestion {
   id: string;
@@ -263,6 +343,15 @@ export interface QuizAttempt {
   }[];
 }
 
+export interface StructuredMaterialSummary {
+  overview: string;
+  keyPoints: string[];
+  concepts: { name: string; definition: string }[];
+  formulas?: string[];
+  sourceReferences?: { pageOrSection: string; note: string }[];
+  warning?: string;
+}
+
 export interface Material {
   id: string;
   userId: string;
@@ -270,12 +359,18 @@ export interface Material {
   subjectName?: string;
   title: string;
   type: 'pdf' | 'image' | 'notes';
+  fileName?: string;
   r2ObjectKey?: string;
   mimeType?: string;
   sizeBytes: number;
-  processingStatus: 'ready' | 'processing' | 'error';
+  sha256?: string;
+  processingStatus: 'uploading' | 'queued' | 'processing' | 'ready' | 'error';
   summary?: string;
+  summaryJson?: StructuredMaterialSummary;
+  contentText?: string;
+  errorMessage?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export type LearningMaterial = Material;
@@ -317,17 +412,27 @@ export interface QuizAttemptResult {
   }[];
 }
 
+export type NotificationType =
+  | 'upcoming_class'
+  | 'upcoming_exam'
+  | 'incomplete_task'
+  | 'task_due'
+  | 'task_overdue'
+  | 'focus_upcoming'
+  | 'system';
+
 export interface Notification {
   id: string;
   userId: string;
-  type: 'upcoming_class' | 'upcoming_exam' | 'incomplete_task' | 'system';
+  type: NotificationType;
   title: string;
   body: string;
   actionUrl?: string;
   scheduledFor?: string;
   deliveredAt?: string;
   readAt?: string;
-  status: 'unread' | 'read';
+  status: 'unread' | 'read' | 'archived';
+  dedupeKey?: string;
   createdAt?: string;
 }
 
@@ -340,6 +445,57 @@ export interface NotificationPreferences {
   incompleteTask: boolean;
   soundEnabled: boolean;
   leadMinutes: number;
+  classLeadMinutes: number;
+  taskLeadMinutes: number;
+  examLeadDays: number;
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  timezone: string;
+  inAppEnabled: boolean;
+  webPushEnabled: boolean;
+  pushSubscription?: any;
+}
+
+export interface JamiConversation {
+  id: string;
+  userId: string;
+  title: string;
+  isArchived?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface JamiActionProposal {
+  id: string;
+  userId: string;
+  conversationId?: string;
+  messageId?: string;
+  actionType: string;
+  arguments?: any;
+  previewText?: string;
+  preview?: any;
+  status: 'pending' | 'confirmed' | 'executed' | 'rejected' | 'expired' | 'failed';
+  idempotencyKey?: string;
+  expiresAt: string;
+  executedAt?: string;
+  createdAt: string;
+}
+
+export interface JamiMessageItem {
+  id: string;
+  conversationId?: string;
+  userId: string;
+  sender: 'user' | 'jami';
+  text: string;
+  emotion?: string;
+  suggestedActions?: { label: string; action?: string; route?: string }[] | string[];
+  requiresConfirmation?: boolean;
+  confirmationSummary?: string;
+  proposalId?: string;
+  proposal?: JamiActionProposal;
+  isConfirmed?: boolean;
+  clientMessageId?: string;
+  createdAt: string;
 }
 
 export interface JamiPreferences {
@@ -364,11 +520,15 @@ export interface JamiMemorySummary {
 export interface ScheduleProposal {
   id: string;
   userId: string;
+  basePlanVersion?: number;
+  status?: 'pending' | 'confirmed' | 'rejected' | 'expired';
   reason: string;
   tasksToSchedule: {
     taskId: string;
     title: string;
     subjectId: string;
+    subjectName?: string;
+    subjectColor?: string;
     estimatedMinutes: number;
     proposedStart: string;
     proposedEnd: string;
@@ -379,29 +539,93 @@ export interface ScheduleProposal {
     reason: string;
   }[];
   expiresAt: string;
+  confirmedAt?: string;
+  idempotencyKey?: string;
 }
 
-export interface WeeklySubjectStat {
+export interface DailyStudyStat {
+  date: string; // YYYY-MM-DD
+  dayLabel: string; // T2, T3, T4, T5, T6, T7, CN
+  actualMinutes: number;
+  plannedMinutes: number;
+  completedTasksCount: number;
+  quizScoreAvg: number | null;
+}
+
+export interface SubjectReportStat {
   subjectId: string;
   subjectName: string;
   color: string;
   plannedMinutes: number;
   actualMinutes: number;
   completionPercent: number;
+  taskCount: number;
+  completedTaskCount: number;
+  quizCount: number;
+  avgQuizScore: number | null;
 }
 
-export interface StudyReport {
-  userId: string;
-  weekStart: string;
-  weekEnd: string;
-  plannedHours: number;
-  actualHours: number;
-  completionRate: number;
-  streakDays: number;
-  onTimeRate: number;
-  focusQualityScore: number;
-  subjectBreakdown: WeeklySubjectStat[];
-  weakTopics: string[];
-  strongTopics: string[];
-  aiRecommendations: string[];
+export type WeeklySubjectStat = SubjectReportStat;
+
+export interface TopicMasteryStat {
+  topicKey: string;
+  subjectName: string;
+  subjectColor?: string;
+  masteryScore: number;
+  confidence: number;
+  evidenceCount: number;
+  status: 'mastered' | 'good' | 'needs_review';
+  statusLabel: string;
+  lastPracticedAt?: string;
 }
+
+export interface PeriodComparison {
+  actualMinutesDiffPercent: number | null;
+  completedTasksDiff: number;
+  quizScoreDiff: number | null;
+  hasPreviousData: boolean;
+}
+
+export interface ReportRecommendation {
+  id: string;
+  type: 'strength' | 'weakness' | 'habit' | 'schedule';
+  message: string;
+  actionLabel?: string;
+  actionUrl?: string;
+  generatedByAi?: boolean;
+}
+
+export interface ReportOverviewResponse {
+  period: {
+    type: 'week' | 'month' | 'custom';
+    from: string;
+    to: string;
+    timezone: string;
+    label: string;
+  };
+  summary: {
+    plannedMinutes: number;
+    plannedHours: number;
+    actualFocusMinutes: number;
+    actualFocusHours: number;
+    totalTasks: number;
+    completedTasks: number;
+    completionRate: number;
+    onTimeRate: number | null;
+    averageQuizScore: number | null;
+    totalQuizAttempts: number;
+    streakDays: number;
+    focusQualityScore: number;
+  };
+  dailyStudy: DailyStudyStat[];
+  subjectBreakdown: SubjectReportStat[];
+  topicMastery: TopicMasteryStat[];
+  weakTopics: TopicMasteryStat[];
+  strongTopics: TopicMasteryStat[];
+  comparison: PeriodComparison;
+  recommendations: ReportRecommendation[];
+  hasData: boolean;
+}
+
+export type StudyReport = ReportOverviewResponse;
+

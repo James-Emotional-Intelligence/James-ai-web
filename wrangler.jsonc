@@ -21,10 +21,11 @@
     }
   ],
   "triggers": {
-    "crons": ["0 1 * * *"] // Daily exam milestone and reminder scheduler
+    "crons": ["*/5 * * * *"]
   },
   "vars": {
     "APP_MODE": "production",
+    "BACKEND_API_ORIGIN": "https://your-backend-api.example.com",
     "OPENAI_TEXT_MODEL": "gpt-4o-mini",
     "OPENAI_TRANSCRIBE_MODEL": "gpt-transcribe",
     "OPENAI_REALTIME_MODEL": "gpt-4o-realtime-preview"

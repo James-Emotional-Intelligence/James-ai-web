@@ -1,27 +1,20 @@
 import { db } from '../db/mysql';
-import { JamiPreferences, JamiMemorySummary } from '../../shared/types';
+import {
+  JamiPreferences,
+  JamiMemorySummary,
+  JamiConversation,
+  JamiMessageItem,
+  JamiActionProposal,
+} from '../../shared/types';
+import { jamiActionService } from '../services/jami-action-service';
 import crypto from 'crypto';
-
-export interface JamiMessageRecord {
-  id: string;
-  userId: string;
-  sender: 'user' | 'jami';
-  text: string;
-  emotion?: string;
-  suggestedActions?: string[];
-  requiresConfirmation?: boolean;
-  confirmationSummary?: string;
-  proposalId?: string;
-  isConfirmed?: boolean;
-  createdAt: string;
-}
 
 export class JamiRepository {
   private static instance: JamiRepository;
+  private demoConversations: Map<string, JamiConversation[]> = new Map();
+  private demoMessages: Map<string, JamiMessageItem[]> = new Map();
   private demoPreferences: Map<string, JamiPreferences> = new Map();
-  private demoMessages: Map<string, JamiMessageRecord[]> = new Map();
   private demoMemories: Map<string, JamiMemorySummary[]> = new Map();
-  private schemaVerified = false;
 
   private constructor() {}
 
@@ -32,189 +25,369 @@ export class JamiRepository {
     return JamiRepository.instance;
   }
 
-  public async ensureSchema() {
-    if (this.schemaVerified || !db.isHealthy()) return;
+  // ==========================================
+  // Conversations
+  // ==========================================
 
-    try {
-      await db.execute(`
-        CREATE TABLE IF NOT EXISTS jami_messages (
-          id VARCHAR(36) PRIMARY KEY,
-          conversation_id VARCHAR(36) NULL,
-          user_id VARCHAR(36) NOT NULL DEFAULT 'usr_student_demo_01',
-          sender VARCHAR(20) NOT NULL DEFAULT 'jami',
-          text TEXT NOT NULL,
-          emotion VARCHAR(30) DEFAULT 'idle',
-          suggested_actions_json JSON NULL,
-          requires_confirmation BOOLEAN DEFAULT FALSE,
-          confirmation_summary TEXT NULL,
-          proposal_id VARCHAR(36) NULL,
-          is_confirmed BOOLEAN DEFAULT FALSE,
-          created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
-          INDEX idx_jmsg_user_time (user_id, created_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
-    } catch {}
-
-    const alterStatements = [
-      `ALTER TABLE jami_messages ADD COLUMN user_id VARCHAR(36) NOT NULL DEFAULT 'usr_student_demo_01'`,
-      `ALTER TABLE jami_messages ADD COLUMN conversation_id VARCHAR(36) NULL`,
-      `ALTER TABLE jami_messages ADD COLUMN sender VARCHAR(20) NOT NULL DEFAULT 'jami'`,
-      `ALTER TABLE jami_messages ADD COLUMN text TEXT NOT NULL`,
-      `ALTER TABLE jami_messages ADD COLUMN emotion VARCHAR(30) DEFAULT 'idle'`,
-      `ALTER TABLE jami_messages ADD COLUMN suggested_actions_json JSON NULL`,
-      `ALTER TABLE jami_messages ADD COLUMN requires_confirmation BOOLEAN DEFAULT FALSE`,
-      `ALTER TABLE jami_messages ADD COLUMN confirmation_summary TEXT NULL`,
-      `ALTER TABLE jami_messages ADD COLUMN proposal_id VARCHAR(36) NULL`,
-      `ALTER TABLE jami_messages ADD COLUMN is_confirmed BOOLEAN DEFAULT FALSE`,
-    ];
-
-    for (const sql of alterStatements) {
-      try {
-        await db.execute(sql);
-      } catch (err: any) {
-        // Ignored: ER_DUP_FIELDNAME (1060) if column already exists
-      }
-    }
-
-    this.schemaVerified = true;
-  }
-
-  public async getMessages(userId: string): Promise<JamiMessageRecord[]> {
+  public async getConversations(userId: string): Promise<JamiConversation[]> {
     if (db.isHealthy()) {
-      await this.ensureSchema();
-      try {
-        const rows = await db.query<any>(
-          `SELECT id, user_id, sender, text, emotion, suggested_actions_json, requires_confirmation, confirmation_summary, proposal_id, is_confirmed, created_at
-           FROM jami_messages
-           WHERE user_id = ?
-           ORDER BY created_at ASC`,
-          [userId]
-        );
+      const rows = await db.query<any>(
+        `SELECT id, user_id, title, is_archived, created_at, updated_at
+         FROM jami_conversations
+         WHERE user_id = ? AND (is_archived = 0 OR is_archived IS NULL)
+         ORDER BY updated_at DESC`,
+        [userId]
+      );
 
-        if (rows.length > 0) {
-          return rows.map((r) => ({
-            id: r.id,
-            userId: r.user_id,
-            sender: r.sender === 'user' ? 'user' : 'jami',
-            text: r.text,
-            emotion: r.emotion || 'idle',
-            suggestedActions: r.suggested_actions_json ? (typeof r.suggested_actions_json === 'string' ? JSON.parse(r.suggested_actions_json) : r.suggested_actions_json) : [],
-            requiresConfirmation: Boolean(r.requires_confirmation),
-            confirmationSummary: r.confirmation_summary || undefined,
-            proposalId: r.proposal_id || undefined,
-            isConfirmed: Boolean(r.is_confirmed),
-            createdAt: r.created_at ? (r.created_at.toISOString?.() || String(r.created_at)) : new Date().toISOString(),
-          }));
-        }
-      } catch (err: any) {
-        console.warn('[JAMI Repo] getMessages error:', err.message);
-      }
+      return rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        title: r.title,
+        isArchived: Boolean(r.is_archived),
+        createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+        updatedAt: r.updated_at?.toISOString?.() || String(r.updated_at),
+      }));
     }
 
-    return this.demoMessages.get(userId) || [];
+    const list = this.demoConversations.get(userId) || [];
+    return list.filter((c) => !c.isArchived);
   }
 
-  public async saveMessage(
-    userId: string,
-    msg: Omit<JamiMessageRecord, 'id' | 'userId' | 'createdAt'>
-  ): Promise<JamiMessageRecord> {
-    const id = 'msg_' + crypto.randomUUID().substring(0, 16);
-    const createdAt = new Date().toISOString();
+  public async getConversation(userId: string, conversationId: string): Promise<JamiConversation | null> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT id, user_id, title, is_archived, created_at, updated_at
+         FROM jami_conversations
+         WHERE id = ? AND user_id = ?`,
+        [conversationId, userId]
+      );
 
-    const record: JamiMessageRecord = {
+      if (rows.length === 0) return null;
+      const r = rows[0];
+      return {
+        id: r.id,
+        userId: r.user_id,
+        title: r.title,
+        isArchived: Boolean(r.is_archived),
+        createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+        updatedAt: r.updated_at?.toISOString?.() || String(r.updated_at),
+      };
+    }
+
+    const list = this.demoConversations.get(userId) || [];
+    return list.find((c) => c.id === conversationId) || null;
+  }
+
+  public async createConversation(userId: string, title = 'Hội thoại với Jami'): Promise<JamiConversation> {
+    const id = 'conv_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const now = new Date().toISOString();
+
+    const conversation: JamiConversation = {
       id,
       userId,
-      sender: msg.sender,
-      text: msg.text,
+      title: title.trim() || 'Hội thoại với Jami',
+      isArchived: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO jami_conversations (id, user_id, title, is_archived, created_at, updated_at)
+         VALUES (?, ?, ?, 0, NOW(3), NOW(3))`,
+        [conversation.id, userId, conversation.title]
+      );
+    } else {
+      const list = this.demoConversations.get(userId) || [];
+      list.unshift(conversation);
+      this.demoConversations.set(userId, list);
+    }
+
+    return conversation;
+  }
+
+  public async updateConversation(userId: string, conversationId: string, title: string): Promise<JamiConversation | null> {
+    const existing = await this.getConversation(userId, conversationId);
+    if (!existing) return null;
+
+    const updated: JamiConversation = {
+      ...existing,
+      title: title.trim() || existing.title,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE jami_conversations SET title = ?, updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
+        [updated.title, conversationId, userId]
+      );
+    } else {
+      const list = this.demoConversations.get(userId) || [];
+      const idx = list.findIndex((c) => c.id === conversationId);
+      if (idx !== -1) {
+        list[idx] = updated;
+        this.demoConversations.set(userId, list);
+      }
+    }
+
+    return updated;
+  }
+
+  public async archiveConversation(userId: string, conversationId: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      const res = await db.execute(
+        `UPDATE jami_conversations SET is_archived = 1, updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
+        [conversationId, userId]
+      );
+      return (res?.affectedRows || 0) > 0;
+    }
+
+    const list = this.demoConversations.get(userId) || [];
+    const conv = list.find((c) => c.id === conversationId);
+    if (conv) {
+      conv.isArchived = true;
+      return true;
+    }
+    return false;
+  }
+
+  // ==========================================
+  // Messages
+  // ==========================================
+
+  public async getMessages(userId: string, conversationId?: string, limit = 50): Promise<JamiMessageItem[]> {
+    if (db.isHealthy()) {
+      let sql = `
+        SELECT m.id, m.conversation_id, m.user_id, m.sender, m.text, m.content, m.emotion,
+               m.suggested_actions_json, m.requires_confirmation, m.confirmation_summary,
+               m.proposal_id, m.is_confirmed, m.client_message_id, m.created_at,
+               p.action_type as prop_action_type, p.arguments_json as prop_args, p.preview_json as prop_preview,
+               p.status as prop_status, p.expires_at as prop_expires_at
+        FROM jami_messages m
+        LEFT JOIN jami_action_proposals p ON m.proposal_id = p.id
+        WHERE m.user_id = ?
+      `;
+      const params: any[] = [userId];
+
+      if (conversationId) {
+        sql += ` AND m.conversation_id = ?`;
+        params.push(conversationId);
+      }
+
+      sql += ` ORDER BY m.created_at ASC LIMIT ?`;
+      params.push(limit);
+
+      const rows = await db.query<any>(sql, params);
+
+      return rows.map((r) => {
+        let suggestedActions: any[] = [];
+        if (r.suggested_actions_json) {
+          try {
+            suggestedActions = typeof r.suggested_actions_json === 'string'
+              ? JSON.parse(r.suggested_actions_json)
+              : r.suggested_actions_json;
+          } catch {}
+        }
+
+        let proposal: JamiActionProposal | undefined = undefined;
+        if (r.proposal_id && r.prop_action_type) {
+          proposal = {
+            id: r.proposal_id,
+            userId,
+            conversationId: r.conversation_id,
+            messageId: r.id,
+            actionType: r.prop_action_type,
+            arguments: typeof r.prop_args === 'string' ? JSON.parse(r.prop_args) : r.prop_args,
+            preview: typeof r.prop_preview === 'string' ? JSON.parse(r.prop_preview) : r.prop_preview,
+            status: r.prop_status || 'pending',
+            expiresAt: r.prop_expires_at?.toISOString?.() || String(r.prop_expires_at),
+            createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+          };
+        }
+
+        return {
+          id: r.id,
+          conversationId: r.conversation_id || undefined,
+          userId: r.user_id,
+          sender: r.sender === 'user' ? 'user' : 'jami',
+          text: r.text || r.content || '',
+          emotion: r.emotion || 'idle',
+          suggestedActions,
+          requiresConfirmation: Boolean(r.requires_confirmation),
+          confirmationSummary: r.confirmation_summary || undefined,
+          proposalId: r.proposal_id || undefined,
+          proposal,
+          isConfirmed: Boolean(r.is_confirmed),
+          clientMessageId: r.client_message_id || undefined,
+          createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+        };
+      });
+    }
+
+    const list = this.demoMessages.get(userId) || [];
+    if (conversationId) {
+      return list.filter((m) => m.conversationId === conversationId);
+    }
+    return list;
+  }
+
+  public async saveMessage(userId: string, msg: Partial<JamiMessageItem>): Promise<JamiMessageItem> {
+    const id = msg.id || 'msg_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const createdAt = msg.createdAt || new Date().toISOString();
+
+    const record: JamiMessageItem = {
+      id,
+      conversationId: msg.conversationId,
+      userId,
+      sender: msg.sender || 'jami',
+      text: msg.text || '',
       emotion: msg.emotion || 'idle',
       suggestedActions: msg.suggestedActions || [],
       requiresConfirmation: Boolean(msg.requiresConfirmation),
       confirmationSummary: msg.confirmationSummary,
       proposalId: msg.proposalId,
+      proposal: msg.proposal,
       isConfirmed: Boolean(msg.isConfirmed),
+      clientMessageId: msg.clientMessageId,
       createdAt,
     };
 
     if (db.isHealthy()) {
-      await this.ensureSchema();
-      try {
-        await db.execute(
-          `INSERT INTO jami_messages
-           (id, user_id, sender, text, emotion, suggested_actions_json, requires_confirmation, confirmation_summary, proposal_id, is_confirmed, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))`,
-          [
-            id,
-            userId,
-            record.sender,
-            record.text,
-            record.emotion,
-            JSON.stringify(record.suggestedActions),
-            record.requiresConfirmation ? 1 : 0,
-            record.confirmationSummary || null,
-            record.proposalId || null,
-            record.isConfirmed ? 1 : 0,
-          ]
-        );
-      } catch (err: any) {
-        console.warn('[JAMI Repo] saveMessage DB error:', err.message);
-      }
-    }
+      await db.execute(
+        `INSERT INTO jami_messages
+         (id, conversation_id, user_id, sender, text, content, emotion, suggested_actions_json, requires_confirmation, confirmation_summary, proposal_id, is_confirmed, client_message_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))`,
+        [
+          record.id,
+          record.conversationId || null,
+          userId,
+          record.sender,
+          record.text,
+          record.text,
+          record.emotion,
+          JSON.stringify(record.suggestedActions || []),
+          record.requiresConfirmation ? 1 : 0,
+          record.confirmationSummary || null,
+          record.proposalId || null,
+          record.isConfirmed ? 1 : 0,
+          record.clientMessageId || null,
+        ]
+      );
 
-    const list = this.demoMessages.get(userId) || [];
-    list.push(record);
-    this.demoMessages.set(userId, list);
+      // Update conversation updated_at
+      if (record.conversationId) {
+        await db.execute(
+          `UPDATE jami_conversations SET updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
+          [record.conversationId, userId]
+        );
+      }
+    } else {
+      const list = this.demoMessages.get(userId) || [];
+      list.push(record);
+      this.demoMessages.set(userId, list);
+    }
 
     return record;
   }
 
-  public async confirmMessageAction(userId: string, messageId: string): Promise<JamiMessageRecord | null> {
+  public async confirmMessageAction(
+    userId: string,
+    messageId: string,
+    decision: 'confirm' | 'reject' = 'confirm'
+  ): Promise<{ message: JamiMessageItem; actionResult: any }> {
+    let targetMessage: JamiMessageItem | null;
+
     if (db.isHealthy()) {
-      await this.ensureSchema();
-      try {
-        await db.execute(
-          `UPDATE jami_messages SET is_confirmed = 1 WHERE id = ? AND user_id = ?`,
-          [messageId, userId]
-        );
-      } catch (err: any) {
-        console.warn('[JAMI Repo] confirmMessageAction DB error:', err.message);
+      const rows = await db.query<any>(
+        `SELECT id, conversation_id, user_id, sender, text, proposal_id, is_confirmed
+         FROM jami_messages
+         WHERE id = ? AND user_id = ?`,
+        [messageId, userId]
+      );
+
+      if (rows.length === 0) {
+        throw new Error('Tin nhắn không tồn tại hoặc không thuộc quyền sở hữu');
       }
+
+      targetMessage = {
+        id: rows[0].id,
+        conversationId: rows[0].conversation_id,
+        userId: rows[0].user_id,
+        sender: rows[0].sender,
+        text: rows[0].text,
+        proposalId: rows[0].proposal_id,
+        isConfirmed: Boolean(rows[0].is_confirmed),
+        createdAt: new Date().toISOString(),
+      };
+    } else {
+      const list = this.demoMessages.get(userId) || [];
+      targetMessage = list.find((m) => m.id === messageId) || null;
     }
 
-    const list = this.demoMessages.get(userId) || [];
-    const msg = list.find((m) => m.id === messageId);
-    if (msg) {
-      msg.isConfirmed = true;
-      return msg;
+    if (!targetMessage) {
+      throw new Error('Tin nhắn không tồn tại hoặc không thuộc quyền sở hữu');
     }
 
-    const messages = await this.getMessages(userId);
-    return messages.find((m) => m.id === messageId) || null;
+    // Execute actual action proposal via JamiActionService
+    const actionResult = await jamiActionService.handleProposalDecision(
+      userId,
+      decision,
+      targetMessage.proposalId,
+      targetMessage.conversationId
+    );
+
+    // Update message confirmation state in MySQL
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE jami_messages SET is_confirmed = 1 WHERE id = ? AND user_id = ?`,
+        [messageId, userId]
+      );
+    }
+
+    targetMessage.isConfirmed = true;
+
+    // Save Jami confirmation follow-up reply in conversation
+    if (actionResult.message) {
+      await this.saveMessage(userId, {
+        conversationId: targetMessage.conversationId,
+        sender: 'jami',
+        text: actionResult.message,
+        emotion: decision === 'confirm' ? 'celebrating' : 'speaking',
+      });
+    }
+
+    return {
+      message: targetMessage,
+      actionResult,
+    };
   }
+
+  // ==========================================
+  // Preferences & Memory
+  // ==========================================
 
   public async getPreferences(userId: string): Promise<JamiPreferences> {
     if (db.isHealthy()) {
-      try {
-        const rows = await db.query<any>(
-          `SELECT user_id, voice_enabled, sound_effects, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled
-           FROM jami_preferences
-           WHERE user_id = ?`,
-          [userId]
-        );
+      const rows = await db.query<any>(
+        `SELECT user_id, voice_enabled, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled
+         FROM jami_preferences
+         WHERE user_id = ?`,
+        [userId]
+      );
 
-        if (rows.length > 0) {
-          const r = rows[0];
-          return {
-            userId: r.user_id,
-            voiceEnabled: Boolean(r.voice_enabled),
-            soundEffects: Boolean(r.sound_effects),
-            selectedVoice: r.selected_voice || 'vi-VN-Standard-A',
-            animationEnabled: Boolean(r.animation_enabled),
-            responseLength: r.response_length || 'balanced',
-            preferredAddress: r.preferred_address || 'Minh',
-            memoryEnabled: Boolean(r.memory_enabled),
-          };
-        }
-      } catch {}
+      if (rows.length > 0) {
+        const r = rows[0];
+        return {
+          userId: r.user_id,
+          voiceEnabled: Boolean(r.voice_enabled),
+          soundEffects: true,
+          selectedVoice: r.selected_voice || 'vi-VN-Standard-A',
+          animationEnabled: Boolean(r.animation_enabled),
+          responseLength: r.response_length || 'balanced',
+          preferredAddress: r.preferred_address || 'Bạn',
+          memoryEnabled: Boolean(r.memory_enabled),
+        };
+      }
     }
 
     const demo = this.demoPreferences.get(userId);
@@ -227,7 +400,7 @@ export class JamiRepository {
       selectedVoice: 'vi-VN-Standard-A',
       animationEnabled: true,
       responseLength: 'balanced',
-      preferredAddress: 'Học sinh',
+      preferredAddress: 'Bạn',
       memoryEnabled: true,
     };
   }
@@ -240,31 +413,26 @@ export class JamiRepository {
     };
 
     if (db.isHealthy()) {
-      try {
-        await db.execute(
-          `INSERT INTO jami_preferences (user_id, voice_enabled, sound_effects, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(3))
-           ON DUPLICATE KEY UPDATE
-             voice_enabled = VALUES(voice_enabled),
-             sound_effects = VALUES(sound_effects),
-             selected_voice = VALUES(selected_voice),
-             animation_enabled = VALUES(animation_enabled),
-             response_length = VALUES(response_length),
-             preferred_address = VALUES(preferred_address),
-             memory_enabled = VALUES(memory_enabled),
-             updated_at = NOW(3)`,
-          [
-            userId,
-            updated.voiceEnabled ? 1 : 0,
-            updated.soundEffects ? 1 : 0,
-            updated.selectedVoice,
-            updated.animationEnabled ? 1 : 0,
-            updated.responseLength,
-            updated.preferredAddress,
-            updated.memoryEnabled ? 1 : 0,
-          ]
-        );
-      } catch {}
+      await db.execute(
+        `INSERT INTO jami_preferences (user_id, voice_enabled, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           voice_enabled = VALUES(voice_enabled),
+           selected_voice = VALUES(selected_voice),
+           animation_enabled = VALUES(animation_enabled),
+           response_length = VALUES(response_length),
+           preferred_address = VALUES(preferred_address),
+           memory_enabled = VALUES(memory_enabled)`,
+        [
+          userId,
+          updated.voiceEnabled ? 1 : 0,
+          updated.selectedVoice,
+          updated.animationEnabled ? 1 : 0,
+          updated.responseLength,
+          updated.preferredAddress,
+          updated.memoryEnabled ? 1 : 0,
+        ]
+      );
     } else {
       this.demoPreferences.set(userId, updated);
     }
@@ -274,23 +442,21 @@ export class JamiRepository {
 
   public async getMemories(userId: string): Promise<JamiMemorySummary[]> {
     if (db.isHealthy()) {
-      try {
-        const rows = await db.query<any>(
-          `SELECT id, user_id, category, summary, confidence, source_reference, is_active, updated_at
-           FROM jami_memory_summaries
-           WHERE user_id = ? AND is_active = 1
-           ORDER BY updated_at DESC`,
-          [userId]
-        );
+      const rows = await db.query<any>(
+        `SELECT id, user_id, category, summary, created_at
+         FROM jami_memory_summaries
+         WHERE user_id = ?
+         ORDER BY created_at DESC`,
+        [userId]
+      );
 
-        return rows.map((r) => ({
-          id: r.id,
-          userId: r.user_id,
-          category: (r.category === 'weak_subject' || r.category === 'habit' || r.category === 'preference') ? r.category : 'weak_subject',
-          summary: r.summary,
-          createdAt: r.created_at ? r.created_at.toISOString?.() || String(r.created_at) : (r.updated_at ? r.updated_at.toISOString?.() || String(r.updated_at) : new Date().toISOString()),
-        }));
-      } catch {}
+      return rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        category: r.category,
+        summary: r.summary,
+        createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+      }));
     }
 
     return this.demoMemories.get(userId) || [];
@@ -298,13 +464,11 @@ export class JamiRepository {
 
   public async deleteMemory(userId: string, memoryId: string): Promise<boolean> {
     if (db.isHealthy()) {
-      try {
-        const res = await db.execute(
-          `UPDATE jami_memory_summaries SET is_active = 0 WHERE id = ? AND user_id = ?`,
-          [memoryId, userId]
-        );
-        return res?.affectedRows > 0;
-      } catch {}
+      const res = await db.execute(
+        `DELETE FROM jami_memory_summaries WHERE id = ? AND user_id = ?`,
+        [memoryId, userId]
+      );
+      return (res?.affectedRows || 0) > 0;
     }
 
     const list = this.demoMemories.get(userId) || [];
@@ -313,9 +477,12 @@ export class JamiRepository {
     return true;
   }
 
-  public seedDemo(userId: string, prefs: JamiPreferences, memories: JamiMemorySummary[]) {
+  public seedDemo(userId: string, prefs: JamiPreferences, memories: JamiMemorySummary[], messages?: JamiMessageItem[]) {
     this.demoPreferences.set(userId, prefs);
     this.demoMemories.set(userId, [...memories]);
+    if (messages) {
+      this.demoMessages.set(userId, [...messages]);
+    }
   }
 }
 

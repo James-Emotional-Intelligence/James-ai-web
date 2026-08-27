@@ -32,22 +32,22 @@ export const MODULES_CONFIG: ModuleDefinition[] = [
     description: 'Thời khóa biểu, lịch bận & tối ưu thời gian học',
   },
   {
-    id: 'tasks',
-    order: 2,
-    name: 'CHI TIẾT CÔNG VIỆC',
-    shortName: 'Công việc',
-    path: '/tasks',
-    icon: CheckSquare,
-    description: 'Danh sách nhiệm vụ & hướng dẫn chia nhỏ từng bước',
-  },
-  {
     id: 'today',
-    order: 3,
+    order: 2,
     name: 'HỌC TẬP HÔM NAY',
     shortName: 'Hôm nay',
     path: '/today',
     icon: Sparkles,
     description: 'Tổng quan tiến độ & Hẹn giờ tập trung',
+  },
+  {
+    id: 'tasks',
+    order: 3,
+    name: 'CHI TIẾT CÔNG VIỆC',
+    shortName: 'Công việc',
+    path: '/tasks',
+    icon: CheckSquare,
+    description: 'Danh sách nhiệm vụ & hướng dẫn chia nhỏ từng bước',
   },
   {
     id: 'jami',
@@ -68,22 +68,22 @@ export const MODULES_CONFIG: ModuleDefinition[] = [
     description: 'Lộ trình D-14, D-7 & Đề luyện tập AI',
   },
   {
-    id: 'reports',
-    order: 6,
-    name: 'BÁO CÁO HỌC TẬP',
-    shortName: 'Báo cáo',
-    path: '/reports',
-    icon: BarChart3,
-    description: 'Thống kê tổng phút tập trung & phân tích xu hướng',
-  },
-  {
     id: 'materials',
-    order: 7,
+    order: 6,
     name: 'KHO TÀI LIỆU',
     shortName: 'Tài liệu',
     path: '/materials',
     icon: FolderArchive,
     description: 'Lưu trữ tài liệu học & trích xuất AI',
+  },
+  {
+    id: 'reports',
+    order: 7,
+    name: 'BÁO CÁO HỌC TẬP',
+    shortName: 'Báo cáo',
+    path: '/reports',
+    icon: BarChart3,
+    description: 'Thống kê tổng phút tập trung & phân tích xu hướng',
   },
   {
     id: 'notifications',
@@ -97,5 +97,5 @@ export const MODULES_CONFIG: ModuleDefinition[] = [
   },
 ];
 
-export const PRIMARY_NAV_MODULES = MODULES_CONFIG.slice(0, 4);
+export const PRIMARY_NAV_MODULES = MODULES_CONFIG;
 export const SECONDARY_NAV_MODULES = MODULES_CONFIG.slice(4, 8);

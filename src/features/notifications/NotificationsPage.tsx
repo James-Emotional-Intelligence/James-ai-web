@@ -6,96 +6,310 @@ import {
   AlertTriangle,
   Check,
   RefreshCw,
+  Sliders,
+  Trash2,
+  Calendar,
+  BookOpen,
+  Volume2,
+  VolumeX,
+  Moon,
+  ShieldCheck,
+  CheckCircle2,
+  AlertCircle,
+  X,
+  ExternalLink,
 } from 'lucide-react';
-import { api } from '../../lib/api-client';
-import { NotificationItem } from '../../../shared/types';
+import { useNotifications } from '../../context/NotificationContext';
+import { NotificationItem, NotificationType } from '../../../shared/types';
 import { useNavigate } from 'react-router-dom';
+
+type FilterTab = 'all' | 'unread' | 'class' | 'exam' | 'task';
 
 export const NotificationsPage: React.FC = () => {
   const navigate = useNavigate();
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    notifications,
+    unreadCount,
+    preferences,
+    isLoading,
+    isPreferencesLoading,
+    error,
+    hasMore,
+    fetchNotifications,
+    markAsRead,
+    markAllAsRead,
+    deleteNotification,
+    updatePreferences,
+  } = useNotifications();
 
-  const fetchNotifications = async () => {
-    setLoading(true);
-    try {
-      const res = await api.getNotifications();
-      setNotifications(res.notifications);
-    } catch {}
-    setLoading(false);
-  };
+  const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsSuccess, setSettingsSuccess] = useState(false);
+
+  // Settings local draft state
+  const [draftPrefs, setDraftPrefs] = useState({
+    upcomingClass: true,
+    upcomingExam: true,
+    incompleteTask: true,
+    soundEnabled: true,
+    classLeadMinutes: 15,
+    taskLeadMinutes: 30,
+    examLeadDays: 1,
+    quietHoursStart: '22:30',
+    quietHoursEnd: '06:30',
+    inAppEnabled: true,
+    webPushEnabled: false,
+  });
 
   useEffect(() => {
-    fetchNotifications();
-  }, []);
+    if (preferences) {
+      setDraftPrefs({
+        upcomingClass: preferences.upcomingClass,
+        upcomingExam: preferences.upcomingExam,
+        incompleteTask: preferences.incompleteTask,
+        soundEnabled: preferences.soundEnabled,
+        classLeadMinutes: preferences.classLeadMinutes || 15,
+        taskLeadMinutes: preferences.taskLeadMinutes || 30,
+        examLeadDays: preferences.examLeadDays || 1,
+        quietHoursStart: preferences.quietHoursStart || '22:30',
+        quietHoursEnd: preferences.quietHoursEnd || '06:30',
+        inAppEnabled: preferences.inAppEnabled,
+        webPushEnabled: preferences.webPushEnabled,
+      });
+    }
+  }, [preferences]);
 
-  const markAllAsRead = async () => {
-    try {
-      await api.markAllNotificationsRead();
-      setNotifications(notifications.map((n) => ({ ...n, status: 'read' })));
-    } catch {}
-  };
+  // Tab change handler
+  useEffect(() => {
+    let typeParam: string | undefined = undefined;
+    let statusParam: string | undefined = undefined;
+
+    if (activeTab === 'unread') {
+      statusParam = 'unread';
+    } else if (activeTab === 'class') {
+      typeParam = 'upcoming_class';
+    } else if (activeTab === 'exam') {
+      typeParam = 'upcoming_exam';
+    } else if (activeTab === 'task') {
+      typeParam = 'incomplete_task';
+    }
+
+    fetchNotifications(true, typeParam, statusParam);
+  }, [activeTab, fetchNotifications]);
 
   const handleNotificationClick = async (n: NotificationItem) => {
     if (n.status === 'unread') {
-      try {
-        await api.markNotificationRead(n.id);
-        setNotifications(notifications.map((item) => (item.id === n.id ? { ...item, status: 'read' } : item)));
-      } catch {}
+      await markAsRead(n.id);
     }
     if (n.actionUrl) {
       navigate(n.actionUrl);
     }
   };
 
-  const getIcon = (type: string) => {
+  const handleSavePreferences = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const ok = await updatePreferences(draftPrefs);
+    if (ok) {
+      setSettingsSuccess(true);
+      setTimeout(() => {
+        setSettingsSuccess(false);
+        setIsSettingsOpen(false);
+      }, 1500);
+    }
+  };
+
+  const formatNotificationTime = (dateStr?: string) => {
+    if (!dateStr) return 'Vừa xong';
+    try {
+      const date = new Date(dateStr);
+      const now = new Date();
+      const isToday =
+        date.getDate() === now.getDate() &&
+        date.getMonth() === now.getMonth() &&
+        date.getFullYear() === now.getFullYear();
+
+      const timeFormatted = date.toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+
+      if (isToday) {
+        return `Hôm nay, ${timeFormatted}`;
+      }
+
+      const dateFormatted = date.toLocaleDateString('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+      });
+      return `${dateFormatted}, ${timeFormatted}`;
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const getIcon = (type: NotificationType) => {
     switch (type) {
-      case 'session_upcoming':
       case 'upcoming_class':
-        return <Clock className="w-4 h-4 text-[#22C55E]" />;
-      case 'exam_countdown':
+        return <Clock className="w-5 h-5 text-[#22C55E]" />;
       case 'upcoming_exam':
-        return <GraduationCap className="w-4 h-4 text-purple-400" />;
-      case 'task_missed':
+        return <GraduationCap className="w-5 h-5 text-purple-400" />;
+      case 'task_due':
       case 'incomplete_task':
-        return <AlertTriangle className="w-4 h-4 text-amber-400" />;
+      case 'task_overdue':
+        return <AlertTriangle className="w-5 h-5 text-amber-400" />;
+      case 'focus_upcoming':
+        return <BookOpen className="w-5 h-5 text-blue-400" />;
       default:
-        return <Bell className="w-4 h-4 text-[#86EFAC]" />;
+        return <Bell className="w-5 h-5 text-[#86EFAC]" />;
+    }
+  };
+
+  const getCategoryBadge = (type: NotificationType) => {
+    switch (type) {
+      case 'upcoming_class':
+        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/30">Lịch học</span>;
+      case 'upcoming_exam':
+        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-950/60 text-purple-300 border border-purple-800/40">Kỳ thi</span>;
+      case 'task_due':
+      case 'incomplete_task':
+        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-950/60 text-amber-300 border border-amber-800/40">Nhiệm vụ</span>;
+      case 'task_overdue':
+        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-950/60 text-rose-300 border border-rose-800/40">Quá hạn</span>;
+      default:
+        return <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#101A13] text-[#A9B8AE]">Hệ thống</span>;
     }
   };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
-      <div className="bg-[#0B120D] p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-[#0B120D] p-5 sm:p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-black text-[#F3FAF5] flex items-center gap-2">
+          <h1 className="text-lg sm:text-xl font-black text-[#F3FAF5] flex items-center gap-2.5">
             <Bell className="w-6 h-6 text-[#22C55E]" />
             <span>Trung Tâm Thông Báo & Nhắc Nhở</span>
+            {unreadCount > 0 && (
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-[#22C55E] text-[#050806] shadow-sm">
+                {unreadCount} chưa đọc
+              </span>
+            )}
           </h1>
-          <p className="text-xs text-[#A9B8AE] mt-0.5">
-            Nhắc lịch học sắp tới, kỳ thi quan trọng và nhiệm vụ cần hoàn thành
+          <p className="text-xs text-[#A9B8AE] mt-1">
+            Tự động đồng bộ lịch học, nhiệm vụ cần làm & các mốc đếm ngược kỳ thi quan trọng
           </p>
         </div>
 
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] font-bold text-xs transition-colors cursor-pointer"
+            title="Cài đặt thông báo"
+          >
+            <Sliders className="w-4 h-4 text-[#22C55E]" />
+            <span className="hidden sm:inline">Cài đặt</span>
+          </button>
+
+          {unreadCount > 0 && (
+            <button
+              onClick={markAllAsRead}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] font-black text-xs transition-all shadow-md cursor-pointer"
+            >
+              <Check className="w-4 h-4" />
+              <span>Đọc tất cả</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Filter Tabs */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
         <button
-          onClick={markAllAsRead}
-          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#F3FAF5] border border-[rgba(34,197,94,0.2)] font-bold text-xs transition-colors cursor-pointer"
+          onClick={() => setActiveTab('all')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'all'
+              ? 'bg-[#16A34A] text-[#050806] shadow-md'
+              : 'bg-[#0B120D] text-[#A9B8AE] hover:text-[#F3FAF5] border border-[rgba(34,197,94,0.18)]'
+          }`}
         >
-          <Check className="w-4 h-4 text-[#22C55E]" />
-          <span>Đánh dấu đã đọc tất cả</span>
+          Tất cả
+        </button>
+        <button
+          onClick={() => setActiveTab('unread')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'unread'
+              ? 'bg-[#16A34A] text-[#050806] shadow-md'
+              : 'bg-[#0B120D] text-[#A9B8AE] hover:text-[#F3FAF5] border border-[rgba(34,197,94,0.18)]'
+          }`}
+        >
+          <span>Chưa đọc</span>
+          {unreadCount > 0 && (
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+              activeTab === 'unread' ? 'bg-[#050806] text-[#86EFAC]' : 'bg-[#14532D] text-[#86EFAC]'
+            }`}>
+              {unreadCount}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('class')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'class'
+              ? 'bg-[#16A34A] text-[#050806] shadow-md'
+              : 'bg-[#0B120D] text-[#A9B8AE] hover:text-[#F3FAF5] border border-[rgba(34,197,94,0.18)]'
+          }`}
+        >
+          Lịch học
+        </button>
+        <button
+          onClick={() => setActiveTab('exam')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'exam'
+              ? 'bg-[#16A34A] text-[#050806] shadow-md'
+              : 'bg-[#0B120D] text-[#A9B8AE] hover:text-[#F3FAF5] border border-[rgba(34,197,94,0.18)]'
+          }`}
+        >
+          Kỳ thi
+        </button>
+        <button
+          onClick={() => setActiveTab('task')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'task'
+              ? 'bg-[#16A34A] text-[#050806] shadow-md'
+              : 'bg-[#0B120D] text-[#A9B8AE] hover:text-[#F3FAF5] border border-[rgba(34,197,94,0.18)]'
+          }`}
+        >
+          Nhiệm vụ
         </button>
       </div>
 
+      {/* Error Alert */}
+      {error && (
+        <div className="p-4 bg-rose-950/40 border border-rose-800 rounded-2xl text-rose-300 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={() => fetchNotifications(true)}
+            className="px-3 py-1 bg-rose-900 text-white font-bold rounded-lg cursor-pointer"
+          >
+            Thử lại
+          </button>
+        </div>
+      )}
+
       {/* Notification Items List */}
-      {loading ? (
-        <div className="p-12 text-center text-xs text-[#A9B8AE] flex items-center justify-center gap-2">
-          <RefreshCw className="w-4 h-4 animate-spin text-[#22C55E]" />
-          <span>Đang tải thông báo...</span>
+      {isLoading && notifications.length === 0 ? (
+        <div className="p-16 text-center text-xs text-[#A9B8AE] flex items-center justify-center gap-2.5">
+          <RefreshCw className="w-5 h-5 animate-spin text-[#22C55E]" />
+          <span>Đang đồng bộ thông báo mới nhất...</span>
         </div>
       ) : notifications.length === 0 ? (
-        <div className="p-12 text-center bg-[#0B120D] rounded-3xl border border-[rgba(34,197,94,0.2)] text-xs text-[#A9B8AE]">
-          Không có thông báo mới nào.
+        <div className="p-16 text-center bg-[#0B120D] rounded-3xl border border-[rgba(34,197,94,0.2)] text-xs text-[#A9B8AE] space-y-2">
+          <CheckCircle2 className="w-8 h-8 text-[#22C55E] mx-auto opacity-75" />
+          <p className="font-bold text-sm text-[#F3FAF5]">Không có thông báo nào trong mục này</p>
+          <p className="text-[11px]">Hệ thống sẽ tự động gửi nhắc nhở khi đến giờ học hoặc các mốc quan trọng.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -103,31 +317,229 @@ export const NotificationsPage: React.FC = () => {
             <div
               key={n.id}
               onClick={() => handleNotificationClick(n)}
-              className={`p-5 rounded-3xl border transition-all cursor-pointer flex items-start gap-4 ${
+              className={`p-4 sm:p-5 rounded-3xl border transition-all cursor-pointer flex items-start gap-3 sm:gap-4 group ${
                 n.status === 'unread'
                   ? 'bg-[#101A13] border-[#22C55E]/40 hover:border-[#22C55E] shadow-xl'
-                  : 'bg-[#0B120D] border-[rgba(34,197,94,0.18)] hover:border-[rgba(34,197,94,0.35)]'
+                  : 'bg-[#0B120D] border-[rgba(34,197,94,0.18)] hover:border-[rgba(34,197,94,0.35)] opacity-85 hover:opacity-100'
               }`}
             >
-              <div className="w-10 h-10 rounded-2xl bg-[#050806] border border-[rgba(34,197,94,0.2)] flex items-center justify-center shrink-0 shadow-sm">
+              <div className="w-10 h-10 rounded-2xl bg-[#050806] border border-[rgba(34,197,94,0.2)] flex items-center justify-center shrink-0 shadow-sm mt-0.5">
                 {getIcon(n.type)}
               </div>
 
-              <div className="flex-1 space-y-1">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-[#F3FAF5]">{n.title}</h3>
-                  <span className="text-[11px] text-[#A9B8AE]">
-                    {n.deliveredAt ? new Date(n.deliveredAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Hôm nay'}
+              <div className="flex-1 space-y-1.5 min-w-0">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    {getCategoryBadge(n.type)}
+                    <h3 className="text-xs sm:text-sm font-bold text-[#F3FAF5] truncate">{n.title}</h3>
+                  </div>
+                  <span className="text-[11px] text-[#A9B8AE] font-mono">
+                    {formatNotificationTime(n.deliveredAt || n.createdAt)}
                   </span>
                 </div>
-                <p className="text-xs text-[#A9B8AE] leading-relaxed">{n.body}</p>
+
+                <p className="text-xs text-[#A9B8AE] leading-relaxed break-words">{n.body}</p>
+
+                {n.actionUrl && (
+                  <div className="pt-1 flex items-center gap-1 text-[11px] font-bold text-[#86EFAC] group-hover:text-[#22C55E] transition-colors">
+                    <span>Xem chi tiết</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </div>
+                )}
               </div>
 
-              {n.status === 'unread' && (
-                <div className="w-2.5 h-2.5 rounded-full bg-[#22C55E] shrink-0 mt-2 ring-4 ring-[#22C55E]/20" />
-              )}
+              <div className="flex items-center gap-2 shrink-0 self-center">
+                {n.status === 'unread' && (
+                  <span
+                    className="w-2.5 h-2.5 rounded-full bg-[#22C55E] ring-4 ring-[#22C55E]/20"
+                    title="Chưa đọc"
+                  />
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteNotification(n.id);
+                  }}
+                  className="p-2 rounded-xl text-[#526356] hover:text-rose-400 hover:bg-rose-950/30 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+                  title="Xóa thông báo"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           ))}
+
+          {/* Load More Button */}
+          {hasMore && (
+            <div className="pt-2 text-center">
+              <button
+                onClick={() => fetchNotifications(false)}
+                disabled={isLoading}
+                className="px-6 py-2.5 rounded-2xl bg-[#0B120D] hover:bg-[#101A13] text-[#86EFAC] border border-[rgba(34,197,94,0.25)] font-bold text-xs transition-colors cursor-pointer"
+              >
+                {isLoading ? 'Đang tải thêm...' : 'Tải thêm thông báo'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-[rgba(34,197,94,0.15)] pb-4">
+              <div className="flex items-center gap-2">
+                <Sliders className="w-5 h-5 text-[#22C55E]" />
+                <h2 className="text-base font-black text-[#F3FAF5]">Cài Đặt Tùy Chọn Thông Báo</h2>
+              </div>
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="p-1.5 rounded-xl hover:bg-[#142219] text-[#A9B8AE] hover:text-[#F3FAF5] cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {settingsSuccess && (
+              <div className="p-3 bg-[#14532D]/40 border border-[#22C55E]/40 rounded-2xl text-[#86EFAC] text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-[#22C55E]" />
+                <span>Đã lưu tùy chọn thông báo thành công vào MySQL!</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSavePreferences} className="space-y-4 text-xs">
+              {/* Category Toggles */}
+              <div className="space-y-3 p-4 bg-[#101A13] rounded-2xl border border-[rgba(34,197,94,0.15)]">
+                <h3 className="font-bold text-[#F3FAF5] text-xs">Loại thông báo kích hoạt</h3>
+
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-[#A9B8AE]">Nhắc tiết học theo thời khóa biểu</span>
+                  <input
+                    type="checkbox"
+                    checked={draftPrefs.upcomingClass}
+                    onChange={(e) => setDraftPrefs({ ...draftPrefs, upcomingClass: e.target.checked })}
+                    className="accent-[#16A34A] w-4 h-4 cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-[#A9B8AE]">Nhắc mốc ôn thi (D-14, D-7, D-3, D-1)</span>
+                  <input
+                    type="checkbox"
+                    checked={draftPrefs.upcomingExam}
+                    onChange={(e) => setDraftPrefs({ ...draftPrefs, upcomingExam: e.target.checked })}
+                    className="accent-[#16A34A] w-4 h-4 cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-[#A9B8AE]">Nhắc nhiệm vụ bài tập đến hạn / quá hạn</span>
+                  <input
+                    type="checkbox"
+                    checked={draftPrefs.incompleteTask}
+                    onChange={(e) => setDraftPrefs({ ...draftPrefs, incompleteTask: e.target.checked })}
+                    className="accent-[#16A34A] w-4 h-4 cursor-pointer"
+                  />
+                </label>
+              </div>
+
+              {/* Lead Times */}
+              <div className="space-y-3 p-4 bg-[#101A13] rounded-2xl border border-[rgba(34,197,94,0.15)]">
+                <h3 className="font-bold text-[#F3FAF5] text-xs">Thời gian nhắc trước (Lead Time)</h3>
+
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-[#A9B8AE]">Nhắc tiết học trước:</span>
+                  <select
+                    value={draftPrefs.classLeadMinutes}
+                    onChange={(e) => setDraftPrefs({ ...draftPrefs, classLeadMinutes: Number(e.target.value) })}
+                    className="bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-xl px-3 py-1.5 text-xs font-bold cursor-pointer [&>option]:bg-[#050806] [&>option]:text-[#F3FAF5]"
+                  >
+                    <option value={5}>5 phút</option>
+                    <option value={10}>10 phút</option>
+                    <option value={15}>15 phút</option>
+                    <option value={30}>30 phút</option>
+                    <option value={45}>45 phút</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-[#A9B8AE]">Nhắc phiên học / nhiệm vụ trước:</span>
+                  <select
+                    value={draftPrefs.taskLeadMinutes}
+                    onChange={(e) => setDraftPrefs({ ...draftPrefs, taskLeadMinutes: Number(e.target.value) })}
+                    className="bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-xl px-3 py-1.5 text-xs font-bold cursor-pointer [&>option]:bg-[#050806] [&>option]:text-[#F3FAF5]"
+                  >
+                    <option value={15}>15 phút</option>
+                    <option value={30}>30 phút</option>
+                    <option value={45}>45 phút</option>
+                    <option value={60}>60 phút</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Quiet Hours */}
+              <div className="space-y-3 p-4 bg-[#101A13] rounded-2xl border border-[rgba(34,197,94,0.15)]">
+                <div className="flex items-center gap-2">
+                  <Moon className="w-4 h-4 text-purple-400" />
+                  <h3 className="font-bold text-[#F3FAF5] text-xs">Khung giờ yên tĩnh (Quiet Hours)</h3>
+                </div>
+                <p className="text-[11px] text-[#A9B8AE]">
+                  Thông báo trong khung giờ này sẽ được hoãn đến sáng hôm sau mà không bị thất lạc.
+                </p>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] text-[#A9B8AE] mb-1">Bắt đầu:</label>
+                    <input
+                      type="time"
+                      value={draftPrefs.quietHoursStart}
+                      onChange={(e) => setDraftPrefs({ ...draftPrefs, quietHoursStart: e.target.value })}
+                      className="w-full bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-xl px-3 py-1.5 text-xs font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-[#A9B8AE] mb-1">Kết thúc:</label>
+                    <input
+                      type="time"
+                      value={draftPrefs.quietHoursEnd}
+                      onChange={(e) => setDraftPrefs({ ...draftPrefs, quietHoursEnd: e.target.value })}
+                      className="w-full bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-xl px-3 py-1.5 text-xs font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* In-app & Web Push Policy */}
+              <div className="p-4 bg-[#101A13] rounded-2xl border border-[rgba(34,197,94,0.15)] space-y-2">
+                <div className="flex items-center gap-2 text-[#86EFAC] font-bold">
+                  <ShieldCheck className="w-4 h-4 text-[#22C55E]" />
+                  <span>Quyền riêng tư & Thông báo In-App</span>
+                </div>
+                <p className="text-[11px] text-[#A9B8AE] leading-relaxed">
+                  Thông báo trong ứng dụng luôn hoạt động độc lập và đầy đủ chức năng ngay cả khi bạn từ chối quyền Web Push của trình duyệt.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#A9B8AE] font-bold text-xs cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isPreferencesLoading}
+                  className="px-5 py-2 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] font-black text-xs transition-all shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isPreferencesLoading ? 'Đang lưu...' : 'Lưu tùy chọn'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

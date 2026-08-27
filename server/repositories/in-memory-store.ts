@@ -264,7 +264,7 @@ export class InMemoryStore {
       state: 'running',
       startedAt: now.toISOString(),
       accumulatedPauseSeconds: 0,
-      targetEndTime: new Date(now.getTime() + minutes * 60 * 1000).toISOString(),
+      targetEndAt: new Date(now.getTime() + minutes * 60 * 1000).toISOString(),
     };
     this.currentFocusSession = session;
 
