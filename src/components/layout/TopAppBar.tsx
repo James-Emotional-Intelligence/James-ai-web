@@ -59,7 +59,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
 
   return (
     <header className="w-full bg-[#050806] border-b border-[rgba(34,197,94,0.25)] sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+      <div className="max-w-[1750px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         {/* Left: Brand Identity + Tagline */}
         <div className="flex items-center gap-3 min-w-0">
           <button
@@ -144,6 +144,18 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
             )}
           </Link>
 
+          {/* Admin Panel Quick Access Button */}
+          {user?.role === 'admin' && (
+            <Link
+              to="/admin"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-200 text-xs font-bold shadow-md shadow-purple-950/40 transition-colors"
+              title="Mở Bảng Quản Trị Hệ Thống"
+            >
+              <Shield className="w-3.5 h-3.5 text-purple-400" />
+              <span className="hidden sm:inline">Quản trị Admin</span>
+            </Link>
+          )}
+
           {/* User Profile Dropdown */}
           <div className="relative" ref={profileMenuRef}>
             <button
@@ -152,14 +164,22 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
               aria-expanded={isProfileMenuOpen}
               aria-label="Menu tài khoản"
             >
-              <div className="w-7 h-7 rounded-lg bg-[#14532D] text-[#86EFAC] flex items-center justify-center font-bold text-xs border border-[#22C55E]/30">
-                {displayName.charAt(0).toUpperCase()}
+              <div
+                className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs border ${
+                  user?.role === 'admin'
+                    ? 'bg-purple-950 text-purple-300 border-purple-500/40'
+                    : 'bg-[#14532D] text-[#86EFAC] border-[#22C55E]/30'
+                }`}
+              >
+                {user?.role === 'admin' ? <Shield className="w-4 h-4 text-purple-400" /> : displayName.charAt(0).toUpperCase()}
               </div>
               <div className="hidden sm:flex flex-col text-left">
                 <span className="text-xs font-bold text-[#F3FAF5] leading-tight truncate max-w-[100px]">
                   {displayName}
                 </span>
-                <span className="text-[10px] text-[#A9B8AE] leading-tight">Học sinh</span>
+                <span className="text-[10px] text-[#A9B8AE] leading-tight">
+                  {user?.role === 'admin' ? 'Quản trị viên' : 'Học sinh'}
+                </span>
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-[#A9B8AE] hidden sm:block" />
             </button>
@@ -168,11 +188,28 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
             {isProfileMenuOpen && (
               <div className="absolute right-0 mt-2 w-56 bg-[#0B120D] border border-[rgba(34,197,94,0.25)] rounded-2xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
                 <div className="p-2.5 border-b border-[rgba(34,197,94,0.15)]">
-                  <div className="text-xs font-bold text-[#F3FAF5]">{user?.displayName || displayName}</div>
+                  <div className="text-xs font-bold text-[#F3FAF5] flex items-center justify-between">
+                    <span>{user?.displayName || displayName}</span>
+                    {user?.role === 'admin' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-500/30 font-bold">
+                        ADMIN
+                      </span>
+                    )}
+                  </div>
                   <div className="text-[11px] text-[#A9B8AE] truncate">{user?.email || 'Học sinh JAMI'}</div>
                 </div>
 
                 <div className="py-1 space-y-0.5">
+                  {user?.role === 'admin' && (
+                    <Link
+                      to="/admin"
+                      onClick={() => setIsProfileMenuOpen(false)}
+                      className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold text-purple-300 bg-purple-950/40 hover:bg-purple-900/60 border border-purple-500/30 transition-colors"
+                    >
+                      <Shield className="w-4 h-4 text-purple-400" />
+                      <span>Bảng điều khiển Admin</span>
+                    </Link>
+                  )}
                   <Link
                     to="/settings"
                     onClick={() => setIsProfileMenuOpen(false)}

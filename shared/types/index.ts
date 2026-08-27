@@ -8,7 +8,8 @@ export interface User {
   locale: string;
   timezone: string;
   ageBand: string;
-  status: 'active' | 'inactive';
+  role?: 'user' | 'admin';
+  status: 'active' | 'inactive' | 'banned' | 'deleted';
   createdAt: string;
 }
 

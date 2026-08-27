@@ -47,6 +47,19 @@ var DEMO_USER = {
   locale: "vi-VN",
   timezone: "Asia/Ho_Chi_Minh",
   ageBand: "14-15",
+  role: "user",
+  status: "active",
+  createdAt: "2026-08-20T00:00:00.000Z"
+};
+var ADMIN_USER = {
+  id: "usr_admin_james_01",
+  email: "james.admin@gmail.com",
+  displayName: "James Admin",
+  preferredName: "Admin",
+  locale: "vi-VN",
+  timezone: "Asia/Ho_Chi_Minh",
+  ageBand: "adult",
+  role: "admin",
   status: "active",
   createdAt: "2026-08-20T00:00:00.000Z"
 };
@@ -551,9 +564,7 @@ var UserRepository = class _UserRepository {
     this.demoUsers = /* @__PURE__ */ new Map();
     this.demoProfiles = /* @__PURE__ */ new Map();
     this.demoResetTokens = /* @__PURE__ */ new Map();
-    if (!isProduction && env.DEMO_LOGIN_ENABLED) {
-      this.seedDemoUserMemory();
-    }
+    this.seedDemoUserMemory();
   }
   static getInstance() {
     if (!_UserRepository.instance) {
@@ -562,16 +573,39 @@ var UserRepository = class _UserRepository {
     return _UserRepository.instance;
   }
   seedDemoUserMemory() {
-    const salt = "demo_salt_seed_minh_1234";
-    const computedHash = import_crypto2.default.createHash("sha256").update("Demo1234!" + salt).digest("hex");
+    const demoSalt = "demo_salt_seed_minh_1234";
+    const demoHash = import_crypto2.default.createHash("sha256").update("Demo1234!" + demoSalt).digest("hex");
     const demoStored = {
       ...DEMO_USER,
-      passwordHash: computedHash,
-      passwordSalt: salt,
+      role: "user",
+      passwordHash: demoHash,
+      passwordSalt: demoSalt,
       passwordScheme: "sha256"
     };
     this.demoUsers.set(DEMO_USER.email.toLowerCase(), demoStored);
     this.demoProfiles.set(DEMO_USER.id, { ...DEMO_PROFILE });
+    const adminSalt = "admin_salt_seed_james_14";
+    const adminHash = import_crypto2.default.createHash("sha256").update("Minhtriet14" + adminSalt).digest("hex");
+    const adminStored = {
+      ...ADMIN_USER,
+      role: "admin",
+      passwordHash: adminHash,
+      passwordSalt: adminSalt,
+      passwordScheme: "sha256"
+    };
+    this.demoUsers.set(ADMIN_USER.email.toLowerCase(), adminStored);
+    this.demoProfiles.set(ADMIN_USER.id, {
+      userId: ADMIN_USER.id,
+      gradeLevel: 12,
+      schoolName: "Ban Qu\u1EA3n Tr\u1ECB JAMI AI",
+      goals: ["Qu\u1EA3n tr\u1ECB h\u1EC7 th\u1ED1ng, h\u1ED7 tr\u1EE3 ng\u01B0\u1EDDi d\xF9ng v\xE0 gi\xE1m s\xE1t an to\xE0n h\u1ECDc t\u1EADp"],
+      preferredSessionMinutes: 45,
+      maxDailyStudyMinutes: 300,
+      energyPreferences: { morning: "high", afternoon: "high", evening: "high" },
+      sleepSchedule: { wakeTime: "06:00", bedTime: "23:00" },
+      mealTimes: { lunch: "12:00", dinner: "19:00" },
+      onboardingCompletedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
   }
   async hashPassword(password) {
     return PasswordHasher.hashPassword(password);
@@ -600,50 +634,75 @@ var UserRepository = class _UserRepository {
     }
   }
   async syncWithMySQL() {
-    if (isProduction || !env.DEMO_LOGIN_ENABLED || !db.isHealthy()) return;
+    if (!db.isHealthy()) return;
     try {
-      const existingDemo = await db.query("SELECT id FROM users WHERE email = ?", [DEMO_USER.email]);
       const demoUser = this.demoUsers.get(DEMO_USER.email.toLowerCase());
-      if (!demoUser) return;
-      if (existingDemo.length === 0) {
-        await db.execute(
-          `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at)
-           VALUES (?, ?, ?, ?, 'sha256', ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            demoUser.id,
-            demoUser.email,
-            demoUser.passwordHash,
-            demoUser.passwordSalt,
-            demoUser.displayName,
-            demoUser.preferredName,
-            demoUser.locale,
-            demoUser.timezone,
-            demoUser.ageBand,
-            demoUser.status,
-            /* @__PURE__ */ new Date()
-          ]
-        );
-        await db.execute(
-          `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            demoUser.id,
-            DEMO_PROFILE.gradeLevel,
-            DEMO_PROFILE.schoolName,
-            JSON.stringify(DEMO_PROFILE.goals),
-            DEMO_PROFILE.preferredSessionMinutes,
-            DEMO_PROFILE.maxDailyStudyMinutes,
-            JSON.stringify(DEMO_PROFILE.energyPreferences),
-            JSON.stringify(DEMO_PROFILE.sleepSchedule),
-            JSON.stringify(DEMO_PROFILE.mealTimes)
-          ]
-        );
-        console.log("[JAMI MySQL] Seeded demo user into MySQL.");
-      } else {
-        await db.execute(
-          `UPDATE users SET password_hash = ?, password_salt = ? WHERE email = ?`,
-          [demoUser.passwordHash, demoUser.passwordSalt, demoUser.email]
-        );
+      if (demoUser) {
+        const existingDemo = await db.query("SELECT id FROM users WHERE email = ?", [DEMO_USER.email]);
+        if (existingDemo.length === 0) {
+          await db.execute(
+            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at)
+             VALUES (?, ?, ?, ?, 'sha256', ?, ?, ?, ?, ?, 'user', ?, ?)`,
+            [
+              demoUser.id,
+              demoUser.email,
+              demoUser.passwordHash,
+              demoUser.passwordSalt,
+              demoUser.displayName,
+              demoUser.preferredName,
+              demoUser.locale,
+              demoUser.timezone,
+              demoUser.ageBand,
+              demoUser.status,
+              /* @__PURE__ */ new Date()
+            ]
+          );
+          await db.execute(
+            `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              demoUser.id,
+              DEMO_PROFILE.gradeLevel,
+              DEMO_PROFILE.schoolName,
+              JSON.stringify(DEMO_PROFILE.goals),
+              DEMO_PROFILE.preferredSessionMinutes,
+              DEMO_PROFILE.maxDailyStudyMinutes,
+              JSON.stringify(DEMO_PROFILE.energyPreferences),
+              JSON.stringify(DEMO_PROFILE.sleepSchedule),
+              JSON.stringify(DEMO_PROFILE.mealTimes)
+            ]
+          );
+          console.log("[JAMI MySQL] Seeded demo student into MySQL.");
+        }
+      }
+      const adminUser = this.demoUsers.get(ADMIN_USER.email.toLowerCase());
+      if (adminUser) {
+        const existingAdmin = await db.query("SELECT id FROM users WHERE email = ?", [ADMIN_USER.email]);
+        const { passwordHash: adminScryptHash, passwordSalt: adminScryptSalt } = await this.hashPassword("Minhtriet14");
+        if (existingAdmin.length === 0) {
+          await db.execute(
+            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at)
+             VALUES (?, ?, ?, ?, 'scrypt', ?, ?, ?, ?, ?, 'admin', 'active', ?)`,
+            [
+              adminUser.id,
+              adminUser.email,
+              adminScryptHash,
+              adminScryptSalt,
+              adminUser.displayName,
+              adminUser.preferredName,
+              adminUser.locale,
+              adminUser.timezone,
+              adminUser.ageBand,
+              /* @__PURE__ */ new Date()
+            ]
+          );
+          console.log("[JAMI MySQL] Seeded admin user james.admin@gmail.com into MySQL.");
+        } else {
+          await db.execute(
+            `UPDATE users SET password_hash = ?, password_salt = ?, password_scheme = 'scrypt', role = 'admin', status = 'active' WHERE email = ?`,
+            [adminScryptHash, adminScryptSalt, ADMIN_USER.email]
+          );
+        }
       }
     } catch (err) {
       console.warn("[JAMI MySQL] User repository sync notice:", err.message);
@@ -655,7 +714,7 @@ var UserRepository = class _UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query(
-          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
            FROM users
            WHERE LOWER(email) = ?`,
           [normalizedEmail]
@@ -680,7 +739,8 @@ var UserRepository = class _UserRepository {
             locale: r.locale,
             timezone: r.timezone,
             ageBand: r.age_band,
-            status: r.status,
+            role: r.role || "user",
+            status: r.status || "active",
             createdAt: r.created_at?.toISOString?.() || String(r.created_at)
           };
         }
@@ -695,7 +755,7 @@ var UserRepository = class _UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query(
-          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
            FROM users
            WHERE id = ?`,
           [id]
@@ -720,7 +780,8 @@ var UserRepository = class _UserRepository {
             locale: r.locale,
             timezone: r.timezone,
             ageBand: r.age_band,
-            status: r.status,
+            role: r.role || "user",
+            status: r.status || "active",
             createdAt: r.created_at?.toISOString?.() || String(r.created_at)
           };
         }
@@ -999,6 +1060,155 @@ var UserRepository = class _UserRepository {
       if (demo) demo.usedAt = Date.now();
       return true;
     }
+  }
+  // ==========================================
+  // Admin User Management Operations
+  // ==========================================
+  async getAllUsers(params) {
+    const search = params?.search?.trim().toLowerCase() || "";
+    const statusFilter = params?.status?.trim() || "";
+    if (db.isHealthy()) {
+      try {
+        let query = `
+          SELECT id, email, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
+          FROM users
+          WHERE 1=1
+        `;
+        const queryArgs = [];
+        if (search) {
+          query += ` AND (LOWER(email) LIKE ? OR LOWER(display_name) LIKE ? OR LOWER(preferred_name) LIKE ?)`;
+          const sParam = `%${search}%`;
+          queryArgs.push(sParam, sParam, sParam);
+        }
+        if (statusFilter && statusFilter !== "all") {
+          query += ` AND status = ?`;
+          queryArgs.push(statusFilter);
+        }
+        query += ` ORDER BY created_at DESC`;
+        const rows = await db.query(query, queryArgs);
+        const users = rows.map((r) => ({
+          id: r.id,
+          email: r.email,
+          displayName: r.display_name,
+          preferredName: r.preferred_name,
+          locale: r.locale,
+          timezone: r.timezone,
+          ageBand: r.age_band,
+          role: r.role || "user",
+          status: r.status || "active",
+          createdAt: r.created_at?.toISOString?.() || String(r.created_at)
+        }));
+        const allStats = await db.query(`
+          SELECT 
+            COUNT(*) as total_count,
+            SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+            SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) as banned_count,
+            SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END) as admin_count
+          FROM users
+        `);
+        const statsRow = allStats[0] || {};
+        return {
+          users,
+          totalCount: Number(statsRow.total_count) || users.length,
+          activeCount: Number(statsRow.active_count) || 0,
+          bannedCount: Number(statsRow.banned_count) || 0,
+          adminCount: Number(statsRow.admin_count) || 0
+        };
+      } catch (err) {
+        if (isProduction) throw err;
+      }
+    }
+    const allUsers = Array.from(this.demoUsers.values()).map((u) => ({
+      id: u.id,
+      email: u.email,
+      displayName: u.displayName,
+      preferredName: u.preferredName,
+      locale: u.locale,
+      timezone: u.timezone,
+      ageBand: u.ageBand,
+      role: u.role || "user",
+      status: u.status || "active",
+      createdAt: u.createdAt
+    }));
+    const totalCount = allUsers.length;
+    const activeCount = allUsers.filter((u) => u.status === "active").length;
+    const bannedCount = allUsers.filter((u) => u.status === "banned").length;
+    const adminCount = allUsers.filter((u) => u.role === "admin").length;
+    let filtered = allUsers;
+    if (search) {
+      filtered = filtered.filter(
+        (u) => u.email.toLowerCase().includes(search) || u.displayName.toLowerCase().includes(search) || u.preferredName.toLowerCase().includes(search)
+      );
+    }
+    if (statusFilter && statusFilter !== "all") {
+      filtered = filtered.filter((u) => u.status === statusFilter);
+    }
+    return {
+      users: filtered,
+      totalCount,
+      activeCount,
+      bannedCount,
+      adminCount
+    };
+  }
+  async setUserStatus(userId, status) {
+    if (db.isHealthy()) {
+      await db.execute(`UPDATE users SET status = ?, updated_at = NOW(3) WHERE id = ?`, [status, userId]);
+      if (status === "banned") {
+        try {
+          await db.execute(`UPDATE refresh_sessions SET revoked_at = NOW(3) WHERE user_id = ?`, [userId]);
+        } catch {
+        }
+      }
+    }
+    for (const u of this.demoUsers.values()) {
+      if (u.id === userId) {
+        u.status = status;
+      }
+    }
+    const updated = await this.findById(userId);
+    if (!updated) {
+      throw new Error("Ng\u01B0\u1EDDi d\xF9ng kh\xF4ng t\u1ED3n t\u1EA1i.");
+    }
+    const { passwordHash, passwordSalt, passwordScheme, ...safeUser } = updated;
+    return safeUser;
+  }
+  async setUserRole(userId, role) {
+    if (db.isHealthy()) {
+      await db.execute(`UPDATE users SET role = ?, updated_at = NOW(3) WHERE id = ?`, [role, userId]);
+    }
+    for (const u of this.demoUsers.values()) {
+      if (u.id === userId) {
+        u.role = role;
+      }
+    }
+    const updated = await this.findById(userId);
+    if (!updated) {
+      throw new Error("Ng\u01B0\u1EDDi d\xF9ng kh\xF4ng t\u1ED3n t\u1EA1i.");
+    }
+    const { passwordHash, passwordSalt, passwordScheme, ...safeUser } = updated;
+    return safeUser;
+  }
+  async deleteUser(userId) {
+    if (db.isHealthy()) {
+      try {
+        await db.withTransaction(async (conn) => {
+          await conn.execute(`DELETE FROM student_profiles WHERE user_id = ?`, [userId]);
+          await conn.execute(`DELETE FROM refresh_sessions WHERE user_id = ?`, [userId]);
+          await conn.execute(`DELETE FROM consent_records WHERE user_id = ?`, [userId]);
+          await conn.execute(`DELETE FROM users WHERE id = ?`, [userId]);
+        });
+      } catch (err) {
+        await db.execute(`DELETE FROM users WHERE id = ?`, [userId]);
+      }
+    }
+    for (const [email, u] of this.demoUsers.entries()) {
+      if (u.id === userId) {
+        this.demoUsers.delete(email);
+        this.demoProfiles.delete(userId);
+      }
+    }
+    return true;
   }
 };
 var userRepo = UserRepository.getInstance();
@@ -2794,8 +3004,7 @@ var DeterministicScheduler = class {
       const maxSession = task.maxSessionMinutes || 60;
       const isSplittable = task.splittable || taskMinutes > maxSession;
       const candidates = [];
-      for (let i = 0; i < availableSlots.length; i++) {
-        const slot = availableSlots[i];
+      for (const slot of availableSlots) {
         const dayMinutes = dailyStudyMinutesMap.get(slot.dayKey) || 0;
         if (dayMinutes >= maxDailyMinutes) {
           continue;
@@ -2809,7 +3018,7 @@ var DeterministicScheduler = class {
         }
         const { score, reasons } = this.scoreSlot(task, slot, profile, preferredWindows, timezone);
         if (score > 0) {
-          candidates.push({ slotIndex: i, score, reasons });
+          candidates.push({ slot, score, reasons });
         }
       }
       candidates.sort((a, b) => b.score - a.score);
@@ -2829,11 +3038,11 @@ var DeterministicScheduler = class {
       const totalParts = isSplittable && taskMinutes > maxSession ? Math.ceil(taskMinutes / maxSession) : 1;
       while (remainingTaskMinutes > 0 && candidates.length > 0) {
         const best = candidates.shift();
-        const slot = availableSlots[best.slotIndex];
-        if (!slot) continue;
+        const slot = best.slot;
+        if (!availableSlots.includes(slot)) continue;
         const dayMinutes = dailyStudyMinutesMap.get(slot.dayKey) || 0;
         const availableDailyCapacity = Math.max(0, maxDailyMinutes - dayMinutes);
-        if (availableDailyCapacity < minSession) {
+        if (availableDailyCapacity < minSession || slot.durationMinutes < minSession) {
           continue;
         }
         const allocMinutes = Math.min(
@@ -2842,7 +3051,7 @@ var DeterministicScheduler = class {
           maxSession,
           availableDailyCapacity
         );
-        if (allocMinutes < minSession && remainingTaskMinutes >= minSession) {
+        if (allocMinutes < minSession) {
           continue;
         }
         const proposedStart = new Date(slot.start);
@@ -2862,9 +3071,12 @@ var DeterministicScheduler = class {
         const bufferMs = restBufferMinutes * 60 * 1e3;
         const newStart = new Date(proposedEnd.getTime() + bufferMs);
         slot.start = newStart;
-        slot.durationMinutes = Math.floor((slot.end.getTime() - newStart.getTime()) / (60 * 1e3));
+        slot.durationMinutes = Math.max(0, Math.floor((slot.end.getTime() - newStart.getTime()) / (60 * 1e3)));
         if (slot.durationMinutes < minSession) {
-          availableSlots.splice(best.slotIndex, 1);
+          const slotIdx = availableSlots.indexOf(slot);
+          if (slotIdx !== -1) {
+            availableSlots.splice(slotIdx, 1);
+          }
         }
         remainingTaskMinutes -= allocMinutes;
         partIndex++;
@@ -9573,20 +9785,35 @@ async function requireAuth(req, res, next) {
   req.session = session;
   next();
 }
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   const adminKey = req.headers["x-admin-key"];
-  if (!env.ADMIN_SECRET_KEY || !adminKey || typeof adminKey !== "string") {
-    return sendError(req, res, 403, "FORBIDDEN", "Y\xEAu c\u1EA7u quy\u1EC1n qu\u1EA3n tr\u1ECB vi\xEAn");
-  }
-  try {
-    const keyBuf = Buffer.from(adminKey);
-    const expectedBuf = Buffer.from(env.ADMIN_SECRET_KEY);
-    if (keyBuf.length === expectedBuf.length && import_crypto20.default.timingSafeEqual(keyBuf, expectedBuf)) {
-      return next();
+  if (env.ADMIN_SECRET_KEY && adminKey && typeof adminKey === "string") {
+    try {
+      const keyBuf = Buffer.from(adminKey);
+      const expectedBuf = Buffer.from(env.ADMIN_SECRET_KEY);
+      if (keyBuf.length === expectedBuf.length && import_crypto20.default.timingSafeEqual(keyBuf, expectedBuf)) {
+        return next();
+      }
+    } catch {
     }
-  } catch {
   }
-  return sendError(req, res, 403, "FORBIDDEN", "Y\xEAu c\u1EA7u quy\u1EC1n qu\u1EA3n tr\u1ECB vi\xEAn");
+  const sessionToken = getSessionToken(req);
+  if (sessionToken) {
+    try {
+      const session = await authService2.getSession(sessionToken);
+      if (session) {
+        const user = await userRepo3.findById(session.userId);
+        if (user && user.status === "active" && user.role === "admin") {
+          req.user = user;
+          req.userId = user.id;
+          req.session = session;
+          return next();
+        }
+      }
+    } catch {
+    }
+  }
+  return sendError(req, res, 403, "FORBIDDEN", "Y\xEAu c\u1EA7u quy\u1EC1n qu\u1EA3n tr\u1ECB vi\xEAn (Admin)");
 }
 var authRateLimiter = createRateLimiter(60 * 1e3, 5, "auth_limit");
 apiRouter.get("/health/live", (req, res) => {
@@ -9620,6 +9847,64 @@ apiRouter.post("/admin/db-migrate", requireAdmin, asyncHandler(async (req, res) 
   } catch (err) {
     sendError(req, res, 500, "MIGRATION_ERROR", err.message);
   }
+}));
+apiRouter.get("/admin/users", requireAdmin, asyncHandler(async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q : "";
+  const status = typeof req.query.status === "string" ? req.query.status : "";
+  const result = await userRepo3.getAllUsers({ search: q, status });
+  res.json(result);
+}));
+apiRouter.post("/admin/users/:id/ban", requireAdmin, asyncHandler(async (req, res) => {
+  const userId = req.params.id;
+  const currentAdminId = req.userId;
+  if (userId === currentAdminId) {
+    return sendError(req, res, 400, "CANNOT_BAN_SELF", "Kh\xF4ng th\u1EC3 t\u1EF1 kh\xF3a t\xE0i kho\u1EA3n qu\u1EA3n tr\u1ECB vi\xEAn c\u1EE7a ch\xEDnh m\xECnh.");
+  }
+  const targetUser = await userRepo3.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, "USER_NOT_FOUND", "Ng\u01B0\u1EDDi d\xF9ng kh\xF4ng t\u1ED3n t\u1EA1i.");
+  }
+  const updated = await userRepo3.setUserStatus(userId, "banned");
+  res.json({ success: true, user: updated, message: `\u0110\xE3 kh\xF3a t\xE0i kho\u1EA3n ${updated.email} th\xE0nh c\xF4ng.` });
+}));
+apiRouter.post("/admin/users/:id/unban", requireAdmin, asyncHandler(async (req, res) => {
+  const userId = req.params.id;
+  const targetUser = await userRepo3.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, "USER_NOT_FOUND", "Ng\u01B0\u1EDDi d\xF9ng kh\xF4ng t\u1ED3n t\u1EA1i.");
+  }
+  const updated = await userRepo3.setUserStatus(userId, "active");
+  res.json({ success: true, user: updated, message: `\u0110\xE3 m\u1EDF kh\xF3a t\xE0i kho\u1EA3n ${updated.email} th\xE0nh c\xF4ng.` });
+}));
+apiRouter.post("/admin/users/:id/role", requireAdmin, asyncHandler(async (req, res) => {
+  const userId = req.params.id;
+  const { role } = req.body;
+  if (role !== "admin" && role !== "user") {
+    return sendError(req, res, 400, "INVALID_ROLE", "Vai tr\xF2 ch\u1EC9 c\xF3 th\u1EC3 l\xE0 admin ho\u1EB7c user.");
+  }
+  const currentAdminId = req.userId;
+  if (userId === currentAdminId && role !== "admin") {
+    return sendError(req, res, 400, "CANNOT_DEMOTE_SELF", "Kh\xF4ng th\u1EC3 t\u1EF1 g\u1EE1 b\u1ECF quy\u1EC1n admin c\u1EE7a ch\xEDnh m\xECnh.");
+  }
+  const targetUser = await userRepo3.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, "USER_NOT_FOUND", "Ng\u01B0\u1EDDi d\xF9ng kh\xF4ng t\u1ED3n t\u1EA1i.");
+  }
+  const updated = await userRepo3.setUserRole(userId, role);
+  res.json({ success: true, user: updated, message: `\u0110\xE3 c\u1EADp nh\u1EADt quy\u1EC1n th\xE0nh c\xF4ng.` });
+}));
+apiRouter.delete("/admin/users/:id", requireAdmin, asyncHandler(async (req, res) => {
+  const userId = req.params.id;
+  const currentAdminId = req.userId;
+  if (userId === currentAdminId) {
+    return sendError(req, res, 400, "CANNOT_DELETE_SELF", "Kh\xF4ng th\u1EC3 t\u1EF1 x\xF3a t\xE0i kho\u1EA3n qu\u1EA3n tr\u1ECB vi\xEAn c\u1EE7a ch\xEDnh m\xECnh.");
+  }
+  const targetUser = await userRepo3.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, "USER_NOT_FOUND", "Ng\u01B0\u1EDDi d\xF9ng kh\xF4ng t\u1ED3n t\u1EA1i.");
+  }
+  await userRepo3.deleteUser(userId);
+  res.json({ success: true, message: `\u0110\xE3 x\xF3a t\xE0i kho\u1EA3n ${targetUser.email} th\xE0nh c\xF4ng.` });
 }));
 apiRouter.get("/auth/session", asyncHandler(async (req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");

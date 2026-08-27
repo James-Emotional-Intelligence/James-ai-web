@@ -686,4 +686,30 @@ export const api = {
     fetchJson<{ preferences: any }>('/jami/preferences', { method: 'PATCH', body: JSON.stringify(prefs) }),
   deleteJamiMemory: (id: string) => fetchJson<{ success: boolean }>(`/jami/memory/${id}`, { method: 'DELETE' }),
   exportMyData: () => fetchJson<any>('/me/export', { method: 'POST' }),
+
+  // Admin User Management
+  getAdminUsers: (params?: { q?: string; status?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.q) query.set('q', params.q);
+    if (params?.status) query.set('status', params.status);
+    const qs = query.toString();
+    return fetchJson<{
+      users: User[];
+      totalCount: number;
+      activeCount: number;
+      bannedCount: number;
+      adminCount: number;
+    }>(`/admin/users${qs ? `?${qs}` : ''}`);
+  },
+  banAdminUser: (userId: string) =>
+    fetchJson<{ success: boolean; user: User; message: string }>(`/admin/users/${userId}/ban`, { method: 'POST' }),
+  unbanAdminUser: (userId: string) =>
+    fetchJson<{ success: boolean; user: User; message: string }>(`/admin/users/${userId}/unban`, { method: 'POST' }),
+  updateAdminUserRole: (userId: string, role: 'admin' | 'user') =>
+    fetchJson<{ success: boolean; user: User; message: string }>(`/admin/users/${userId}/role`, {
+      method: 'POST',
+      body: JSON.stringify({ role }),
+    }),
+  deleteAdminUser: (userId: string) =>
+    fetchJson<{ success: boolean; message: string }>(`/admin/users/${userId}`, { method: 'DELETE' }),
 };

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { X, Mic, Settings, LogOut } from 'lucide-react';
+import { X, Mic, Settings, LogOut, Shield } from 'lucide-react';
 import { MODULES_CONFIG } from '../../config/modules';
 import { User, StudentProfile } from '../../../shared/types';
 
@@ -108,7 +108,17 @@ export const MobileTopMenu: React.FC<MobileTopMenuProps> = ({
         </div>
 
         {/* Profile & Settings Bottom Section */}
-        <div className="p-4 bg-[#080D09] border-t border-[rgba(34,197,94,0.18)] flex items-center justify-between gap-2">
+        <div className="p-4 bg-[#080D09] border-t border-[rgba(34,197,94,0.18)] flex flex-wrap items-center justify-between gap-2">
+          {user?.role === 'admin' && (
+            <Link
+              to="/admin"
+              onClick={onClose}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold text-purple-300 bg-purple-950/60 border border-purple-500/40 hover:bg-purple-900/80"
+            >
+              <Shield className="w-4 h-4 text-purple-400" />
+              <span>Quản trị Admin</span>
+            </Link>
+          )}
           <Link
             to="/settings"
             onClick={onClose}

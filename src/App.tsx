@@ -24,6 +24,7 @@ const MaterialsPage = lazy(() => import('./features/materials/MaterialsPage').th
 const NotificationsPage = lazy(() => import('./features/notifications/NotificationsPage').then((m) => ({ default: m.NotificationsPage })));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const OnboardingPage = lazy(() => import('./features/onboarding/OnboardingPage').then((m) => ({ default: m.OnboardingPage })));
+const AdminUsersPage = lazy(() => import('./features/admin/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })));
 
 const PageLoader = () => (
   <div className="min-h-screen bg-[#050806] flex items-center justify-center text-[#86EFAC] text-xs gap-2">
@@ -105,6 +106,7 @@ export default function App() {
               <Route path="/materials" element={<MaterialsPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/admin" element={<AdminUsersPage />} />
             </Route>
 
             {/* Catch-all redirect to Landing or Today */}

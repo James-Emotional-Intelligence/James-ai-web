@@ -15,14 +15,19 @@ import {
   Play,
   Flame,
   BookOpen,
+  Shield,
+  UserCheck,
+  UserX,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
 import { TodayDashboardOverview, StudyTask } from '../../../shared/types';
+import { useAuth } from '../auth/AuthProvider';
 import confetti from 'canvas-confetti';
 
 export const TodayDashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [overview, setOverview] = useState<TodayDashboardOverview | null>(null);
   const [tasks, setTasks] = useState<StudyTask[]>([]);
@@ -109,6 +114,38 @@ export const TodayDashboard: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Admin Privilege Control Banner */}
+      {user?.role === 'admin' && (
+        <div className="bg-gradient-to-r from-purple-950/80 via-indigo-950/80 to-purple-900/70 border-2 border-purple-500/50 p-5 sm:p-6 rounded-3xl shadow-xl shadow-purple-950/40 relative overflow-hidden backdrop-blur-md">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="p-3 bg-purple-500/20 text-purple-300 border border-purple-500/40 rounded-2xl shrink-0">
+                <Shield className="w-7 h-7 text-purple-400" />
+              </div>
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-purple-900/60 text-purple-300 border border-purple-400/40 text-[10px] font-black uppercase tracking-wider mb-1">
+                  👑 QUYỀN QUẢN TRỊ VIÊN TỐI CAO (ADMIN)
+                </div>
+                <h2 className="text-lg sm:text-xl font-bold text-white">
+                  Bảng Điều Khiển Quản Trị Hệ Thống JAMI AI
+                </h2>
+                <p className="text-xs text-purple-200/80 mt-0.5">
+                  Bạn có toàn quyền quản lý danh sách học sinh, khóa/mở khóa tài khoản (Ban/Unban) và xóa tài khoản vi phạm.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => navigate('/admin')}
+              className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white text-xs font-black shadow-lg shadow-purple-600/30 transition-all cursor-pointer shrink-0 border border-purple-300"
+            >
+              <Shield className="w-4 h-4" />
+              <span>Mở Bảng Quản Lý Người Dùng & Ban TK →</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Welcome Banner */}
       <div className="bg-[#0B120D] p-6 sm:p-8 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-80 h-80 bg-radial from-[#22C55E]/10 to-transparent blur-2xl pointer-events-none" />
@@ -123,7 +160,9 @@ export const TodayDashboard: React.FC = () => {
               {getGreeting(overview.studentName)}
             </h1>
             <p className="text-xs text-[#A9B8AE]">
-              Lớp {overview.gradeLevel} • Jami đồng hành tối ưu hóa thời gian tự học của em.
+              {user?.role === 'admin'
+                ? 'Tài khoản Quản trị viên (Admin) • Giám sát và đồng hành cùng toàn bộ hệ thống JAMI AI.'
+                : `Lớp ${overview.gradeLevel} • Jami đồng hành tối ưu hóa thời gian tự học của em.`}
             </p>
           </div>
 

@@ -81,8 +81,8 @@ const AppLayoutContent: React.FC = () => {
         <TopModuleNav />
       </div>
 
-      {/* Main Content Viewport */}
-      <main className="flex-1 p-3.5 sm:p-5 lg:p-7 max-w-7xl w-full mx-auto">
+      {/* Main Content Viewport: Rộng rãi cho toàn bộ các trang và tính năng */}
+      <main className="flex-1 p-3.5 sm:p-5 lg:p-6 w-full max-w-[1750px] mx-auto px-3 sm:px-6 lg:px-8 transition-all">
         <Outlet />
       </main>
 

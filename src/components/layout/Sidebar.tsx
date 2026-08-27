@@ -13,6 +13,8 @@ import {
   Flame,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useAuth } from '../../features/auth/AuthProvider';
+import { Shield } from 'lucide-react';
 
 // Strict Module order 1 to 8 as required by prompt
 export const SIDEBAR_MODULES = [
@@ -83,6 +85,8 @@ export const SIDEBAR_MODULES = [
 ];
 
 export const Sidebar: React.FC = () => {
+  const { user } = useAuth();
+
   return (
     <aside className="hidden lg:flex flex-col w-72 bg-white border-r border-slate-200 min-h-screen p-4 select-none shrink-0">
       {/* Brand Header */}
@@ -159,8 +163,24 @@ export const Sidebar: React.FC = () => {
         ))}
       </nav>
 
-      {/* Bottom Settings Link */}
-      <div className="pt-3 border-t border-slate-200 mt-2">
+      {/* Bottom Links */}
+      <div className="pt-3 border-t border-slate-200 mt-2 space-y-1">
+        {user?.role === 'admin' && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-bold transition-colors',
+                isActive
+                  ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                  : 'text-purple-600 hover:bg-purple-50'
+              )
+            }
+          >
+            <Shield className="w-4 h-4 text-purple-600" />
+            <span>Quản trị Admin</span>
+          </NavLink>
+        )}
         <NavLink
           to="/settings"
           className={({ isActive }) =>

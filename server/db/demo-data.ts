@@ -22,6 +22,20 @@ export const DEMO_USER: User = {
   locale: 'vi-VN',
   timezone: 'Asia/Ho_Chi_Minh',
   ageBand: '14-15',
+  role: 'user',
+  status: 'active',
+  createdAt: '2026-08-20T00:00:00.000Z',
+};
+
+export const ADMIN_USER: User = {
+  id: 'usr_admin_james_01',
+  email: 'james.admin@gmail.com',
+  displayName: 'James Admin',
+  preferredName: 'Admin',
+  locale: 'vi-VN',
+  timezone: 'Asia/Ho_Chi_Minh',
+  ageBand: 'adult',
+  role: 'admin',
   status: 'active',
   createdAt: '2026-08-20T00:00:00.000Z',
 };

@@ -543,10 +543,9 @@ export class DeterministicScheduler {
       const isSplittable = task.splittable || taskMinutes > maxSession;
 
       // Find all valid candidate slots for this task
-      const candidates: { slotIndex: number; score: number; reasons: string[] }[] = [];
+      const candidates: { slot: FreeSlot; score: number; reasons: string[] }[] = [];
 
-      for (let i = 0; i < availableSlots.length; i++) {
-        const slot = availableSlots[i];
+      for (const slot of availableSlots) {
         const dayMinutes = dailyStudyMinutesMap.get(slot.dayKey) || 0;
 
         // Check daily study limit
@@ -568,7 +567,7 @@ export class DeterministicScheduler {
         // Score this candidate slot
         const { score, reasons } = this.scoreSlot(task, slot, profile, preferredWindows, timezone);
         if (score > 0) {
-          candidates.push({ slotIndex: i, score, reasons });
+          candidates.push({ slot, score, reasons });
         }
       }
 
@@ -594,12 +593,12 @@ export class DeterministicScheduler {
 
       while (remainingTaskMinutes > 0 && candidates.length > 0) {
         const best = candidates.shift()!;
-        const slot = availableSlots[best.slotIndex];
-        if (!slot) continue;
+        const slot = best.slot;
+        if (!availableSlots.includes(slot)) continue;
 
         const dayMinutes = dailyStudyMinutesMap.get(slot.dayKey) || 0;
         const availableDailyCapacity = Math.max(0, maxDailyMinutes - dayMinutes);
-        if (availableDailyCapacity < minSession) {
+        if (availableDailyCapacity < minSession || slot.durationMinutes < minSession) {
           continue;
         }
 
@@ -610,7 +609,7 @@ export class DeterministicScheduler {
           availableDailyCapacity
         );
 
-        if (allocMinutes < minSession && remainingTaskMinutes >= minSession) {
+        if (allocMinutes < minSession) {
           continue;
         }
 
@@ -637,10 +636,13 @@ export class DeterministicScheduler {
         const bufferMs = restBufferMinutes * 60 * 1000;
         const newStart = new Date(proposedEnd.getTime() + bufferMs);
         slot.start = newStart;
-        slot.durationMinutes = Math.floor((slot.end.getTime() - newStart.getTime()) / (60 * 1000));
+        slot.durationMinutes = Math.max(0, Math.floor((slot.end.getTime() - newStart.getTime()) / (60 * 1000)));
 
         if (slot.durationMinutes < minSession) {
-          availableSlots.splice(best.slotIndex, 1);
+          const slotIdx = availableSlots.indexOf(slot);
+          if (slotIdx !== -1) {
+            availableSlots.splice(slotIdx, 1);
+          }
         }
 
         remainingTaskMinutes -= allocMinutes;

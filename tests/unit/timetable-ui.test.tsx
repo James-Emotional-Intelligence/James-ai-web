@@ -117,7 +117,9 @@ describe('TimetablePage React UI Component Tests', () => {
     });
   });
 
-  it('renders TimetablePage with real dynamic data without hardcoded sample schools', async () => {
+  it('renders TimetablePage with real dynamic data across separated Timetable and Schedule boards', async () => {
+    const user = userEvent.setup();
+
     render(
       <MemoryRouter>
         <TimetablePage />
@@ -131,9 +133,17 @@ describe('TimetablePage React UI Component Tests', () => {
     // Should NOT contain the old hardcoded school name
     expect(screen.queryByText(/Trường THCS Lê Quý Đôn/i)).not.toBeInTheDocument();
 
-    // Should contain real dynamic entries and events
+    // Board 1: Should contain real dynamic school entries
     expect(screen.getByText(/Đại số 9 - Tiết 1 & 2/i)).toBeInTheDocument();
-    expect(screen.getByText(/Học thêm Tiếng Anh IELTS/i)).toBeInTheDocument();
+
+    // Switch to Board 2: Thời gian biểu (Sinh hoạt & Tự học)
+    const scheduleTabBtn = screen.getByRole('button', { name: /THỜI GIAN BIỂU/i });
+    await user.click(scheduleTabBtn);
+
+    // Board 2: Should contain busy events & tasks
+    await waitFor(() => {
+      expect(screen.getByText(/Học thêm Tiếng Anh IELTS/i)).toBeInTheDocument();
+    });
   });
 
   it('switches between Week and Day views and renders day-filtered content', async () => {
@@ -154,7 +164,7 @@ describe('TimetablePage React UI Component Tests', () => {
     await user.click(dayBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/Chi tiết ngày:/i)).toBeInTheDocument();
+      expect(screen.getByText(/Tiết học ngày/i)).toBeInTheDocument();
     });
   });
 
@@ -197,6 +207,10 @@ describe('TimetablePage React UI Component Tests', () => {
     await waitFor(() => {
       expect(screen.getByText(/Thời khóa biểu Học kỳ 1/i)).toBeInTheDocument();
     });
+
+    // Switch to Board 2 (Thời gian biểu)
+    const scheduleTabBtn = screen.getByRole('button', { name: /THỜI GIAN BIỂU/i });
+    await user.click(scheduleTabBtn);
 
     const replanBtn = screen.getByRole('button', { name: /Tự động sắp xếp lại/i });
     await user.click(replanBtn);

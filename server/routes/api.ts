@@ -121,22 +121,38 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-// Admin Protection Middleware (Timing safe ADMIN_SECRET_KEY check)
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
+// Admin Protection Middleware (Timing safe ADMIN_SECRET_KEY or role === 'admin' session check)
+async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  // 1. Check x-admin-key header first
   const adminKey = req.headers['x-admin-key'];
-  if (!env.ADMIN_SECRET_KEY || !adminKey || typeof adminKey !== 'string') {
-    return sendError(req, res, 403, 'FORBIDDEN', 'Yêu cầu quyền quản trị viên');
+  if (env.ADMIN_SECRET_KEY && adminKey && typeof adminKey === 'string') {
+    try {
+      const keyBuf = Buffer.from(adminKey);
+      const expectedBuf = Buffer.from(env.ADMIN_SECRET_KEY);
+      if (keyBuf.length === expectedBuf.length && crypto.timingSafeEqual(keyBuf, expectedBuf)) {
+        return next();
+      }
+    } catch {}
   }
 
-  try {
-    const keyBuf = Buffer.from(adminKey);
-    const expectedBuf = Buffer.from(env.ADMIN_SECRET_KEY);
-    if (keyBuf.length === expectedBuf.length && crypto.timingSafeEqual(keyBuf, expectedBuf)) {
-      return next();
-    }
-  } catch {}
+  // 2. Check authenticated session user role
+  const sessionToken = getSessionToken(req);
+  if (sessionToken) {
+    try {
+      const session = await authService.getSession(sessionToken);
+      if (session) {
+        const user = await userRepo.findById(session.userId);
+        if (user && user.status === 'active' && user.role === 'admin') {
+          (req as any).user = user;
+          (req as any).userId = user.id;
+          (req as any).session = session;
+          return next();
+        }
+      }
+    } catch {}
+  }
 
-  return sendError(req, res, 403, 'FORBIDDEN', 'Yêu cầu quyền quản trị viên');
+  return sendError(req, res, 403, 'FORBIDDEN', 'Yêu cầu quyền quản trị viên (Admin)');
 }
 
 // Rate limiters
@@ -182,6 +198,85 @@ apiRouter.post('/admin/db-migrate', requireAdmin, asyncHandler(async (req: Reque
   } catch (err: any) {
     sendError(req, res, 500, 'MIGRATION_ERROR', err.message);
   }
+}));
+
+// ==========================================
+// Admin User Management Routes
+// ==========================================
+
+apiRouter.get('/admin/users', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  const status = typeof req.query.status === 'string' ? req.query.status : '';
+
+  const result = await userRepo.getAllUsers({ search: q, status });
+  res.json(result);
+}));
+
+apiRouter.post('/admin/users/:id/ban', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const currentAdminId = (req as any).userId;
+
+  if (userId === currentAdminId) {
+    return sendError(req, res, 400, 'CANNOT_BAN_SELF', 'Không thể tự khóa tài khoản quản trị viên của chính mình.');
+  }
+
+  const targetUser = await userRepo.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
+  }
+
+  const updated = await userRepo.setUserStatus(userId, 'banned');
+  res.json({ success: true, user: updated, message: `Đã khóa tài khoản ${updated.email} thành công.` });
+}));
+
+apiRouter.post('/admin/users/:id/unban', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const targetUser = await userRepo.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
+  }
+
+  const updated = await userRepo.setUserStatus(userId, 'active');
+  res.json({ success: true, user: updated, message: `Đã mở khóa tài khoản ${updated.email} thành công.` });
+}));
+
+apiRouter.post('/admin/users/:id/role', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const { role } = req.body;
+
+  if (role !== 'admin' && role !== 'user') {
+    return sendError(req, res, 400, 'INVALID_ROLE', 'Vai trò chỉ có thể là admin hoặc user.');
+  }
+
+  const currentAdminId = (req as any).userId;
+  if (userId === currentAdminId && role !== 'admin') {
+    return sendError(req, res, 400, 'CANNOT_DEMOTE_SELF', 'Không thể tự gỡ bỏ quyền admin của chính mình.');
+  }
+
+  const targetUser = await userRepo.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
+  }
+
+  const updated = await userRepo.setUserRole(userId, role);
+  res.json({ success: true, user: updated, message: `Đã cập nhật quyền thành công.` });
+}));
+
+apiRouter.delete('/admin/users/:id', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const currentAdminId = (req as any).userId;
+
+  if (userId === currentAdminId) {
+    return sendError(req, res, 400, 'CANNOT_DELETE_SELF', 'Không thể tự xóa tài khoản quản trị viên của chính mình.');
+  }
+
+  const targetUser = await userRepo.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
+  }
+
+  await userRepo.deleteUser(userId);
+  res.json({ success: true, message: `Đã xóa tài khoản ${targetUser.email} thành công.` });
 }));
 
 // ==========================================

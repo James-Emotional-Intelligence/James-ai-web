@@ -40,6 +40,7 @@ import confetti from 'canvas-confetti';
 
 export const TimetablePage: React.FC = () => {
   // Navigation & View State
+  const [activeTab, setActiveTab] = useState<'timetable' | 'schedule'>('timetable');
   const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0); // 0 = current week, -1 = last week, +1 = next week
   const [selectedDayOfWeek, setSelectedDayOfWeek] = useState(1); // 1 = Monday ... 7 = Sunday
@@ -631,145 +632,56 @@ export const TimetablePage: React.FC = () => {
 
   return (
     <div className="space-y-6 font-sans">
-      {/* Header Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.22)] shadow-xl">
-        <div>
-          <h1 className="text-xl font-black text-[#F3FAF5] flex items-center gap-2">
+      {/* Top Main Navigation: Tách biệt rõ ràng 2 Bảng */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#0B120D] p-3 sm:p-4 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center font-black shrink-0 border border-[#22C55E]/40 shadow-inner">
             <CalendarDays className="w-5 h-5 text-[#22C55E]" />
-            <span>Lịch Học Thông Minh</span>
-          </h1>
-          <p className="text-xs text-[#A9B8AE] mt-0.5">
-            {activeTimetable ? `${activeTimetable.name} • Tự động xếp lịch tự học` : 'Tự động đồng bộ thời khóa biểu trường, lịch bận và thời gian tự học'}
-          </p>
+          </div>
+          <div>
+            <h1 className="text-base sm:text-lg font-black text-[#F3FAF5] flex items-center gap-2">
+              <span>Lịch Học & Kế Hoạch Cá Nhân</span>
+            </h1>
+            <p className="text-[11px] text-[#A9B8AE]">
+              {activeTab === 'timetable'
+                ? 'Bảng 1: Quản lý thời khóa biểu chính khóa các tiết học trên trường lớp'
+                : 'Bảng 2: Quản lý thời gian biểu sinh hoạt, lịch học thêm & thời gian tự học AI'}
+            </p>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Week Navigator */}
-          <div className="flex items-center bg-[#101A13] px-2 py-1 rounded-xl border border-[rgba(34,197,94,0.18)] text-xs text-[#F3FAF5]">
-            <button
-              onClick={() => setCurrentWeekOffset((prev) => prev - 1)}
-              className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] rounded cursor-pointer"
-              title="Tuần trước"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="px-2 font-bold text-xs text-[#86EFAC]">
-              {formatDateVN(weekDays[0].date)} – {formatDateVN(weekDays[6].date)}
-            </span>
-            <button
-              onClick={() => setCurrentWeekOffset((prev) => prev + 1)}
-              className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] rounded cursor-pointer"
-              title="Tuần kế tiếp"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-            {currentWeekOffset !== 0 && (
-              <button
-                onClick={() => setCurrentWeekOffset(0)}
-                className="ml-1 px-2 py-0.5 bg-[#14532D] text-[#86EFAC] text-[10px] font-bold rounded cursor-pointer border border-[#22C55E]/30"
-              >
-                Hôm nay
-              </button>
-            )}
-          </div>
-
-          {/* View Toggle */}
-          <div className="flex items-center bg-[#101A13] p-1 rounded-xl border border-[rgba(34,197,94,0.18)]">
-            <button
-              onClick={() => setViewMode('week')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                viewMode === 'week' ? 'bg-[#16A34A] text-[#050806] shadow-sm' : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
-              }`}
-            >
-              Tuần
-            </button>
-            <button
-              onClick={() => setViewMode('day')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                viewMode === 'day' ? 'bg-[#16A34A] text-[#050806] shadow-sm' : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
-              }`}
-            >
-              Ngày
-            </button>
-          </div>
-
-          {/* Add Actions */}
+        {/* 2 Tabs Chuyển Đổi Nổi Bật & Rõ Ràng */}
+        <div className="flex items-center p-1.5 bg-[#050806] border border-[rgba(34,197,94,0.2)] rounded-2xl gap-1.5 shrink-0">
           <button
             type="button"
-            onClick={() => {
-              setIsOcrModalOpen(true);
-              setOcrStep('upload');
-              setOcrFile(null);
-              setOcrPreviewUrl(null);
-              setOcrBase64(null);
-              setOcrExtractedEntries([]);
-              setOcrErrorMessage(null);
-            }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] border border-[#22C55E]/40 text-xs font-bold transition-all cursor-pointer shadow-sm shadow-[#16A34A]/20"
-            title="Tự động nhận dạng và nhập thời khóa biểu từ hình ảnh hoặc PDF qua AI"
+            onClick={() => setActiveTab('timetable')}
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeTab === 'timetable'
+                ? 'bg-gradient-to-r from-[#16A34A] to-[#22C55E] text-[#050806] shadow-md shadow-[#16A34A]/30 ring-1 ring-[#86EFAC]'
+                : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13]'
+            }`}
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
-            <span>Nhập TKB bằng ảnh</span>
+            <School className="w-4 h-4" />
+            <span>1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#050806]/30 font-extrabold">
+              {timetableEntries.length} tiết
+            </span>
           </button>
 
           <button
-            onClick={() => {
-              setEditingEntry(null);
-              setEntryTitle('');
-              setEntrySubjectId(subjects[0]?.id || '');
-              setEntryLocation('');
-              setIsAddEntryOpen(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#F3FAF5] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-colors cursor-pointer"
+            type="button"
+            onClick={() => setActiveTab('schedule')}
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeTab === 'schedule'
+                ? 'bg-gradient-to-r from-[#16A34A] to-[#22C55E] text-[#050806] shadow-md shadow-[#16A34A]/30 ring-1 ring-[#86EFAC]'
+                : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13]'
+            }`}
           >
-            <School className="w-3.5 h-3.5 text-[#86EFAC]" />
-            <span>Thêm tiết học</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setEditingEvent(null);
-              setEventTitle('');
-              setEventDate(selectedDayInfo.dateStr);
-              setIsAddEventOpen(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#F3FAF5] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-colors cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5 text-[#86EFAC]" />
-            <span>Thêm lịch bận</span>
-          </button>
-
-          {timetableEntries.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={handleDownloadTimetable}
-                disabled={isDownloadingCsv}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
-                title="Tải xuống thời khóa biểu dưới dạng tệp CSV"
-              >
-                <Download className={`w-3.5 h-3.5 text-[#22C55E] ${isDownloadingCsv ? 'animate-bounce' : ''}`} />
-                <span className="hidden sm:inline">{isDownloadingCsv ? 'Đang tải...' : 'Tải xuống TKB'}</span>
-              </button>
-
-              <button
-                onClick={handleDeleteAllEntries}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/40 text-xs font-bold transition-colors cursor-pointer"
-                title="Xóa toàn bộ các tiết học trong thời khóa biểu để nhập lại mới"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                <span className="hidden sm:inline">Làm mới TKB</span>
-              </button>
-            </>
-          )}
-
-          <button
-            onClick={handleTriggerReplan}
-            disabled={isReplanning}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] text-xs font-extrabold shadow-md shadow-[#16A34A]/25 transition-all hover:scale-[1.02] active:scale-95 cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isReplanning ? 'animate-spin' : ''}`} />
-            <span>{isReplanning ? 'Đang tính toán...' : 'Tự động sắp xếp lại'}</span>
+            <Clock className="w-4 h-4" />
+            <span>2. THỜI GIAN BIỂU (SINH HOẠT & TỰ HỌC)</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#050806]/30 font-extrabold">
+              {busyEvents.length + tasks.length} mục
+            </span>
           </button>
         </div>
       </div>
@@ -778,10 +690,10 @@ export const TimetablePage: React.FC = () => {
       {errorMessage && (
         <div role="alert" className="p-4 rounded-2xl bg-rose-950/50 border border-rose-800 text-rose-300 text-xs flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-rose-400" />
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
             <span>{errorMessage}</span>
           </div>
-          <button onClick={fetchData} className="underline font-bold hover:text-white cursor-pointer">
+          <button onClick={fetchData} className="underline font-bold hover:text-white cursor-pointer ml-3">
             Thử lại
           </button>
         </div>
@@ -809,8 +721,8 @@ export const TimetablePage: React.FC = () => {
             {proposalDiff.tasksToSchedule.map((item, idx) => (
               <div key={idx} className="p-3 bg-[#0B120D] rounded-2xl border border-[rgba(34,197,94,0.25)] text-xs space-y-1.5">
                 <div className="font-bold text-[#F3FAF5] flex items-center justify-between">
-                  <span>{item.title}</span>
-                  <span className="text-[10px] font-bold text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded border border-[#22C55E]/30">
+                  <span className="truncate pr-2">{item.title}</span>
+                  <span className="text-[10px] font-bold text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded border border-[#22C55E]/30 shrink-0">
                     {item.estimatedMinutes}p
                   </span>
                 </div>
@@ -832,7 +744,7 @@ export const TimetablePage: React.FC = () => {
                 <span>Không thể xếp tự động {proposalDiff.unscheduledItems.length} bài tập:</span>
               </div>
               {proposalDiff.unscheduledItems.map((u, i) => (
-                <div key={i} className="text-[11px] text-[#A9B8AE]">
+                <div key={i} className="text-[11px] text-[#A9B8AE] pl-5">
                   • <strong>{u.title}:</strong> {u.reason}
                 </div>
               ))}
@@ -858,396 +770,800 @@ export const TimetablePage: React.FC = () => {
         </div>
       )}
 
-      {/* Day Selector Tabs */}
-      <div className="grid grid-cols-7 gap-2">
-        {weekDays.map((d) => (
-          <button
-            key={d.dayOfWeek}
-            onClick={() => setSelectedDayOfWeek(d.dayOfWeek)}
-            className={`p-3 rounded-2xl text-center border transition-all cursor-pointer ${
-              selectedDayOfWeek === d.dayOfWeek
-                ? 'bg-[#16A34A] text-[#050806] border-[#22C55E] shadow-md shadow-[#16A34A]/25'
-                : 'bg-[#0B120D] text-[#F3FAF5] border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/40'
-            }`}
-          >
-            <div className="text-xs font-bold flex items-center justify-center gap-1">
-              <span>{d.label}</span>
-              {d.isToday && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+      {/* ========================================================================= */}
+      {/* BẢNG 1: THỜI KHÓA BIỂU (CHÍNH KHÓA TRƯỜNG HỌC) */}
+      {/* ========================================================================= */}
+      {activeTab === 'timetable' && (
+        <div className="space-y-6">
+          {/* Subheader & Timetable Action Bar */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.22)] shadow-xl">
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#14532D]/70 text-[#86EFAC] border border-[#22C55E]/30 text-[10px] font-black uppercase tracking-wider mb-1">
+                🏫 BẢNG 1: THỜI KHÓA BIỂU CỐ ĐỊNH TRÊN LỚP
+              </div>
+              <h2 className="text-lg font-black text-[#F3FAF5]">
+                {activeTimetable ? activeTimetable.name : 'Thời khóa biểu trường học'}
+              </h2>
+              <p className="text-xs text-[#A9B8AE] mt-0.5">
+                Các tiết học cố định theo tuần (Thứ 2 đến Chủ Nhật) làm cơ sở để AI tính toán giờ rảnh.
+              </p>
             </div>
-            <div className="text-[11px] font-extrabold mt-0.5 opacity-90">
-              {d.date.getDate()}/{d.date.getMonth() + 1}
-            </div>
-          </button>
-        ))}
-      </div>
 
-      {/* Main Content: Single Day or Full Week View */}
-      {isLoading ? (
-        <div className="p-12 text-center text-xs text-[#A9B8AE] flex flex-col items-center justify-center gap-3">
-          <div className="w-8 h-8 border-2 border-[#22C55E] border-t-transparent rounded-full animate-spin" />
-          <span>Đang tải lịch học từ hệ thống...</span>
-        </div>
-      ) : viewMode === 'day' ? (
-        // DAY VIEW
-        <div className="space-y-4">
-          <div className="flex items-center justify-between bg-[#101A13] px-4 py-2.5 rounded-2xl border border-[rgba(34,197,94,0.2)] text-xs text-[#86EFAC] font-bold">
-            <span>Chi tiết ngày: {selectedDayInfo.label} ({formatDateVN(selectedDayInfo.date)})</span>
-            <span>{selectedDayInfo.isToday ? 'Hôm nay' : ''}</span>
-          </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* View Toggle */}
+              <div className="flex items-center bg-[#101A13] p-1 rounded-xl border border-[rgba(34,197,94,0.18)]">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('week')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewMode === 'week' ? 'bg-[#16A34A] text-[#050806] shadow-sm' : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
+                  }`}
+                >
+                  Tuần
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('day')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewMode === 'day' ? 'bg-[#16A34A] text-[#050806] shadow-sm' : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
+                  }`}
+                >
+                  Ngày
+                </button>
+              </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* School Session */}
-            {(() => {
-              const { dayEntries, dayEvents, dayTasks } = getItemsForDay(selectedDayOfWeek, selectedDayInfo.dateStr);
-              return (
-                <>
-                  <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl space-y-4">
-                    <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.15)]">
-                      <h2 className="text-xs font-bold text-[#A9B8AE] uppercase tracking-wider flex items-center gap-1.5">
-                        <School className="w-3.5 h-3.5 text-[#22C55E]" />
-                        <span>Chính Khóa (Trường)</span>
-                      </h2>
-                      <div className="flex items-center gap-2">
-                        {dayEntries.length > 0 && (
-                          <button
-                            onClick={() => handleDeleteEntriesByDay(selectedDayOfWeek, selectedDayInfo.label)}
-                            className="text-[11px] text-rose-400 hover:text-rose-300 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                            title={`Xóa tất cả các tiết chính khóa của ${selectedDayInfo.label}`}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            <span>Xóa hết tiết ngày này</span>
-                          </button>
-                        )}
-                        <span className="text-[10px] font-extrabold text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded-full border border-[#22C55E]/30">
-                          {dayEntries.length} tiết
-                        </span>
-                      </div>
-                    </div>
-
-                    {dayEntries.length > 0 ? (
-                      <div className="space-y-2.5">
-                        {dayEntries.map((entry) => (
-                          <div key={entry.id} className="p-3.5 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] space-y-1 relative group">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-[#F3FAF5]">{entry.title}</span>
-                              <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => openEditEntry(entry)} className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)]" title="Sửa tiết học">
-                                  <Edit2 className="w-3 h-3" />
-                                </button>
-                                <button onClick={() => handleDeleteEntry(entry.id, entry.title)} className="p-1 text-[#A9B8AE] hover:text-rose-400 bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)]" title="Xóa tiết học này">
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            </div>
-                            <div className="text-[11px] text-[#A9B8AE] flex items-center gap-1.5">
-                              <Clock className="w-3 h-3 text-[#22C55E]" />
-                              <span>{entry.startLocalTime} – {entry.endLocalTime}</span>
-                            </div>
-                            {entry.location && (
-                              <div className="text-[11px] text-[#86EFAC] flex items-center gap-1.5 pt-0.5">
-                                <MapPin className="w-3 h-3 text-[#22C55E]" />
-                                <span>{entry.location}</span>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="p-8 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl">
-                        Không có lịch chính khóa ngày này
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Busy Events & Extra Classes */}
-                  <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl space-y-4">
-                    <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.15)]">
-                      <h2 className="text-xs font-bold text-[#A9B8AE] uppercase tracking-wider flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Học Thêm & Việc Bận</span>
-                      </h2>
-                      <span className="text-[10px] font-extrabold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-full border border-amber-800/40">
-                        {dayEvents.length} sự kiện
-                      </span>
-                    </div>
-
-                    {dayEvents.length > 0 ? (
-                      <div className="space-y-2.5">
-                        {dayEvents.map((evt) => (
-                          <div key={evt.id} className="p-3.5 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] space-y-1 relative group">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-[#F3FAF5]">{evt.title}</span>
-                              <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => openEditEvent(evt)} className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)]" title="Sửa lịch bận">
-                                  <Edit2 className="w-3 h-3" />
-                                </button>
-                                <button onClick={() => handleDeleteBusyEvent(evt.id, evt.title)} className="p-1 text-[#A9B8AE] hover:text-rose-400 bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)]" title="Xóa lịch bận này">
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 text-xs text-[#A9B8AE]">
-                              <Clock className="w-3 h-3 text-[#22C55E]" />
-                              <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
-                            </div>
-                            {evt.recurrenceRule && (
-                              <div className="text-[10px] text-[#86EFAC] font-semibold">
-                                • Lặp: {evt.recurrenceRule.includes('WEEKLY') ? 'Hàng tuần' : 'Hàng ngày'}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="p-8 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl">
-                        Không có lịch bận hay học thêm
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Tasks on this day */}
-                  <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl space-y-4">
-                    <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.15)]">
-                      <h2 className="text-xs font-bold text-[#A9B8AE] uppercase tracking-wider flex items-center gap-1.5">
-                        <BookOpen className="w-3.5 h-3.5 text-[#22C55E]" />
-                        <span>Tự Học & Bài Tập</span>
-                      </h2>
-                      <span className="text-[10px] font-extrabold text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded-full border border-[#22C55E]/30">
-                        {dayTasks.length} nhiệm vụ
-                      </span>
-                    </div>
-
-                    {dayTasks.length > 0 ? (
-                      <div className="space-y-3">
-                        {dayTasks.map((task) => (
-                          <div key={task.id} className="p-3.5 rounded-2xl border border-[rgba(34,197,94,0.2)] bg-[#101A13] hover:border-[#22C55E]/50 shadow-sm space-y-2">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="font-bold text-xs text-[#F3FAF5]">{task.title}</div>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => handleToggleLockTask(task.id)}
-                                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
-                                  title={task.locked ? 'Đã khóa lịch' : 'Cho phép tự động dời lịch'}
-                                >
-                                  {task.locked ? <Lock className="w-3.5 h-3.5 text-amber-400" /> : <Unlock className="w-3.5 h-3.5 text-[#A9B8AE]" />}
-                                </button>
-                                <button
-                                  onClick={() => handleUnscheduleTask(task.id, task.title)}
-                                  className="p-1 text-[#A9B8AE] hover:text-rose-400 bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
-                                  title="Hủy xếp lịch cho bài tập này (đưa về trạng thái tự do)"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                            <div className="flex items-center justify-between text-xs text-[#A9B8AE]">
-                              <div className="flex items-center gap-1 text-[#86EFAC] font-semibold text-[11px]">
-                                <Clock className="w-3 h-3 text-[#22C55E]" />
-                                <span>{task.scheduledStartAt ? `${formatTimeVN(task.scheduledStartAt)} (${task.estimatedMinutes}p)` : 'Chưa xếp lịch'}</span>
-                              </div>
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                task.status === 'completed'
-                                  ? 'bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/30'
-                                  : 'bg-[#050806] text-[#A9B8AE] border border-[rgba(34,197,94,0.15)]'
-                              }`}>
-                                {task.status === 'completed' ? 'Đã xong' : 'Chưa học'}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="p-8 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl">
-                        Không có nhiệm vụ tự học xếp trong ngày này
-                      </div>
-                    )}
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      ) : (
-        // WEEK VIEW: Full 7-column / 7-day Breakdown
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
-          {weekDays.map((day) => {
-            const { dayEntries, dayEvents, dayTasks } = getItemsForDay(day.dayOfWeek, day.dateStr);
-            const isSelected = selectedDayOfWeek === day.dayOfWeek;
-
-            return (
-              <div
-                key={day.dayOfWeek}
-                onClick={() => setSelectedDayOfWeek(day.dayOfWeek)}
-                className={`bg-[#0B120D] p-3.5 rounded-2xl border transition-all flex flex-col justify-between cursor-pointer space-y-3 ${
-                  isSelected
-                    ? 'border-[#22C55E] shadow-lg shadow-[#16A34A]/10 bg-[#0E1711]'
-                    : 'border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/40'
-                }`}
+              {/* Action Buttons for Timetable */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOcrModalOpen(true);
+                  setOcrStep('upload');
+                  setOcrFile(null);
+                  setOcrPreviewUrl(null);
+                  setOcrBase64(null);
+                  setOcrExtractedEntries([]);
+                  setOcrErrorMessage(null);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#14532D] to-[#166534] hover:from-[#16A34A] hover:to-[#15803D] text-[#86EFAC] hover:text-white border border-[#22C55E]/40 text-xs font-bold transition-all cursor-pointer shadow-md shadow-[#16A34A]/20"
+                title="Tự động nhận dạng và nhập thời khóa biểu từ hình ảnh hoặc PDF qua AI"
               >
-                {/* Day Header */}
-                <div className="pb-2 border-b border-[rgba(34,197,94,0.15)] flex items-center justify-between gap-1">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-xs font-black text-[#F3FAF5] truncate">{day.label}</span>
-                    <span className="text-[10px] text-[#A9B8AE]">({day.date.getDate()}/{day.date.getMonth() + 1})</span>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {dayEntries.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          handleDeleteEntriesByDay(day.dayOfWeek, day.label);
-                        }}
-                        className="px-1.5 py-0.5 text-[10px] font-bold text-rose-400 hover:text-rose-200 bg-rose-950/60 hover:bg-rose-900/90 border border-rose-800/60 rounded-lg flex items-center gap-1 transition-all cursor-pointer shadow-sm"
-                        title={`Xóa tất cả ${dayEntries.length} tiết chính khóa của ${day.label}`}
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        <span className="hidden xl:inline">Xóa ngày</span>
-                      </button>
-                    )}
-                    {day.isToday && (
-                      <span className="text-[9px] font-extrabold bg-[#14532D] text-[#86EFAC] px-1.5 py-0.5 rounded border border-[#22C55E]/30">
-                        Hôm nay
-                      </span>
-                    )}
-                  </div>
-                </div>
+                <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
+                <span>Nhập TKB bằng ảnh</span>
+              </button>
 
-                {/* Day Content */}
-                <div className="space-y-2 flex-1">
-                  {/* School Entries */}
-                  {dayEntries.map((e) => (
-                    <div
-                      key={e.id}
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        openEditEntry(e);
-                      }}
-                      className="p-2.5 rounded-xl bg-[#101A13] hover:bg-[#142319] border border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/50 text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm"
-                      title="Bấm để chỉnh sửa hoặc xóa tiết học này"
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingEntry(null);
+                  setEntryTitle('');
+                  setEntrySubjectId(subjects[0]?.id || '');
+                  setEntryLocation('');
+                  setIsAddEntryOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer"
+              >
+                <School className="w-3.5 h-3.5" />
+                <span>Thêm tiết học</span>
+              </button>
+
+              {timetableEntries.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleDownloadTimetable}
+                    disabled={isDownloadingCsv}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                    title="Tải xuống thời khóa biểu dưới dạng tệp CSV"
+                  >
+                    <Download className={`w-3.5 h-3.5 text-[#22C55E] ${isDownloadingCsv ? 'animate-bounce' : ''}`} />
+                    <span className="hidden sm:inline">{isDownloadingCsv ? 'Đang tải...' : 'Tải CSV'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDeleteAllEntries}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/40 text-xs font-bold transition-colors cursor-pointer"
+                    title="Xóa toàn bộ các tiết học trong thời khóa biểu để nhập lại mới"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                    <span className="hidden sm:inline">Làm mới TKB</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Day Selector Tabs for Timetable */}
+          <div className="grid grid-cols-7 gap-2">
+            {weekDays.map((d) => {
+              const count = timetableEntries.filter((e) => e.dayOfWeek === d.dayOfWeek).length;
+              return (
+                <button
+                  key={d.dayOfWeek}
+                  type="button"
+                  onClick={() => setSelectedDayOfWeek(d.dayOfWeek)}
+                  className={`p-3 rounded-2xl text-center border transition-all cursor-pointer ${
+                    selectedDayOfWeek === d.dayOfWeek
+                      ? 'bg-[#16A34A] text-[#050806] border-[#22C55E] shadow-md shadow-[#16A34A]/25'
+                      : 'bg-[#0B120D] text-[#F3FAF5] border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/40'
+                  }`}
+                >
+                  <div className="text-xs font-bold flex items-center justify-center gap-1">
+                    <span>{d.label}</span>
+                    {d.isToday && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+                  </div>
+                  <div className="text-[10px] font-bold mt-1 opacity-90">
+                    {count > 0 ? `${count} tiết` : 'Nghỉ'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Timetable Content Body */}
+          {isLoading ? (
+            <div className="p-12 text-center text-xs text-[#A9B8AE] flex flex-col items-center justify-center gap-3">
+              <div className="w-8 h-8 border-2 border-[#22C55E] border-t-transparent rounded-full animate-spin" />
+              <span>Đang tải thời khóa biểu từ hệ thống...</span>
+            </div>
+          ) : viewMode === 'day' ? (
+            /* Day View for Timetable */
+            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.15)]">
+                <div className="flex items-center gap-2">
+                  <School className="w-4 h-4 text-[#22C55E]" />
+                  <h3 className="text-sm font-bold text-[#F3FAF5]">
+                    Tiết học ngày {selectedDayInfo.label} ({formatDateVN(selectedDayInfo.date)})
+                  </h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  {timetableEntries.filter((e) => e.dayOfWeek === selectedDayOfWeek).length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteEntriesByDay(selectedDayOfWeek, selectedDayInfo.label)}
+                      className="text-xs text-rose-400 hover:text-rose-300 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                      title={`Xóa tất cả các tiết chính khóa của ${selectedDayInfo.label}`}
                     >
-                      <div className="flex items-center justify-between gap-1">
-                        <div className="font-bold text-[#F3FAF5] truncate pr-1">{e.title}</div>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa hết tiết {selectedDayInfo.label}</span>
+                    </button>
+                  )}
+                  <span className="text-xs font-extrabold text-[#86EFAC] bg-[#14532D] px-2.5 py-1 rounded-full border border-[#22C55E]/30">
+                    {timetableEntries.filter((e) => e.dayOfWeek === selectedDayOfWeek).length} tiết học
+                  </span>
+                </div>
+              </div>
+
+              {timetableEntries.filter((e) => e.dayOfWeek === selectedDayOfWeek).length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {timetableEntries
+                    .filter((e) => e.dayOfWeek === selectedDayOfWeek)
+                    .sort((a, b) => a.startLocalTime.localeCompare(b.startLocalTime))
+                    .map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] space-y-2 relative group hover:border-[#22C55E]/50 transition-all shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <span className="text-xs font-bold text-[#F3FAF5] block">{entry.title}</span>
+                            {entry.subjectName && (
+                              <span className="text-[10px] font-bold text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded mt-1 inline-block">
+                                {entry.subjectName}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => openEditEntry(entry)}
+                              className="p-1.5 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-lg border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                              title="Sửa tiết học"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteEntry(entry.id, entry.title)}
+                              className="p-1.5 text-rose-400 hover:text-rose-200 bg-rose-950/70 rounded-lg border border-rose-800/60 cursor-pointer"
+                              title="Xóa tiết học này"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="text-xs text-[#A9B8AE] flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-[#22C55E]" />
+                          <span>{entry.startLocalTime} – {entry.endLocalTime}</span>
+                        </div>
+
+                        {entry.location && (
+                          <div className="text-xs text-[#86EFAC] flex items-center gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-[#22C55E]" />
+                            <span>{entry.location}</span>
+                          </div>
+                        )}
+
+                        {(entry.commuteBeforeMinutes || entry.commuteAfterMinutes) ? (
+                          <div className="text-[10px] text-[#A9B8AE] pt-1 border-t border-[rgba(34,197,94,0.1)]">
+                            Di chuyển: Trước {entry.commuteBeforeMinutes || 0}p • Sau {entry.commuteAfterMinutes || 0}p
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div className="p-12 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl space-y-3">
+                  <School className="w-8 h-8 text-[#22C55E]/40 mx-auto" />
+                  <p>Không có tiết học nào trong ngày {selectedDayInfo.label}.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingEntry(null);
+                      setEntryTitle('');
+                      setEntrySubjectId(subjects[0]?.id || '');
+                      setEntryDayOfWeek(selectedDayOfWeek);
+                      setEntryLocation('');
+                      setIsAddEntryOpen(true);
+                    }}
+                    className="px-4 py-2 bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Thêm tiết học cho {selectedDayInfo.label}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Week Matrix View for Timetable (7 Columns Standard Vietnamese School Matrix) */
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
+                {weekDays.map((day) => {
+                  const dayEntries = timetableEntries
+                    .filter((e) => e.dayOfWeek === day.dayOfWeek)
+                    .sort((a, b) => a.startLocalTime.localeCompare(b.startLocalTime));
+                  const isSelected = selectedDayOfWeek === day.dayOfWeek;
+
+                  return (
+                    <div
+                      key={day.dayOfWeek}
+                      onClick={() => setSelectedDayOfWeek(day.dayOfWeek)}
+                      className={`bg-[#0B120D] p-3.5 rounded-2xl border transition-all flex flex-col justify-between cursor-pointer space-y-3 ${
+                        isSelected
+                          ? 'border-[#22C55E] shadow-lg shadow-[#16A34A]/15 bg-[#0E1711]'
+                          : 'border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/40'
+                      }`}
+                    >
+                      {/* Day Header */}
+                      <div className="pb-2 border-b border-[rgba(34,197,94,0.15)] flex items-center justify-between gap-1">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-xs font-black text-[#F3FAF5] truncate">{day.label}</span>
+                        </div>
                         <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
+                          {dayEntries.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                handleDeleteEntriesByDay(day.dayOfWeek, day.label);
+                              }}
+                              className="px-1.5 py-0.5 text-[10px] font-bold text-rose-400 hover:text-rose-200 bg-rose-950/60 hover:bg-rose-900/90 border border-rose-800/60 rounded-lg flex items-center gap-1 transition-all cursor-pointer shadow-sm"
+                              title={`Xóa tất cả ${dayEntries.length} tiết của ${day.label}`}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span className="hidden xl:inline">Xóa</span>
+                            </button>
+                          )}
+                          <span className="text-[9px] font-extrabold bg-[#14532D] text-[#86EFAC] px-1.5 py-0.5 rounded border border-[#22C55E]/30">
+                            {dayEntries.length} tiết
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Day Entries List */}
+                      <div className="space-y-2 flex-1">
+                        {dayEntries.map((e, idx) => (
+                          <div
+                            key={e.id}
                             onClick={(ev) => {
                               ev.stopPropagation();
                               openEditEntry(e);
                             }}
-                            className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] transition-colors cursor-pointer"
-                            title="Chỉnh sửa tiết học"
+                            className="p-2.5 rounded-xl bg-[#101A13] hover:bg-[#142319] border border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/50 text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm"
+                            title="Bấm để chỉnh sửa tiết học này"
                           >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              handleDeleteEntry(e.id, e.title);
-                            }}
-                            className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
-                            title="Xóa tiết học này"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="font-bold text-[#F3FAF5] truncate pr-1">
+                                <span className="text-[#86EFAC] mr-1 font-black">T{idx + 1}:</span>
+                                {e.title}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    openEditEntry(e);
+                                  }}
+                                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] transition-colors cursor-pointer"
+                                  title="Chỉnh sửa tiết học"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    handleDeleteEntry(e.id, e.title);
+                                  }}
+                                  className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
+                                  title="Xóa tiết học này"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="text-[#A9B8AE] text-[10px] flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-[#22C55E]" />
+                              <span>{e.startLocalTime} – {e.endLocalTime}</span>
+                            </div>
+                            {e.location && (
+                              <div className="text-[10px] text-[#86EFAC] truncate flex items-center gap-1">
+                                <MapPin className="w-2.5 h-2.5 text-[#22C55E]" />
+                                <span>{e.location}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+
+                        {dayEntries.length === 0 && (
+                          <div className="py-6 text-center text-[10px] text-[#A9B8AE]/60 italic border border-dashed border-[rgba(34,197,94,0.1)] rounded-xl">
+                            Không có tiết
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Quick Add Button */}
+                      <button
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setEditingEntry(null);
+                          setEntryTitle('');
+                          setEntrySubjectId(subjects[0]?.id || '');
+                          setEntryDayOfWeek(day.dayOfWeek);
+                          setEntryLocation('');
+                          setIsAddEntryOpen(true);
+                        }}
+                        className="w-full py-1.5 bg-[#101A13] hover:bg-[#14532D] text-[#86EFAC] text-[10px] font-bold rounded-xl border border-[rgba(34,197,94,0.15)] flex items-center justify-center gap-1 transition-colors"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Thêm tiết</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Subject Breakdown Card */}
+              <div className="p-5 bg-[#0B120D] rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold text-[#F3FAF5] uppercase tracking-wider flex items-center gap-1.5">
+                    <BookOpen className="w-4 h-4 text-[#22C55E]" />
+                    <span>Tổng Hợp Số Tiết Theo Môn Học Trong Tuần</span>
+                  </h3>
+                  <span className="text-xs font-black text-[#86EFAC]">
+                    Tổng cộng: {timetableEntries.length} tiết / tuần
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {subjects.map((sub) => {
+                    const count = timetableEntries.filter(
+                      (e) => e.subjectId === sub.id || e.title.toLowerCase().includes(sub.name.toLowerCase())
+                    ).length;
+                    if (count === 0) return null;
+                    return (
+                      <div
+                        key={sub.id}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-xs"
+                      >
+                        <span className="font-bold text-[#F3FAF5]">{sub.name}:</span>
+                        <span className="font-black text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded-md">
+                          {count} tiết
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* BẢNG 2: THỜI GIAN BIỂU (LỊCH SINH HOẠT, HỌC THÊM & TỰ HỌC THÔNG MINH) */}
+      {/* ========================================================================= */}
+      {activeTab === 'schedule' && (
+        <div className="space-y-6">
+          {/* Subheader & Schedule Controls */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.22)] shadow-xl">
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-950/70 text-amber-300 border border-amber-800/40 text-[10px] font-black uppercase tracking-wider mb-1">
+                ⏱️ BẢNG 2: THỜI GIAN BIỂU & TỰ ĐỘNG XẾP LỊCH TỰ HỌC
+              </div>
+              <h2 className="text-lg font-black text-[#F3FAF5]">
+                Dòng Thời Gian Sinh Hoạt & Tự Học Trong Tuần
+              </h2>
+              <p className="text-xs text-[#A9B8AE] mt-0.5">
+                Kết hợp lịch học thêm, việc bận cá nhân và các bài tập do AI thông minh tự động bố trí.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Week Navigator */}
+              <div className="flex items-center bg-[#101A13] px-2 py-1 rounded-xl border border-[rgba(34,197,94,0.18)] text-xs text-[#F3FAF5]">
+                <button
+                  type="button"
+                  onClick={() => setCurrentWeekOffset((prev) => prev - 1)}
+                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] rounded cursor-pointer"
+                  title="Tuần trước"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="px-2 font-bold text-xs text-[#86EFAC]">
+                  {formatDateVN(weekDays[0].date)} – {formatDateVN(weekDays[6].date)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentWeekOffset((prev) => prev + 1)}
+                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] rounded cursor-pointer"
+                  title="Tuần kế tiếp"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                {currentWeekOffset !== 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentWeekOffset(0)}
+                    className="ml-1 px-2 py-0.5 bg-[#14532D] text-[#86EFAC] text-[10px] font-bold rounded cursor-pointer border border-[#22C55E]/30"
+                  >
+                    Hôm nay
+                  </button>
+                )}
+              </div>
+
+              {/* View Toggle */}
+              <div className="flex items-center bg-[#101A13] p-1 rounded-xl border border-[rgba(34,197,94,0.18)]">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('week')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewMode === 'week' ? 'bg-[#16A34A] text-[#050806] shadow-sm' : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
+                  }`}
+                >
+                  Tuần
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('day')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewMode === 'day' ? 'bg-[#16A34A] text-[#050806] shadow-sm' : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
+                  }`}
+                >
+                  Ngày
+                </button>
+              </div>
+
+              {/* Actions for Schedule */}
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingEvent(null);
+                  setEventTitle('');
+                  setEventDate(selectedDayInfo.dateStr);
+                  setIsAddEventOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#F3FAF5] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5 text-[#86EFAC]" />
+                <span>Thêm lịch bận</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTriggerReplan}
+                disabled={isReplanning}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] text-xs font-extrabold shadow-md shadow-[#16A34A]/25 transition-all hover:scale-[1.02] active:scale-95 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isReplanning ? 'animate-spin' : ''}`} />
+                <span>{isReplanning ? 'Đang tính toán...' : 'Tự động sắp xếp lại'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Day Selector Tabs for Schedule */}
+          <div className="grid grid-cols-7 gap-2">
+            {weekDays.map((d) => (
+              <button
+                key={d.dayOfWeek}
+                type="button"
+                onClick={() => setSelectedDayOfWeek(d.dayOfWeek)}
+                className={`p-3 rounded-2xl text-center border transition-all cursor-pointer ${
+                  selectedDayOfWeek === d.dayOfWeek
+                    ? 'bg-[#16A34A] text-[#050806] border-[#22C55E] shadow-md shadow-[#16A34A]/25'
+                    : 'bg-[#0B120D] text-[#F3FAF5] border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/40'
+                }`}
+              >
+                <div className="text-xs font-bold flex items-center justify-center gap-1">
+                  <span>{d.label}</span>
+                  {d.isToday && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+                </div>
+                <div className="text-[11px] font-extrabold mt-0.5 opacity-90">
+                  {d.date.getDate()}/{d.date.getMonth() + 1}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Schedule Content Body */}
+          {isLoading ? (
+            <div className="p-12 text-center text-xs text-[#A9B8AE] flex flex-col items-center justify-center gap-3">
+              <div className="w-8 h-8 border-2 border-[#22C55E] border-t-transparent rounded-full animate-spin" />
+              <span>Đang tải thời gian biểu từ hệ thống...</span>
+            </div>
+          ) : viewMode === 'day' ? (
+            /* DAY VIEW: 2-column Breakdown (Chỉ Lịch Bận/Học Thêm và Tự Học AI) */
+            <div className="space-y-4">
+              <div className="flex items-center justify-between bg-[#101A13] px-4 py-2.5 rounded-2xl border border-[rgba(34,197,94,0.2)] text-xs text-[#86EFAC] font-bold">
+                <span>Chi tiết ngày: {selectedDayInfo.label} ({formatDateVN(selectedDayInfo.date)})</span>
+                <span>{selectedDayInfo.isToday ? 'Hôm nay' : ''}</span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {(() => {
+                  const { dayEvents, dayTasks } = getItemsForDay(selectedDayOfWeek, selectedDayInfo.dateStr);
+                  return (
+                    <>
+                      {/* Busy Events & Extra Classes */}
+                      <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl space-y-4">
+                        <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.15)]">
+                          <h3 className="text-xs font-bold text-[#A9B8AE] uppercase tracking-wider flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-amber-400" />
+                            <span>1. Học Thêm & Lịch Bận Cá Nhân</span>
+                          </h3>
+                          <span className="text-[10px] font-extrabold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-full border border-amber-800/40">
+                            {dayEvents.length} sự kiện
+                          </span>
                         </div>
+
+                        {dayEvents.length > 0 ? (
+                          <div className="space-y-2.5">
+                            {dayEvents.map((evt) => (
+                              <div key={evt.id} className="p-3.5 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] space-y-1 relative group">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-[#F3FAF5]">{evt.title}</span>
+                                  <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                      type="button"
+                                      onClick={() => openEditEvent(evt)}
+                                      className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                                      title="Sửa lịch bận"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteBusyEvent(evt.id, evt.title)}
+                                      className="p-1 text-[#A9B8AE] hover:text-rose-400 bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                                      title="Xóa lịch bận này"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-xs text-[#A9B8AE]">
+                                  <Clock className="w-3 h-3 text-[#22C55E]" />
+                                  <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
+                                </div>
+                                {evt.recurrenceRule && (
+                                  <div className="text-[10px] text-[#86EFAC] font-semibold">
+                                    • Lặp: {evt.recurrenceRule.includes('WEEKLY') ? 'Hàng tuần' : 'Hàng ngày'}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-8 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl">
+                            Không có lịch bận hay học thêm trong ngày này
+                          </div>
+                        )}
                       </div>
-                      <div className="text-[#A9B8AE] text-[10px] flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-[#22C55E]" />
-                        <span>{e.startLocalTime} – {e.endLocalTime}</span>
+
+                      {/* Tasks on this day */}
+                      <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl space-y-4">
+                        <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.15)]">
+                          <h3 className="text-xs font-bold text-[#A9B8AE] uppercase tracking-wider flex items-center gap-1.5">
+                            <BookOpen className="w-3.5 h-3.5 text-[#22C55E]" />
+                            <span>2. Tự Học & Bài Tập (AI Tự Động Xếp)</span>
+                          </h3>
+                          <span className="text-[10px] font-extrabold text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded-full border border-[#22C55E]/30">
+                            {dayTasks.length} nhiệm vụ
+                          </span>
+                        </div>
+
+                        {dayTasks.length > 0 ? (
+                          <div className="space-y-3">
+                            {dayTasks.map((task) => (
+                              <div key={task.id} className="p-3.5 rounded-2xl border border-[rgba(34,197,94,0.2)] bg-[#101A13] hover:border-[#22C55E]/50 shadow-sm space-y-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="font-bold text-xs text-[#F3FAF5]">{task.title}</div>
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleLockTask(task.id)}
+                                      className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                                      title={task.locked ? 'Đã khóa lịch' : 'Cho phép tự động dời lịch'}
+                                    >
+                                      {task.locked ? <Lock className="w-3.5 h-3.5 text-amber-400" /> : <Unlock className="w-3.5 h-3.5 text-[#A9B8AE]" />}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnscheduleTask(task.id, task.title)}
+                                      className="p-1 text-[#A9B8AE] hover:text-rose-400 bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                                      title="Hủy xếp lịch cho bài tập này (đưa về trạng thái tự do)"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="flex items-center justify-between text-xs text-[#A9B8AE]">
+                                  <div className="flex items-center gap-1 text-[#86EFAC] font-semibold text-[11px]">
+                                    <Clock className="w-3 h-3 text-[#22C55E]" />
+                                    <span>{task.scheduledStartAt ? `${formatTimeVN(task.scheduledStartAt)} (${task.estimatedMinutes}p)` : 'Chưa xếp lịch'}</span>
+                                  </div>
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    task.status === 'completed'
+                                      ? 'bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/30'
+                                      : 'bg-[#050806] text-[#A9B8AE] border border-[rgba(34,197,94,0.15)]'
+                                  }`}>
+                                    {task.status === 'completed' ? 'Đã xong' : 'Chưa học'}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-8 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl">
+                            Không có nhiệm vụ tự học xếp trong ngày này
+                          </div>
+                        )}
                       </div>
-                      {e.location && (
-                        <div className="text-[10px] text-[#86EFAC] truncate flex items-center gap-1">
-                          <MapPin className="w-2.5 h-2.5 text-[#22C55E]" />
-                          <span>{e.location}</span>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          ) : (
+            /* WEEK VIEW: 7-column Breakdown (Chỉ Lịch Bận và Tự Học) */
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
+              {weekDays.map((day) => {
+                const { dayEvents, dayTasks } = getItemsForDay(day.dayOfWeek, day.dateStr);
+                const isSelected = selectedDayOfWeek === day.dayOfWeek;
+
+                return (
+                  <div
+                    key={day.dayOfWeek}
+                    onClick={() => setSelectedDayOfWeek(day.dayOfWeek)}
+                    className={`bg-[#0B120D] p-3.5 rounded-2xl border transition-all flex flex-col justify-between cursor-pointer space-y-3 ${
+                      isSelected
+                        ? 'border-[#22C55E] shadow-lg shadow-[#16A34A]/10 bg-[#0E1711]'
+                        : 'border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/40'
+                    }`}
+                  >
+                    {/* Day Header */}
+                    <div className="pb-2 border-b border-[rgba(34,197,94,0.15)] flex items-center justify-between gap-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs font-black text-[#F3FAF5] truncate">{day.label}</span>
+                        <span className="text-[10px] text-[#A9B8AE]">({day.date.getDate()}/{day.date.getMonth() + 1})</span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {day.isToday && (
+                          <span className="text-[9px] font-extrabold bg-[#14532D] text-[#86EFAC] px-1.5 py-0.5 rounded border border-[#22C55E]/30">
+                            Hôm nay
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Day Content */}
+                    <div className="space-y-2 flex-1">
+                      {/* Busy Events */}
+                      {dayEvents.map((evt) => (
+                        <div
+                          key={evt.id}
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            openEditEvent(evt);
+                          }}
+                          className="p-2.5 rounded-xl bg-amber-950/30 hover:bg-amber-950/50 border border-amber-800/40 hover:border-amber-700/60 text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm"
+                          title="Bấm để chỉnh sửa lịch bận này"
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <div className="font-bold text-amber-200 truncate pr-1">{evt.title}</div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  openEditEvent(evt);
+                                }}
+                                className="p-1 text-amber-400 hover:text-amber-200 bg-[#050806] rounded-md border border-amber-900/40 transition-colors cursor-pointer"
+                                title="Chỉnh sửa lịch bận"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  handleDeleteBusyEvent(evt.id, evt.title);
+                                }}
+                                className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
+                                title="Xóa lịch bận này"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="text-amber-400/80 text-[10px] flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-amber-400" />
+                            <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Tasks */}
+                      {dayTasks.map((t) => (
+                        <div key={t.id} className="p-2.5 rounded-xl bg-[#14532D]/30 border border-[#22C55E]/30 text-[11px] space-y-1 relative group shadow-sm">
+                          <div className="flex items-center justify-between gap-1">
+                            <div className="font-bold text-[#86EFAC] truncate pr-1">{t.title}</div>
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                handleUnscheduleTask(t.id, t.title);
+                              }}
+                              className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/60 hover:bg-rose-900/90 border border-rose-800/50 rounded-md transition-colors shrink-0 cursor-pointer"
+                              title="Hủy xếp lịch tiết này"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="text-[#A9B8AE] text-[10px] flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-[#22C55E]" />
+                            <span>{t.scheduledStartAt ? formatTimeVN(t.scheduledStartAt) : 'Chưa xếp lịch'} ({t.estimatedMinutes}p)</span>
+                          </div>
+                        </div>
+                      ))}
+
+                      {dayEvents.length === 0 && dayTasks.length === 0 && (
+                        <div className="py-6 text-center text-[10px] text-[#A9B8AE]/60 italic">
+                          Không có lịch bận hay bài tập
                         </div>
                       )}
                     </div>
-                  ))}
 
-                  {/* Busy Events */}
-                  {dayEvents.map((evt) => (
-                    <div
-                      key={evt.id}
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        openEditEvent(evt);
-                      }}
-                      className="p-2.5 rounded-xl bg-amber-950/30 hover:bg-amber-950/50 border border-amber-800/40 hover:border-amber-700/60 text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm"
-                      title="Bấm để chỉnh sửa hoặc xóa lịch bận này"
-                    >
-                      <div className="flex items-center justify-between gap-1">
-                        <div className="font-bold text-amber-200 truncate pr-1">{evt.title}</div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              openEditEvent(evt);
-                            }}
-                            className="p-1 text-amber-400 hover:text-amber-200 bg-[#050806] rounded-md border border-amber-900/40 transition-colors cursor-pointer"
-                            title="Chỉnh sửa lịch bận"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              handleDeleteBusyEvent(evt.id, evt.title);
-                            }}
-                            className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
-                            title="Xóa lịch bận này"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                      <div className="text-amber-400/80 text-[10px] flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-amber-400" />
-                        <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
-                      </div>
+                    <div className="pt-2 text-center text-[10px] font-bold text-[#86EFAC] opacity-80 border-t border-[rgba(34,197,94,0.1)]">
+                      {dayEvents.length + dayTasks.length} mục
                     </div>
-                  ))}
-
-                  {/* Tasks */}
-                  {dayTasks.map((t) => (
-                    <div key={t.id} className="p-2.5 rounded-xl bg-[#14532D]/30 border border-[#22C55E]/30 text-[11px] space-y-1 relative group shadow-sm">
-                      <div className="flex items-center justify-between gap-1">
-                        <div className="font-bold text-[#86EFAC] truncate pr-1">{t.title}</div>
-                        <button
-                          type="button"
-                          onClick={(ev) => {
-                            ev.stopPropagation();
-                            handleUnscheduleTask(t.id, t.title);
-                          }}
-                          className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/60 hover:bg-rose-900/90 border border-rose-800/50 rounded-md transition-colors shrink-0 cursor-pointer"
-                          title="Hủy xếp lịch tiết này (đưa về trạng thái tự do)"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                      <div className="text-[#A9B8AE] text-[10px] flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-[#22C55E]" />
-                        <span>{t.scheduledStartAt ? formatTimeVN(t.scheduledStartAt) : 'Chưa xếp lịch'} ({t.estimatedMinutes}p)</span>
-                      </div>
-                    </div>
-                  ))}
-
-                  {dayEntries.length === 0 && dayEvents.length === 0 && dayTasks.length === 0 && (
-                    <div className="py-6 text-center text-[10px] text-[#A9B8AE]/60 italic">
-                      Trống
-                    </div>
-                  )}
-                </div>
-
-                <div className="pt-2 text-center text-[10px] font-bold text-[#86EFAC] opacity-80 border-t border-[rgba(34,197,94,0.1)]">
-                  {dayEntries.length + dayEvents.length + dayTasks.length} mục
-                </div>
-              </div>
-            );
-          })}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

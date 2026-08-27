@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { User, StudentProfile } from '../../shared/types';
-import { DEMO_USER, DEMO_PROFILE } from '../db/demo-data';
+import { DEMO_USER, DEMO_PROFILE, ADMIN_USER } from '../db/demo-data';
 import { db, DatabaseError } from '../db/mysql';
 import { env, isProduction } from '../config/env';
 import { DemoRepository } from './demo-repository';
@@ -28,9 +28,7 @@ export class UserRepository {
   private demoResetTokens: Map<string, DemoResetToken> = new Map();
 
   private constructor() {
-    if (!isProduction && env.DEMO_LOGIN_ENABLED) {
-      this.seedDemoUserMemory();
-    }
+    this.seedDemoUserMemory();
   }
 
   public static getInstance(): UserRepository {
@@ -41,18 +39,45 @@ export class UserRepository {
   }
 
   private seedDemoUserMemory() {
-    const salt = 'demo_salt_seed_minh_1234';
-    const computedHash = crypto.createHash('sha256').update('Demo1234!' + salt).digest('hex');
+    const demoSalt = 'demo_salt_seed_minh_1234';
+    const demoHash = crypto.createHash('sha256').update('Demo1234!' + demoSalt).digest('hex');
 
     const demoStored: StoredUser = {
       ...DEMO_USER,
-      passwordHash: computedHash,
-      passwordSalt: salt,
+      role: 'user',
+      passwordHash: demoHash,
+      passwordSalt: demoSalt,
       passwordScheme: 'sha256',
     };
 
     this.demoUsers.set(DEMO_USER.email.toLowerCase(), demoStored);
     this.demoProfiles.set(DEMO_USER.id, { ...DEMO_PROFILE });
+
+    // Seed Admin User (james.admin@gmail.com / Minhtriet14)
+    const adminSalt = 'admin_salt_seed_james_14';
+    const adminHash = crypto.createHash('sha256').update('Minhtriet14' + adminSalt).digest('hex');
+
+    const adminStored: StoredUser = {
+      ...ADMIN_USER,
+      role: 'admin',
+      passwordHash: adminHash,
+      passwordSalt: adminSalt,
+      passwordScheme: 'sha256',
+    };
+
+    this.demoUsers.set(ADMIN_USER.email.toLowerCase(), adminStored);
+    this.demoProfiles.set(ADMIN_USER.id, {
+      userId: ADMIN_USER.id,
+      gradeLevel: 12,
+      schoolName: 'Ban Quản Trị JAMI AI',
+      goals: ['Quản trị hệ thống, hỗ trợ người dùng và giám sát an toàn học tập'],
+      preferredSessionMinutes: 45,
+      maxDailyStudyMinutes: 300,
+      energyPreferences: { morning: 'high', afternoon: 'high', evening: 'high' },
+      sleepSchedule: { wakeTime: '06:00', bedTime: '23:00' },
+      mealTimes: { lunch: '12:00', dinner: '19:00' },
+      onboardingCompletedAt: new Date().toISOString(),
+    });
   }
 
   public async hashPassword(password: string): Promise<{ passwordHash: string; passwordSalt: string; scheme: string }> {
@@ -92,53 +117,82 @@ export class UserRepository {
   }
 
   public async syncWithMySQL() {
-    if (isProduction || !env.DEMO_LOGIN_ENABLED || !db.isHealthy()) return;
+    if (!db.isHealthy()) return;
 
     try {
-      const existingDemo = await db.query<any>('SELECT id FROM users WHERE email = ?', [DEMO_USER.email]);
+      // 1. Sync Demo Student User
       const demoUser = this.demoUsers.get(DEMO_USER.email.toLowerCase());
-      if (!demoUser) return;
+      if (demoUser) {
+        const existingDemo = await db.query<any>('SELECT id FROM users WHERE email = ?', [DEMO_USER.email]);
+        if (existingDemo.length === 0) {
+          await db.execute(
+            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at)
+             VALUES (?, ?, ?, ?, 'sha256', ?, ?, ?, ?, ?, 'user', ?, ?)`,
+            [
+              demoUser.id,
+              demoUser.email,
+              demoUser.passwordHash,
+              demoUser.passwordSalt,
+              demoUser.displayName,
+              demoUser.preferredName,
+              demoUser.locale,
+              demoUser.timezone,
+              demoUser.ageBand,
+              demoUser.status,
+              new Date(),
+            ]
+          );
 
-      if (existingDemo.length === 0) {
-        await db.execute(
-          `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at)
-           VALUES (?, ?, ?, ?, 'sha256', ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            demoUser.id,
-            demoUser.email,
-            demoUser.passwordHash,
-            demoUser.passwordSalt,
-            demoUser.displayName,
-            demoUser.preferredName,
-            demoUser.locale,
-            demoUser.timezone,
-            demoUser.ageBand,
-            demoUser.status,
-            new Date(),
-          ]
-        );
+          await db.execute(
+            `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              demoUser.id,
+              DEMO_PROFILE.gradeLevel,
+              DEMO_PROFILE.schoolName,
+              JSON.stringify(DEMO_PROFILE.goals),
+              DEMO_PROFILE.preferredSessionMinutes,
+              DEMO_PROFILE.maxDailyStudyMinutes,
+              JSON.stringify(DEMO_PROFILE.energyPreferences),
+              JSON.stringify(DEMO_PROFILE.sleepSchedule),
+              JSON.stringify(DEMO_PROFILE.mealTimes),
+            ]
+          );
+          console.log('[JAMI MySQL] Seeded demo student into MySQL.');
+        }
+      }
 
-        await db.execute(
-          `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            demoUser.id,
-            DEMO_PROFILE.gradeLevel,
-            DEMO_PROFILE.schoolName,
-            JSON.stringify(DEMO_PROFILE.goals),
-            DEMO_PROFILE.preferredSessionMinutes,
-            DEMO_PROFILE.maxDailyStudyMinutes,
-            JSON.stringify(DEMO_PROFILE.energyPreferences),
-            JSON.stringify(DEMO_PROFILE.sleepSchedule),
-            JSON.stringify(DEMO_PROFILE.mealTimes),
-          ]
-        );
-        console.log('[JAMI MySQL] Seeded demo user into MySQL.');
-      } else {
-        await db.execute(
-          `UPDATE users SET password_hash = ?, password_salt = ? WHERE email = ?`,
-          [demoUser.passwordHash, demoUser.passwordSalt, demoUser.email]
-        );
+      // 2. Sync Admin User (james.admin@gmail.com / Minhtriet14)
+      const adminUser = this.demoUsers.get(ADMIN_USER.email.toLowerCase());
+      if (adminUser) {
+        const existingAdmin = await db.query<any>('SELECT id FROM users WHERE email = ?', [ADMIN_USER.email]);
+        const { passwordHash: adminScryptHash, passwordSalt: adminScryptSalt } = await this.hashPassword('Minhtriet14');
+
+        if (existingAdmin.length === 0) {
+          await db.execute(
+            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at)
+             VALUES (?, ?, ?, ?, 'scrypt', ?, ?, ?, ?, ?, 'admin', 'active', ?)`,
+            [
+              adminUser.id,
+              adminUser.email,
+              adminScryptHash,
+              adminScryptSalt,
+              adminUser.displayName,
+              adminUser.preferredName,
+              adminUser.locale,
+              adminUser.timezone,
+              adminUser.ageBand,
+              new Date(),
+            ]
+          );
+          console.log('[JAMI MySQL] Seeded admin user james.admin@gmail.com into MySQL.');
+        } else {
+          // Ensure admin privileges and correct password hash
+          await db.execute(
+            `UPDATE users SET password_hash = ?, password_salt = ?, password_scheme = 'scrypt', role = 'admin', status = 'active' WHERE email = ?`,
+            [adminScryptHash, adminScryptSalt, ADMIN_USER.email]
+          );
+        }
       }
     } catch (err: any) {
       console.warn('[JAMI MySQL] User repository sync notice:', err.message);
@@ -152,7 +206,7 @@ export class UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
            FROM users
            WHERE LOWER(email) = ?`,
           [normalizedEmail]
@@ -180,7 +234,8 @@ export class UserRepository {
             locale: r.locale,
             timezone: r.timezone,
             ageBand: r.age_band,
-            status: r.status,
+            role: r.role || 'user',
+            status: r.status || 'active',
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
         }
@@ -198,7 +253,7 @@ export class UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
            FROM users
            WHERE id = ?`,
           [id]
@@ -226,7 +281,8 @@ export class UserRepository {
             locale: r.locale,
             timezone: r.timezone,
             ageBand: r.age_band,
-            status: r.status,
+            role: r.role || 'user',
+            status: r.status || 'active',
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
         }
@@ -546,6 +602,192 @@ export class UserRepository {
       return true;
     }
   }
+
+  // ==========================================
+  // Admin User Management Operations
+  // ==========================================
+
+  public async getAllUsers(params?: {
+    search?: string;
+    status?: string;
+  }): Promise<{
+    users: User[];
+    totalCount: number;
+    activeCount: number;
+    bannedCount: number;
+    adminCount: number;
+  }> {
+    const search = params?.search?.trim().toLowerCase() || '';
+    const statusFilter = params?.status?.trim() || '';
+
+    if (db.isHealthy()) {
+      try {
+        let query = `
+          SELECT id, email, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
+          FROM users
+          WHERE 1=1
+        `;
+        const queryArgs: any[] = [];
+
+        if (search) {
+          query += ` AND (LOWER(email) LIKE ? OR LOWER(display_name) LIKE ? OR LOWER(preferred_name) LIKE ?)`;
+          const sParam = `%${search}%`;
+          queryArgs.push(sParam, sParam, sParam);
+        }
+
+        if (statusFilter && statusFilter !== 'all') {
+          query += ` AND status = ?`;
+          queryArgs.push(statusFilter);
+        }
+
+        query += ` ORDER BY created_at DESC`;
+
+        const rows = await db.query<any>(query, queryArgs);
+
+        const users: User[] = rows.map((r) => ({
+          id: r.id,
+          email: r.email,
+          displayName: r.display_name,
+          preferredName: r.preferred_name,
+          locale: r.locale,
+          timezone: r.timezone,
+          ageBand: r.age_band,
+          role: r.role || 'user',
+          status: r.status || 'active',
+          createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+        }));
+
+        // Get overall statistics across all users
+        const allStats = await db.query<any>(`
+          SELECT 
+            COUNT(*) as total_count,
+            SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+            SUM(CASE WHEN status = 'banned' THEN 1 ELSE 0 END) as banned_count,
+            SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END) as admin_count
+          FROM users
+        `);
+
+        const statsRow = allStats[0] || {};
+        return {
+          users,
+          totalCount: Number(statsRow.total_count) || users.length,
+          activeCount: Number(statsRow.active_count) || 0,
+          bannedCount: Number(statsRow.banned_count) || 0,
+          adminCount: Number(statsRow.admin_count) || 0,
+        };
+      } catch (err: any) {
+        if (isProduction) throw err;
+      }
+    }
+
+    // In-memory fallback
+    const allUsers: User[] = Array.from(this.demoUsers.values()).map((u) => ({
+      id: u.id,
+      email: u.email,
+      displayName: u.displayName,
+      preferredName: u.preferredName,
+      locale: u.locale,
+      timezone: u.timezone,
+      ageBand: u.ageBand,
+      role: u.role || 'user',
+      status: u.status || 'active',
+      createdAt: u.createdAt,
+    }));
+
+    const totalCount = allUsers.length;
+    const activeCount = allUsers.filter((u) => u.status === 'active').length;
+    const bannedCount = allUsers.filter((u) => u.status === 'banned').length;
+    const adminCount = allUsers.filter((u) => u.role === 'admin').length;
+
+    let filtered = allUsers;
+    if (search) {
+      filtered = filtered.filter(
+        (u) =>
+          u.email.toLowerCase().includes(search) ||
+          u.displayName.toLowerCase().includes(search) ||
+          u.preferredName.toLowerCase().includes(search)
+      );
+    }
+    if (statusFilter && statusFilter !== 'all') {
+      filtered = filtered.filter((u) => u.status === statusFilter);
+    }
+
+    return {
+      users: filtered,
+      totalCount,
+      activeCount,
+      bannedCount,
+      adminCount,
+    };
+  }
+
+  public async setUserStatus(userId: string, status: 'active' | 'banned' | 'inactive'): Promise<User> {
+    if (db.isHealthy()) {
+      await db.execute(`UPDATE users SET status = ?, updated_at = NOW(3) WHERE id = ?`, [status, userId]);
+      if (status === 'banned') {
+        try {
+          await db.execute(`UPDATE refresh_sessions SET revoked_at = NOW(3) WHERE user_id = ?`, [userId]);
+        } catch {}
+      }
+    }
+
+    for (const u of this.demoUsers.values()) {
+      if (u.id === userId) {
+        u.status = status;
+      }
+    }
+
+    const updated = await this.findById(userId);
+    if (!updated) {
+      throw new Error('Người dùng không tồn tại.');
+    }
+    const { passwordHash, passwordSalt, passwordScheme, ...safeUser } = updated;
+    return safeUser;
+  }
+
+  public async setUserRole(userId: string, role: 'admin' | 'user'): Promise<User> {
+    if (db.isHealthy()) {
+      await db.execute(`UPDATE users SET role = ?, updated_at = NOW(3) WHERE id = ?`, [role, userId]);
+    }
+
+    for (const u of this.demoUsers.values()) {
+      if (u.id === userId) {
+        u.role = role;
+      }
+    }
+
+    const updated = await this.findById(userId);
+    if (!updated) {
+      throw new Error('Người dùng không tồn tại.');
+    }
+    const { passwordHash, passwordSalt, passwordScheme, ...safeUser } = updated;
+    return safeUser;
+  }
+
+  public async deleteUser(userId: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      try {
+        await db.withTransaction(async (conn) => {
+          await conn.execute(`DELETE FROM student_profiles WHERE user_id = ?`, [userId]);
+          await conn.execute(`DELETE FROM refresh_sessions WHERE user_id = ?`, [userId]);
+          await conn.execute(`DELETE FROM consent_records WHERE user_id = ?`, [userId]);
+          await conn.execute(`DELETE FROM users WHERE id = ?`, [userId]);
+        });
+      } catch (err: any) {
+        await db.execute(`DELETE FROM users WHERE id = ?`, [userId]);
+      }
+    }
+
+    for (const [email, u] of this.demoUsers.entries()) {
+      if (u.id === userId) {
+        this.demoUsers.delete(email);
+        this.demoProfiles.delete(userId);
+      }
+    }
+
+    return true;
+  }
 }
 
 export const userRepo = UserRepository.getInstance();
+
