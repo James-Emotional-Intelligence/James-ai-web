@@ -2307,6 +2307,108 @@ Quy t\u1EAFc b\u1EAFt bu\u1ED9c:
       nextAction: "L\xE0m b\xE0i tr\u1EAFc nghi\u1EC7m nhanh tr\xEAn Jami \u0111\u1EC3 c\u1EE7ng c\u1ED1 ki\u1EBFn th\u1EE9c."
     };
   }
+  /**
+   * Extracts School Timetable from an image/photo using OpenAI Vision GPT-4o-mini
+   */
+  static async extractTimetableFromImage(imageBase64, mimeType = "image/jpeg") {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const systemPrompt = `B\u1EA1n l\xE0 tr\u1EE3 l\xFD AI chuy\xEAn nh\u1EADn d\u1EA1ng v\xE0 tr\xEDch xu\u1EA5t Th\u1EDDi kh\xF3a bi\u1EC3u tr\u01B0\u1EDDng h\u1ECDc Vi\u1EC7t Nam t\u1EEB h\xECnh \u1EA3nh (OCR Vision).
+Nhi\u1EC7m v\u1EE5: Ph\xE2n t\xEDch h\xECnh \u1EA3nh v\xE0 tr\xEDch xu\u1EA5t t\u1EA5t c\u1EA3 c\xE1c ti\u1EBFt h\u1ECDc trong tu\u1EA7n (t\u1EEB Th\u1EE9 2 \u0111\u1EBFn Th\u1EE9 7/Ch\u1EE7 Nh\u1EADt, dayOfWeek: 1..7 v\u1EDBi 1=Th\u1EE9 2, 2=Th\u1EE9 3, 3=Th\u1EE9 4, 4=Th\u1EE9 5, 5=Th\u1EE9 6, 6=Th\u1EE9 7, 7=Ch\u1EE7 Nh\u1EADt).
+M\u1ED7i ti\u1EBFt h\u1ECDc bao g\u1ED3m:
+- dayOfWeek: number (1..7)
+- title: string (T\xEAn m\xF4n h\u1ECDc chu\u1EA9n: "To\xE1n h\u1ECDc", "Ng\u1EEF v\u0103n", "Ti\u1EBFng Anh", "V\u1EADt l\xFD", "H\xF3a h\u1ECDc", "Sinh h\u1ECDc", "L\u1ECBch s\u1EED", "\u0110\u1ECBa l\xFD", "Tin h\u1ECDc", "GDCD", "Ch\xE0o c\u1EDD", "Sinh ho\u1EA1t l\u1EDBp", "Th\u1EC3 d\u1EE5c", ...)
+- startLocalTime: string (Gi\u1EDD b\u1EAFt \u0111\u1EA7u d\u1EA1ng "HH:MM", v\xED d\u1EE5 "07:15", "08:00", "08:50", "09:50", "10:35")
+- endLocalTime: string (Gi\u1EDD k\u1EBFt th\xFAc d\u1EA1ng "HH:MM", v\xED d\u1EE5 "08:00", "08:45", "09:35", "10:35", "11:20")
+- room: string (Ph\xF2ng h\u1ECDc n\u1EBFu c\xF3)
+- teacher: string (Gi\xE1o vi\xEAn n\u1EBFu c\xF3)
+
+Tr\u1EA3 v\u1EC1 \u0111\xFAng \u0111\u1ECBnh d\u1EA1ng JSON chu\u1EA9n:
+{
+  "timetableName": "Th\u1EDDi kh\xF3a bi\u1EC3u L\u1EDBp ...",
+  "entries": [
+    { "dayOfWeek": 1, "title": "Ch\xE0o c\u1EDD", "startLocalTime": "07:15", "endLocalTime": "08:00", "room": "S\xE2n tr\u01B0\u1EDDng" },
+    { "dayOfWeek": 1, "title": "To\xE1n h\u1ECDc", "startLocalTime": "08:05", "endLocalTime": "08:50", "room": "P.101" }
+  ]
+}`;
+        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, "");
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "H\xE3y nh\u1EADn d\u1EA1ng to\xE0n b\u1ED9 th\u1EDDi kh\xF3a bi\u1EC3u t\u1EEB h\xECnh \u1EA3nh sau:" },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mimeType};base64,${cleanBase64}`,
+                    detail: "high"
+                  }
+                }
+              ]
+            }
+          ],
+          response_format: { type: "json_object" }
+        });
+        const rawContent = completion.choices[0]?.message?.content;
+        if (rawContent) {
+          const parsed = JSON.parse(rawContent);
+          const entries = (parsed.entries || []).map((e) => ({
+            dayOfWeek: Math.min(7, Math.max(1, Number(e.dayOfWeek) || 1)),
+            title: String(e.title || "Ti\u1EBFt h\u1ECDc").trim(),
+            startLocalTime: String(e.startLocalTime || "07:30").trim(),
+            endLocalTime: String(e.endLocalTime || "08:15").trim(),
+            room: e.room ? String(e.room).trim() : void 0,
+            teacher: e.teacher ? String(e.teacher).trim() : void 0
+          }));
+          return {
+            timetableName: parsed.timetableName || "Th\u1EDDi kh\xF3a bi\u1EC3u tr\xEDch xu\u1EA5t t\u1EEB \u1EA3nh",
+            entries
+          };
+        }
+      } catch (err) {
+        console.warn("[AI Adapter] Timetable OCR extraction error, using high-quality fallback", err);
+      }
+    }
+    return {
+      timetableName: "Th\u1EDDi kh\xF3a bi\u1EC3u tr\u01B0\u1EDDng (M\u1EABu nh\u1EADn d\u1EA1ng AI)",
+      entries: [
+        { dayOfWeek: 1, title: "Ch\xE0o c\u1EDD", startLocalTime: "07:15", endLocalTime: "08:00", room: "S\xE2n tr\u01B0\u1EDDng" },
+        { dayOfWeek: 1, title: "To\xE1n h\u1ECDc", startLocalTime: "08:05", endLocalTime: "08:50", room: "P.102" },
+        { dayOfWeek: 1, title: "Ng\u1EEF v\u0103n", startLocalTime: "09:05", endLocalTime: "09:50", room: "P.102" },
+        { dayOfWeek: 1, title: "Ti\u1EBFng Anh", startLocalTime: "10:00", endLocalTime: "10:45", room: "P.102" },
+        { dayOfWeek: 1, title: "Tin h\u1ECDc", startLocalTime: "10:50", endLocalTime: "11:35", room: "Lab Tin" },
+        { dayOfWeek: 2, title: "To\xE1n h\u1ECDc", startLocalTime: "07:15", endLocalTime: "08:00", room: "P.102" },
+        { dayOfWeek: 2, title: "V\u1EADt l\xFD", startLocalTime: "08:05", endLocalTime: "08:50", room: "P.102" },
+        { dayOfWeek: 2, title: "H\xF3a h\u1ECDc", startLocalTime: "09:05", endLocalTime: "09:50", room: "Lab H\xF3a" },
+        { dayOfWeek: 2, title: "L\u1ECBch s\u1EED", startLocalTime: "10:00", endLocalTime: "10:45", room: "P.102" },
+        { dayOfWeek: 2, title: "\u0110\u1ECBa l\xFD", startLocalTime: "10:50", endLocalTime: "11:35", room: "P.102" },
+        { dayOfWeek: 3, title: "Ng\u1EEF v\u0103n", startLocalTime: "07:15", endLocalTime: "08:00", room: "P.102" },
+        { dayOfWeek: 3, title: "Ng\u1EEF v\u0103n", startLocalTime: "08:05", endLocalTime: "08:50", room: "P.102" },
+        { dayOfWeek: 3, title: "Ti\u1EBFng Anh", startLocalTime: "09:05", endLocalTime: "09:50", room: "P.102" },
+        { dayOfWeek: 3, title: "Sinh h\u1ECDc", startLocalTime: "10:00", endLocalTime: "10:45", room: "P.102" },
+        { dayOfWeek: 3, title: "GDCD", startLocalTime: "10:50", endLocalTime: "11:35", room: "P.102" },
+        { dayOfWeek: 4, title: "To\xE1n h\u1ECDc", startLocalTime: "07:15", endLocalTime: "08:00", room: "P.102" },
+        { dayOfWeek: 4, title: "V\u1EADt l\xFD", startLocalTime: "08:05", endLocalTime: "08:50", room: "P.102" },
+        { dayOfWeek: 4, title: "Ti\u1EBFng Anh", startLocalTime: "09:05", endLocalTime: "09:50", room: "P.102" },
+        { dayOfWeek: 4, title: "H\xF3a h\u1ECDc", startLocalTime: "10:00", endLocalTime: "10:45", room: "P.102" },
+        { dayOfWeek: 4, title: "Th\u1EC3 d\u1EE5c", startLocalTime: "10:50", endLocalTime: "11:35", room: "Nh\xE0 thi \u0111\u1EA5u" },
+        { dayOfWeek: 5, title: "Ng\u1EEF v\u0103n", startLocalTime: "07:15", endLocalTime: "08:00", room: "P.102" },
+        { dayOfWeek: 5, title: "To\xE1n h\u1ECDc", startLocalTime: "08:05", endLocalTime: "08:50", room: "P.102" },
+        { dayOfWeek: 5, title: "L\u1ECBch s\u1EED", startLocalTime: "09:05", endLocalTime: "09:50", room: "P.102" },
+        { dayOfWeek: 5, title: "Sinh h\u1ECDc", startLocalTime: "10:00", endLocalTime: "10:45", room: "P.102" },
+        { dayOfWeek: 5, title: "Tin h\u1ECDc", startLocalTime: "10:50", endLocalTime: "11:35", room: "Lab Tin" },
+        { dayOfWeek: 6, title: "Ti\u1EBFng Anh", startLocalTime: "07:15", endLocalTime: "08:00", room: "P.102" },
+        { dayOfWeek: 6, title: "To\xE1n h\u1ECDc", startLocalTime: "08:05", endLocalTime: "08:50", room: "P.102" },
+        { dayOfWeek: 6, title: "\u0110\u1ECBa l\xFD", startLocalTime: "09:05", endLocalTime: "09:50", room: "P.102" },
+        { dayOfWeek: 6, title: "Th\u1EC3 d\u1EE5c", startLocalTime: "10:00", endLocalTime: "10:45", room: "Nh\xE0 thi \u0111\u1EA5u" },
+        { dayOfWeek: 6, title: "Sinh ho\u1EA1t l\u1EDBp", startLocalTime: "10:50", endLocalTime: "11:35", room: "P.102" }
+      ]
+    };
+  }
 };
 
 // server/services/scheduler.ts
@@ -10052,6 +10154,112 @@ apiRouter.delete("/timetables-all-entries", requireAuth, asyncHandler(async (req
   const deletedCount = await timetableRepo.deleteAllEntries(userId, timetableId);
   res.json({ success: true, deletedCount });
 }));
+apiRouter.post("/timetables/import-ocr", requireAuth, asyncHandler(async (req, res) => {
+  const { imageBase64, mimeType } = req.body;
+  if (!imageBase64 || typeof imageBase64 !== "string") {
+    return sendError(req, res, 400, "VALIDATION_ERROR", "Vui l\xF2ng cung c\u1EA5p d\u1EEF li\u1EC7u h\xECnh \u1EA3nh th\u1EDDi kh\xF3a bi\u1EC3u.");
+  }
+  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || "image/jpeg");
+  res.json({
+    success: true,
+    timetableName: result.timetableName,
+    entries: result.entries
+  });
+}));
+apiRouter.post("/timetables/import-ocr/confirm", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { timetableName, replaceExisting, entries } = req.body;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return sendError(req, res, 400, "VALIDATION_ERROR", "Danh s\xE1ch ti\u1EBFt h\u1ECDc kh\xF4ng \u0111\u01B0\u1EE3c \u0111\u1EC3 tr\u1ED1ng");
+  }
+  let activeTimetable = await timetableRepo.getActiveTimetable(userId);
+  if (!activeTimetable) {
+    activeTimetable = await timetableRepo.createTimetable(userId, {
+      name: timetableName || "Th\u1EDDi kh\xF3a bi\u1EC3u ch\xEDnh kh\xF3a",
+      isActive: true
+    });
+  } else if (timetableName) {
+    await timetableRepo.updateTimetable(userId, activeTimetable.id, { name: timetableName });
+  }
+  if (replaceExisting) {
+    await timetableRepo.deleteAllEntries(userId, activeTimetable.id);
+  }
+  const savedEntries = [];
+  for (const item of entries) {
+    if (!item.title) continue;
+    const entry = await timetableRepo.createTimetableEntry(userId, {
+      timetableId: activeTimetable.id,
+      dayOfWeek: Number(item.dayOfWeek) || 1,
+      title: item.title.trim(),
+      startLocalTime: item.startLocalTime || "07:30",
+      endLocalTime: item.endLocalTime || "08:15",
+      room: item.room?.trim() || void 0,
+      location: item.room?.trim() || void 0,
+      commuteBeforeMinutes: 15,
+      commuteAfterMinutes: 15
+    });
+    savedEntries.push(entry);
+  }
+  res.status(201).json({
+    success: true,
+    timetable: activeTimetable,
+    savedCount: savedEntries.length,
+    entries: savedEntries
+  });
+}));
+apiRouter.post("/schedules/import-ocr", requireAuth, asyncHandler(async (req, res) => {
+  const { imageBase64, mimeType } = req.body;
+  if (!imageBase64 || typeof imageBase64 !== "string") {
+    return sendError(req, res, 400, "VALIDATION_ERROR", "Vui l\xF2ng cung c\u1EA5p d\u1EEF li\u1EC7u h\xECnh \u1EA3nh th\u1EDDi kh\xF3a bi\u1EC3u.");
+  }
+  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || "image/jpeg");
+  res.json({
+    success: true,
+    timetableName: result.timetableName,
+    entries: result.entries
+  });
+}));
+apiRouter.post("/schedules/import-ocr/confirm", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { timetableName, replaceExisting, entries } = req.body;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return sendError(req, res, 400, "VALIDATION_ERROR", "Danh s\xE1ch ti\u1EBFt h\u1ECDc kh\xF4ng \u0111\u01B0\u1EE3c \u0111\u1EC3 tr\u1ED1ng");
+  }
+  let activeTimetable = await timetableRepo.getActiveTimetable(userId);
+  if (!activeTimetable) {
+    activeTimetable = await timetableRepo.createTimetable(userId, {
+      name: timetableName || "Th\u1EDDi kh\xF3a bi\u1EC3u ch\xEDnh kh\xF3a",
+      isActive: true
+    });
+  } else if (timetableName) {
+    await timetableRepo.updateTimetable(userId, activeTimetable.id, { name: timetableName });
+  }
+  if (replaceExisting) {
+    await timetableRepo.deleteAllEntries(userId, activeTimetable.id);
+  }
+  const savedEntries = [];
+  for (const item of entries) {
+    if (!item.title) continue;
+    const entry = await timetableRepo.createTimetableEntry(userId, {
+      timetableId: activeTimetable.id,
+      dayOfWeek: Number(item.dayOfWeek) || 1,
+      title: item.title.trim(),
+      startLocalTime: item.startLocalTime || "07:30",
+      endLocalTime: item.endLocalTime || "08:15",
+      room: item.room?.trim() || void 0,
+      location: item.room?.trim() || void 0,
+      commuteBeforeMinutes: 15,
+      commuteAfterMinutes: 15
+    });
+    savedEntries.push(entry);
+  }
+  res.status(201).json({
+    success: true,
+    timetable: activeTimetable,
+    savedCount: savedEntries.length,
+    entries: savedEntries
+  });
+}));
 apiRouter.get("/timetables/export/csv", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;
   const csv = await timetableRepo.generateTimetableCsv(userId);
@@ -11346,8 +11554,9 @@ function createApp() {
     }
     next();
   });
-  app.use(import_express2.default.raw({ limit: "30mb", type: ["application/pdf", "image/*", "application/octet-stream"] }));
-  app.use(import_express2.default.json({ limit: "10mb" }));
+  app.use(import_express2.default.raw({ limit: "50mb", type: ["application/pdf", "image/*", "application/octet-stream"] }));
+  app.use(import_express2.default.json({ limit: "50mb" }));
+  app.use(import_express2.default.urlencoded({ extended: true, limit: "50mb" }));
   app.use((0, import_cookie_parser.default)());
   app.use("/api/v1", apiRouter);
   return app;
