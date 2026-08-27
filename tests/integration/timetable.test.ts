@@ -161,4 +161,37 @@ describe('Timetable & Replan Subsystem Integration Tests', () => {
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('PROPOSAL_NOT_FOUND');
   });
+
+  it('7. POST /api/v1/timetables/import-ocr and /confirm extracts and saves entries', async () => {
+    // 1. OCR Extraction (Preview)
+    const ocrRes = await request(app)
+      .post('/api/v1/timetables/import-ocr')
+      .set('Cookie', [sessionCookie])
+      .send({
+        imageBase64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        mimeType: 'image/png',
+      });
+
+    expect(ocrRes.status).toBe(200);
+    expect(ocrRes.body.success).toBe(true);
+    expect(Array.isArray(ocrRes.body.entries)).toBe(true);
+    expect(ocrRes.body.entries.length).toBeGreaterThan(0);
+
+    // 2. OCR Confirmation & Save
+    const confirmRes = await request(app)
+      .post('/api/v1/timetables/import-ocr/confirm')
+      .set('Cookie', [sessionCookie])
+      .send({
+        timetableName: 'Thời khóa biểu OCR Test',
+        replaceExisting: true,
+        entries: [
+          { dayOfWeek: 1, title: 'Toán học', startLocalTime: '07:30', endLocalTime: '08:15', room: 'P.101' },
+          { dayOfWeek: 1, title: 'Ngữ văn', startLocalTime: '08:20', endLocalTime: '09:05', room: 'P.101' },
+        ],
+      });
+
+    expect(confirmRes.status).toBe(201);
+    expect(confirmRes.body.success).toBe(true);
+    expect(confirmRes.body.savedCount).toBe(2);
+  });
 });
