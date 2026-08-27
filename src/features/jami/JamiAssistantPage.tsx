@@ -15,10 +15,14 @@ import {
   AlertCircle,
   RefreshCw,
   Clock,
+  Paperclip,
+  FileText,
+  X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
-import { JamiConversation, JamiMessageItem } from '../../../shared/types';
+import { JamiConversation, JamiMessageItem, LearningMaterial } from '../../../shared/types';
+import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
 import confetti from 'canvas-confetti';
 
 export const JamiAssistantPage: React.FC = () => {
@@ -32,6 +36,16 @@ export const JamiAssistantPage: React.FC = () => {
   const [isSending, setIsSending] = useState(false);
   const [confirmingMsgId, setConfirmingMsgId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // File / Material attachment state
+  const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
+  const [attachedMaterial, setAttachedMaterial] = useState<{
+    id?: string;
+    title: string;
+    fileName?: string;
+    source: 'upload' | 'material';
+    savedToMaterials?: boolean;
+  } | null>(null);
 
   // Edit title state
   const [editingConvId, setEditingConvId] = useState<string | null>(null);
@@ -133,10 +147,17 @@ export const JamiAssistantPage: React.FC = () => {
   };
 
   const handleSendMessage = async (textToSend?: string) => {
-    const text = (textToSend || inputMessage).trim();
-    if (!text || isSending || !activeConvId) return;
+    const rawText = (textToSend || inputMessage).trim();
+    if (!rawText || isSending || !activeConvId) return;
+
+    const attachmentPrefix = attachedMaterial
+      ? `[Tài liệu đính kèm: "${attachedMaterial.title}"] `
+      : '';
+    const text = `${attachmentPrefix}${rawText}`;
 
     setInputMessage('');
+    const currentAttachment = attachedMaterial;
+    setAttachedMaterial(null);
     setError(null);
 
     const clientMessageId = 'cl_' + Date.now();
@@ -170,6 +191,7 @@ export const JamiAssistantPage: React.FC = () => {
       setError(err.message || 'Không thể gửi tin nhắn.');
       // Rollback optimistic message on failure
       setMessages((prev) => prev.filter((m) => m.id !== clientMessageId));
+      if (currentAttachment) setAttachedMaterial(currentAttachment);
     } finally {
       setIsSending(false);
     }
@@ -494,17 +516,53 @@ export const JamiAssistantPage: React.FC = () => {
           </div>
         )}
 
+        {/* Attached Material Preview Pill */}
+        {attachedMaterial && (
+          <div className="mt-2 p-2 bg-[#101A13] border border-[#22C55E]/40 rounded-xl flex items-center justify-between text-xs text-[#86EFAC] animate-in fade-in">
+            <div className="flex items-center gap-2 truncate">
+              <FileText className="w-4 h-4 text-[#22C55E] shrink-0" />
+              <span className="font-bold truncate">Đính kèm: {attachedMaterial.title}</span>
+              {attachedMaterial.savedToMaterials && (
+                <span className="text-[10px] px-1.5 py-0.5 bg-[#14532D] text-[#86EFAC] rounded font-bold border border-[#22C55E]/30 shrink-0">
+                  Đã lưu vào Kho
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setAttachedMaterial(null)}
+              className="p-1 hover:text-rose-400 cursor-pointer shrink-0"
+              title="Hủy đính kèm"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Input Bar */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleSendMessage();
           }}
-          className="pt-4 mt-2 border-t border-[rgba(34,197,94,0.18)] flex items-center gap-2"
+          className="pt-3 mt-1 border-t border-[rgba(34,197,94,0.18)] flex items-center gap-2"
         >
+          <button
+            type="button"
+            onClick={() => setIsAttachModalOpen(true)}
+            className="p-3 sm:p-3.5 rounded-2xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.25)] transition-all cursor-pointer shrink-0 font-bold"
+            title="Đính kèm tài liệu từ Kho hoặc tải tệp mới từ máy"
+          >
+            <Paperclip className="w-4 h-4 text-[#22C55E]" />
+          </button>
+
           <input
             type="text"
-            placeholder="Nhắn tin với Jami (ví dụ: 'Hôm nay học gì?', 'Dời bài tập Toán tối nay'...)"
+            placeholder={
+              attachedMaterial
+                ? `Nhập câu hỏi về "${attachedMaterial.title}"...`
+                : "Nhắn tin với Jami (ví dụ: 'Hôm nay học gì?', 'Giải bài tập Toán'...)"
+            }
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}
             className="flex-1 text-xs sm:text-sm p-3.5 bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-2xl focus:border-[#22C55E] focus:outline-none"
@@ -519,6 +577,23 @@ export const JamiAssistantPage: React.FC = () => {
           </button>
         </form>
       </div>
+
+      {/* Universal File / Material Attachment Modal */}
+      <MaterialFilePickerModal
+        isOpen={isAttachModalOpen}
+        onClose={() => setIsAttachModalOpen(false)}
+        title="Đính kèm Tài liệu cho Trợ lý Jami"
+        description="Chọn tài liệu có sẵn từ Kho hoặc tải file mới từ máy tính (kèm tùy chọn lưu vào kho)"
+        onFileSelected={(res) => {
+          setAttachedMaterial({
+            id: res.materialId,
+            title: res.materialTitle || res.fileName,
+            fileName: res.fileName,
+            source: res.source,
+            savedToMaterials: res.savedToMaterials,
+          });
+        }}
+      />
     </div>
   );
 };

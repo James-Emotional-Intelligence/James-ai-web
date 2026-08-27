@@ -18,10 +18,14 @@ import {
   Layers,
   Star,
   FileText,
+  Paperclip,
+  FolderArchive,
+  Upload,
 } from 'lucide-react';
 import { api } from '../../lib/api-client';
 import { StudyTask, ExecutionGuide, TaskEvidence, PreparationChecklistItem } from '../../../shared/types';
 import { GuidedExecutionModal } from './GuidedExecutionModal';
+import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
 import confetti from 'canvas-confetti';
 
 export const TaskDetailPage: React.FC = () => {
@@ -38,6 +42,7 @@ export const TaskDetailPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [checklistError, setChecklistError] = useState<string | null>(null);
   const [isGuidedModalOpen, setIsGuidedModalOpen] = useState(false);
+  const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
 
   const fetchTaskDetails = useCallback(async () => {
     if (!id) return;
@@ -456,14 +461,26 @@ export const TaskDetailPage: React.FC = () => {
               })}
             </div>
 
-            {/* Evidence & Reflection History */}
-            {evidenceList.length > 0 && (
-              <div className="mt-6 pt-4 border-t border-[rgba(34,197,94,0.18)] space-y-3">
+            {/* Evidence & Attached Material Section */}
+            <div className="mt-6 pt-4 border-t border-[rgba(34,197,94,0.18)] space-y-3">
+              <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-[#86EFAC] uppercase tracking-wider flex items-center gap-2">
                   <FileText className="w-4 h-4 text-[#22C55E]" />
-                  <span>Minh chứng & Tự đánh giá ({evidenceList.length})</span>
+                  <span>Tài liệu bài tập & Minh chứng ({evidenceList.length})</span>
                 </h3>
 
+                <button
+                  type="button"
+                  onClick={() => setIsAttachModalOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] text-xs font-bold border border-[#22C55E]/40 transition-all cursor-pointer shadow-sm"
+                  title="Đính kèm tài liệu tham khảo từ kho hoặc tải tệp lên"
+                >
+                  <Paperclip className="w-3.5 h-3.5" />
+                  <span>Đính kèm tệp</span>
+                </button>
+              </div>
+
+              {evidenceList.length > 0 ? (
                 <div className="space-y-2">
                   {evidenceList.map((ev) => (
                     <div
@@ -471,7 +488,7 @@ export const TaskDetailPage: React.FC = () => {
                       className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] space-y-1.5 text-xs"
                     >
                       <div className="flex items-center justify-between text-[#86EFAC] font-bold">
-                        <span>Minh chứng kết quả</span>
+                        <span>Tài liệu / Minh chứng</span>
                         {ev.scoreValue && (
                           <span className="flex items-center gap-1 text-amber-400">
                             <Star className="w-3.5 h-3.5 fill-current" />
@@ -486,8 +503,12 @@ export const TaskDetailPage: React.FC = () => {
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="p-4 rounded-2xl bg-[#050806] border border-[rgba(34,197,94,0.15)] text-center text-xs text-[#A9B8AE]">
+                  Chưa có tài liệu đính kèm. Bấm "Đính kèm tệp" để thêm tài liệu tham khảo cho bài học.
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -503,6 +524,29 @@ export const TaskDetailPage: React.FC = () => {
           }}
         />
       )}
+
+      {/* Universal File / Material Picker */}
+      <MaterialFilePickerModal
+        isOpen={isAttachModalOpen}
+        onClose={() => setIsAttachModalOpen(false)}
+        title="Đính Kèm Tài Liệu Cho Bài Học"
+        description="Chọn tài liệu từ Kho hoặc tải file bài tập mới từ máy tính (kèm lưu vào kho)"
+        onFileSelected={async (res) => {
+          if (!task) return;
+          try {
+            await api.submitTaskEvidence(task.id, {
+              textValue: `[Tài liệu đính kèm]: ${res.materialTitle || res.fileName}${
+                res.savedToMaterials ? ' (Đã lưu vào Kho tài liệu)' : ''
+              }`,
+              scoreValue: 5,
+            });
+            confetti({ particleCount: 50, spread: 40 });
+            await fetchTaskDetails();
+          } catch (err: any) {
+            alert(err.message || 'Không thể đính kèm tài liệu.');
+          }
+        }}
+      />
     </div>
   );
 };

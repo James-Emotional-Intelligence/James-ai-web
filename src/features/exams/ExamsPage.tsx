@@ -15,9 +15,12 @@ import {
   Calendar,
   Layers,
   ArrowRight,
+  FilePlus,
+  FolderArchive,
 } from 'lucide-react';
 import { api } from '../../lib/api-client';
 import { Exam, Quiz, QuizAttempt, Subject, ExamMilestone } from '../../../shared/types';
+import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
 import confetti from 'canvas-confetti';
 
 export const ExamsPage: React.FC = () => {
@@ -26,6 +29,10 @@ export const ExamsPage: React.FC = () => {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Material Quiz Generator Modal
+  const [isMaterialQuizModalOpen, setIsMaterialQuizModalOpen] = useState(false);
+  const [isGeneratingMaterialQuiz, setIsGeneratingMaterialQuiz] = useState(false);
 
   // Active Quiz State
   const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
@@ -174,70 +181,27 @@ export const ExamsPage: React.FC = () => {
         examAt: new Date(newExamDate).toISOString(),
         importance: newExamImportance,
         scopeText: newExamScope.trim() || 'Phạm vi kiểm tra chương học trọng tâm theo SGK.',
-        topics: [{ name: selectedSubj?.name || 'Kiến thức trọng tâm', weight: 1 }],
+        scope: newExamScope.trim() || undefined,
       });
 
-      setExams((prev) => [res.exam, ...prev]);
+      setIsAddExamOpen(false);
       setNewExamTitle('');
       setNewExamDate('');
       setNewExamScope('');
-      setIsAddExamOpen(false);
       confetti({ particleCount: 70, spread: 50 });
+      await fetchData();
     } catch (err: any) {
-      setExamFormError(err.message || 'Không thể thêm kỳ kiểm tra.');
+      setExamFormError(err.message || 'Không thể tạo kỳ kiểm tra.');
     } finally {
       setIsSavingExam(false);
     }
   };
 
-  const calculateDaysRemaining = (examAt: string) => {
-    const diff = new Date(examAt).getTime() - Date.now();
-    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
-  };
-
   return (
-    <div className="space-y-6">
-      {/* Header Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0B120D] p-5 sm:p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl">
-        <div>
-          <h1 className="text-lg sm:text-xl font-black text-[#F3FAF5] flex items-center gap-2">
-            <GraduationCap className="w-6 h-6 text-[#22C55E]" />
-            <span>Trung Tâm Kiểm Tra & Ôn Tập AI</span>
-          </h1>
-          <p className="text-xs text-[#A9B8AE] mt-1">
-            Lộ trình ôn thi 4 mốc thời gian D-14, D-7, D-3, D-1 với đề luyện tập tự động từ Jami
-          </p>
-        </div>
-
-        <button
-          onClick={() => setIsAddExamOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#16A34A] to-[#15803D] hover:from-[#22C55E] hover:to-[#16A34A] text-[#050806] text-xs font-black shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Thêm kỳ kiểm tra mới</span>
-        </button>
-      </div>
-
-      {/* Error state */}
-      {error && (
-        <div className="p-4 bg-rose-950/40 border border-rose-800 rounded-2xl text-rose-300 text-xs flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-          <button
-            onClick={fetchData}
-            className="px-3 py-1 bg-rose-900 text-white font-bold rounded-lg cursor-pointer"
-          >
-            Thử lại
-          </button>
-        </div>
-      )}
-
+    <div className="space-y-6 font-sans">
       {/* Active Quiz Runner View */}
       {activeQuiz && (
         <div className="bg-[#0B120D] rounded-3xl border border-[rgba(34,197,94,0.3)] shadow-2xl p-5 sm:p-8 space-y-6">
-          {/* Quiz Header */}
           <div className="flex flex-wrap items-center justify-between pb-4 border-b border-[rgba(34,197,94,0.18)] gap-3">
             <div>
               <div className="flex items-center gap-2">
@@ -591,10 +555,21 @@ export const ExamsPage: React.FC = () => {
 
         {/* Practice Quizzes Sidebar */}
         <div className="space-y-4">
-          <h2 className="text-base font-bold text-[#F3FAF5] flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-[#22C55E]" />
-            <span>Kho đề ôn luyện AI ({quizzes.length})</span>
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-bold text-[#F3FAF5] flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-[#22C55E]" />
+              <span>Kho đề ôn luyện AI ({quizzes.length})</span>
+            </h2>
+            <button
+              type="button"
+              onClick={() => setIsMaterialQuizModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] text-xs font-bold border border-[#22C55E]/40 transition-all cursor-pointer shadow-sm"
+              title="Tạo đề ôn tập từ tài liệu trong kho hoặc tải file mới lên"
+            >
+              <FolderArchive className="w-3.5 h-3.5" />
+              <span>Tạo đề từ file</span>
+            </button>
+          </div>
 
           <div className="p-5 rounded-3xl bg-[#0B120D] border border-[rgba(34,197,94,0.2)] shadow-xl space-y-3">
             {quizzes.length > 0 ? (
@@ -748,6 +723,15 @@ export const ExamsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Universal File / Material Picker for Quiz Generation */}
+      <MaterialFilePickerModal
+        isOpen={isMaterialQuizModalOpen}
+        onClose={() => setIsMaterialQuizModalOpen(false)}
+        title="Tạo Đề Ôn Tập Từ Tài Liệu / Đề Thi"
+        description="Chọn đề thi/tài liệu có sẵn trong Kho hoặc tải file mới từ máy tính (kèm lưu vào kho)"
+        onFileSelected={handleCreateQuizFromMaterial}
+      />
     </div>
   );
 };

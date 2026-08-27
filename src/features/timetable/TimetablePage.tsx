@@ -33,6 +33,7 @@ import {
   ScheduleProposal,
   Subject,
   SchoolTimetable,
+  LearningMaterial,
 } from '../../../shared/types';
 import { formatTimeVN, formatDateVN } from '../../lib/utils';
 import confetti from 'canvas-confetti';
@@ -49,6 +50,7 @@ export const TimetablePage: React.FC = () => {
   const [busyEvents, setBusyEvents] = useState<BusyEvent[]>([]);
   const [tasks, setTasks] = useState<StudyTask[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [materials, setMaterials] = useState<LearningMaterial[]>([]);
 
   // Loading & Error States
   const [isLoading, setIsLoading] = useState(true);
@@ -91,6 +93,10 @@ export const TimetablePage: React.FC = () => {
   // OCR Timetable Import Modal States
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
   const [ocrStep, setOcrStep] = useState<'upload' | 'analyzing' | 'preview'>('upload');
+  const [ocrSourceTab, setOcrSourceTab] = useState<'upload' | 'materials'>('upload');
+  const [ocrSaveToLibrary, setOcrSaveToLibrary] = useState(true);
+  const [ocrMaterialTitle, setOcrMaterialTitle] = useState('');
+  const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
   const [ocrFile, setOcrFile] = useState<File | null>(null);
   const [ocrPreviewUrl, setOcrPreviewUrl] = useState<string | null>(null);
   const [ocrBase64, setOcrBase64] = useState<string | null>(null);
@@ -154,10 +160,11 @@ export const TimetablePage: React.FC = () => {
       const startRange = weekDays[0].date.toISOString();
       const endRange = new Date(weekDays[6].date.getTime() + 86400000 - 1).toISOString();
 
-      const [ttData, taskData, subData] = await Promise.all([
+      const [ttData, taskData, subData, matData] = await Promise.all([
         api.getTimetable({ from: startRange, to: endRange }),
         api.getTasks(),
         api.getSubjects(),
+        api.getMaterials().catch(() => ({ materials: [] })),
       ]);
 
       setActiveTimetable(ttData.activeTimetable || null);
@@ -165,6 +172,7 @@ export const TimetablePage: React.FC = () => {
       setBusyEvents(ttData.busyEvents || []);
       setTasks(taskData.tasks || []);
       setSubjects(subData.subjects || []);
+      setMaterials(matData.materials || []);
     } catch (err: any) {
       setErrorMessage(err.message || 'Không thể tải dữ liệu thời khóa biểu');
     } finally {
@@ -245,7 +253,8 @@ export const TimetablePage: React.FC = () => {
           commuteAfterMinutes: entryCommuteAfter,
         });
       } else {
-        await api.createTimetableEntry({
+        await api.addTimetableEntry({
+          timetableId: activeTimetable?.id,
           title: entryTitle.trim(),
           subjectId: entrySubjectId || undefined,
           dayOfWeek: entryDayOfWeek,
@@ -417,6 +426,9 @@ export const TimetablePage: React.FC = () => {
     setOcrErrorMessage(null);
     const mime = file.type || 'image/jpeg';
     setOcrMimeType(mime);
+    if (!ocrMaterialTitle) {
+      setOcrMaterialTitle(file.name.replace(/\.[^/.]+$/, ''));
+    }
     const reader = new FileReader();
     reader.onload = () => {
       const res = reader.result as string;
@@ -434,6 +446,25 @@ export const TimetablePage: React.FC = () => {
     setOcrStep('analyzing');
     setOcrErrorMessage(null);
     try {
+      // If user enabled saving to Materials Library and uploaded a file
+      if (ocrSourceTab === 'upload' && ocrSaveToLibrary && ocrFile) {
+        try {
+          const title = ocrMaterialTitle.trim() || ocrFile.name.replace(/\.[^/.]+$/, '');
+          const subjId = subjects[0]?.id || 'subj_toan';
+          const intent = await api.createMaterialUploadIntent({
+            title,
+            subjectId: subjId,
+            fileName: ocrFile.name,
+            mimeType: ocrMimeType,
+            sizeBytes: ocrFile.size,
+          });
+          await api.uploadMaterialDirect(intent.r2ObjectKey, ocrFile, ocrMimeType);
+          await api.finalizeMaterialUpload(intent.material.id, { sizeBytes: ocrFile.size });
+        } catch (saveMatErr) {
+          console.warn('Failed to save timetable image to materials library:', saveMatErr);
+        }
+      }
+
       const res = await api.importTimetableOcr(ocrBase64, ocrMimeType);
       if (res.timetableName) {
         setOcrTimetableName(res.timetableName);
@@ -1607,72 +1638,195 @@ export const TimetablePage: React.FC = () => {
               </div>
             )}
 
-            {/* Step 1: Upload Image */}
+            {/* Step 1: Upload / Choose from Materials */}
             {ocrStep === 'upload' && (
               <div className="space-y-4">
-                <div
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                      handleOcrFileSelect(e.dataTransfer.files[0]);
-                    }
-                  }}
-                  className="border-2 border-dashed border-[rgba(34,197,94,0.35)] hover:border-[#22C55E] bg-[#050806] p-8 rounded-2xl flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:bg-[#101A13]/40 group"
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files && e.target.files[0]) {
-                        handleOcrFileSelect(e.target.files[0]);
-                      }
+                {/* Source Tab Selector */}
+                <div className="grid grid-cols-2 p-1 bg-[#050806] rounded-xl border border-[rgba(34,197,94,0.2)] text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOcrSourceTab('upload');
+                      setOcrErrorMessage(null);
                     }}
-                  />
-
-                  {ocrPreviewUrl ? (
-                    <div className="space-y-3 w-full flex flex-col items-center">
-                      <img
-                        src={ocrPreviewUrl}
-                        alt="Thời khóa biểu preview"
-                        className="max-h-56 rounded-xl object-contain border border-[rgba(34,197,94,0.25)] shadow-lg"
-                      />
-                      <div className="text-xs font-bold text-[#86EFAC] flex items-center gap-1.5">
-                        <Check className="w-4 h-4 text-[#22C55E]" />
-                        <span>Đã chọn: {ocrFile?.name} ({(ocrFile!.size / 1024).toFixed(1)} KB)</span>
-                      </div>
-                      <span className="text-[11px] text-[#A9B8AE] underline group-hover:text-white">
-                        Bấm để đổi ảnh khác
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="w-14 h-14 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
-                        <Upload className="w-6 h-6 text-[#22C55E]" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-bold text-[#F3FAF5]">
-                          Kéo thả hoặc bấm để chọn ảnh Thời khóa biểu
-                        </div>
-                        <div className="text-xs text-[#A9B8AE] mt-1">
-                          Hỗ trợ định dạng PNG, JPG, JPEG, WEBP hoặc PDF
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                    className={`flex items-center justify-center gap-2 py-2 rounded-lg transition-all cursor-pointer ${
+                      ocrSourceTab === 'upload'
+                        ? 'bg-[#16A34A] text-[#050806] shadow-sm font-extrabold'
+                        : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
+                    }`}
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Tải ảnh mới từ máy</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOcrSourceTab('materials');
+                      setOcrErrorMessage(null);
+                    }}
+                    className={`flex items-center justify-center gap-2 py-2 rounded-lg transition-all cursor-pointer ${
+                      ocrSourceTab === 'materials'
+                        ? 'bg-[#16A34A] text-[#050806] shadow-sm font-extrabold'
+                        : 'text-[#A9B8AE] hover:text-[#F3FAF5]'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Chọn từ Kho tài liệu ({materials.length})</span>
+                  </button>
                 </div>
 
-                <div className="bg-[#101A13] p-3.5 rounded-xl border border-[rgba(34,197,94,0.15)] text-xs text-[#A9B8AE] space-y-1">
-                  <div className="font-bold text-[#86EFAC] flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
-                    <span>Mẹo chụp ảnh thời khóa biểu rõ nét:</span>
+                {/* TAB 1: UPLOAD FROM DEVICE */}
+                {ocrSourceTab === 'upload' && (
+                  <div className="space-y-3">
+                    <div
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                          handleOcrFileSelect(e.dataTransfer.files[0]);
+                        }
+                      }}
+                      className="border-2 border-dashed border-[rgba(34,197,94,0.35)] hover:border-[#22C55E] bg-[#050806] p-6 rounded-2xl flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:bg-[#101A13]/40 group"
+                    >
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleOcrFileSelect(e.target.files[0]);
+                          }
+                        }}
+                      />
+
+                      {ocrPreviewUrl ? (
+                        <div className="space-y-2.5 w-full flex flex-col items-center">
+                          <img
+                            src={ocrPreviewUrl}
+                            alt="Thời khóa biểu preview"
+                            className="max-h-48 rounded-xl object-contain border border-[rgba(34,197,94,0.25)] shadow-lg"
+                          />
+                          <div className="text-xs font-bold text-[#86EFAC] flex items-center gap-1.5">
+                            <Check className="w-4 h-4 text-[#22C55E]" />
+                            <span>Đã chọn: {ocrFile?.name} ({(ocrFile!.size / 1024).toFixed(1)} KB)</span>
+                          </div>
+                          <span className="text-[11px] text-[#A9B8AE] underline group-hover:text-white">
+                            Bấm để đổi ảnh khác
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="w-12 h-12 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                            <Upload className="w-5 h-5 text-[#22C55E]" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-[#F3FAF5]">
+                              Kéo thả hoặc bấm để chọn ảnh Thời khóa biểu
+                            </div>
+                            <div className="text-[11px] text-[#A9B8AE] mt-0.5">
+                              Hỗ trợ định dạng PNG, JPG, JPEG, WEBP hoặc PDF
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Checkbox: Save to Library */}
+                    <div className="bg-[#050806] p-3.5 rounded-2xl border border-[rgba(34,197,94,0.2)] space-y-2">
+                      <label className="flex items-center gap-2.5 text-xs text-[#F3FAF5] font-bold cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={ocrSaveToLibrary}
+                          onChange={(e) => setOcrSaveToLibrary(e.target.checked)}
+                          className="w-4 h-4 rounded text-[#16A34A] focus:ring-[#22C55E] bg-[#101A13] border-[rgba(34,197,94,0.3)] cursor-pointer"
+                        />
+                        <span className="flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
+                          <span>Đồng thời lưu ảnh này vào Kho tài liệu</span>
+                        </span>
+                      </label>
+
+                      {ocrSaveToLibrary && (
+                        <div className="pl-6 pt-1">
+                          <label className="block text-[11px] font-bold text-[#A9B8AE] mb-1">Tên lưu trong kho:</label>
+                          <input
+                            type="text"
+                            value={ocrMaterialTitle}
+                            onChange={(e) => setOcrMaterialTitle(e.target.value)}
+                            placeholder="Ví dụ: TKB Lớp 9A Học kỳ 2"
+                            className="w-full p-2 bg-[#101A13] border border-[rgba(34,197,94,0.25)] rounded-xl text-xs text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <ul className="list-disc list-inside space-y-0.5 text-[11px]">
+                )}
+
+                {/* TAB 2: SELECT FROM MATERIALS */}
+                {ocrSourceTab === 'materials' && (
+                  <div className="space-y-2.5">
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 border border-[rgba(34,197,94,0.18)] bg-[#050806] p-2 rounded-2xl">
+                      {materials.length === 0 ? (
+                        <div className="py-8 text-center text-xs text-[#A9B8AE]">
+                          Kho tài liệu hiện chưa có tài liệu nào. Hãy chuyển sang tab "Tải ảnh mới" để tải lên.
+                        </div>
+                      ) : (
+                        materials.map((m) => {
+                          const isSelected = selectedMaterialId === m.id;
+                          return (
+                            <div
+                              key={m.id}
+                              onClick={() => {
+                                setSelectedMaterialId(m.id);
+                                setOcrTimetableName(m.title);
+                                // Set mock base64 or download url if available
+                                setOcrBase64('data:image/jpeg;base64,material_' + m.id);
+                                setOcrMimeType(m.mimeType || 'image/jpeg');
+                                setOcrFile(null);
+                                setOcrPreviewUrl(null);
+                              }}
+                              className={`p-2.5 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-all ${
+                                isSelected
+                                  ? 'bg-[#14532D]/70 border-[#22C55E] text-[#F3FAF5] shadow-sm'
+                                  : 'bg-[#101A13] border-[rgba(34,197,94,0.15)] text-[#A9B8AE] hover:text-[#F3FAF5]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="p-1.5 rounded-lg bg-[#050806] text-[#22C55E] shrink-0">
+                                  <ImageIcon className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-[#F3FAF5] truncate">{m.title}</div>
+                                  <div className="text-[10px] text-[#A9B8AE] truncate">{m.fileName || 'Ảnh / Tài liệu'}</div>
+                                </div>
+                              </div>
+                              <div className="shrink-0">
+                                {isSelected ? (
+                                  <div className="w-5 h-5 rounded-full bg-[#22C55E] text-[#050806] flex items-center justify-center">
+                                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                  </div>
+                                ) : (
+                                  <div className="w-5 h-5 rounded-full border border-[rgba(34,197,94,0.3)]" />
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-[#101A13] p-3 rounded-xl border border-[rgba(34,197,94,0.15)] text-xs text-[#A9B8AE] space-y-1">
+                  <div className="font-bold text-[#86EFAC] flex items-center gap-1.5 text-[11px]">
+                    <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
+                    <span>Mẹo nhận dạng thời khóa biểu:</span>
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-[10px]">
                     <li>Chụp đủ ánh sáng, thấy rõ các cột Thứ (T2-T7) và các tiết học.</li>
-                    <li>AI sẽ tự nhận dạng và hiển thị bảng kiểm tra để bạn sửa trước khi lưu.</li>
+                    <li>Sau khi AI quét xong, em có thể xem và chỉnh sửa từng tiết học trước khi lưu.</li>
                   </ul>
                 </div>
 
