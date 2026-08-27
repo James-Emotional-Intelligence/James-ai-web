@@ -154,6 +154,30 @@ export const ExamsPage: React.FC = () => {
     }
   };
 
+  const calculateDaysRemaining = (examAt: string) => {
+    const diff = new Date(examAt).getTime() - Date.now();
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+  };
+
+  const handleCreateQuizFromMaterial = async (res: SelectedFileResult) => {
+    setIsGeneratingMaterialQuiz(true);
+    try {
+      if (res.materialId) {
+        await api.generateQuizFromMaterial(res.materialId, {
+          questionCount: 5,
+          difficulty: 'medium',
+          title: `Đề ôn tập: ${res.materialTitle || res.fileName}`,
+        });
+        confetti({ particleCount: 80, spread: 60 });
+        await fetchData();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Không thể tạo đề ôn tập từ tài liệu này.');
+    } finally {
+      setIsGeneratingMaterialQuiz(false);
+    }
+  };
+
   const handleAddExam = async (e: React.FormEvent) => {
     e.preventDefault();
     setExamFormError(null);
@@ -174,14 +198,14 @@ export const ExamsPage: React.FC = () => {
     setIsSavingExam(true);
     try {
       const selectedSubj = subjects.find((s) => s.id === newExamSubjectId);
-      const res = await api.addExam({
+      await api.addExam({
         title: newExamTitle.trim(),
         subjectId: newExamSubjectId,
         subjectName: selectedSubj?.name || 'Môn học',
         examAt: new Date(newExamDate).toISOString(),
         importance: newExamImportance,
         scopeText: newExamScope.trim() || 'Phạm vi kiểm tra chương học trọng tâm theo SGK.',
-        scope: newExamScope.trim() || undefined,
+        topics: [{ name: selectedSubj?.name || 'Kiến thức trọng tâm', weight: 1 }],
       });
 
       setIsAddExamOpen(false);
