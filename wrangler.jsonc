@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "jami-ai",
+  "name": "james-ai-web",
   "main": "worker/index.ts",
   "compatibility_date": "2024-09-23",
   "compatibility_flags": ["nodejs_compat"],
@@ -8,18 +8,6 @@
     "directory": "./dist",
     "binding": "ASSETS"
   },
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "<CLOUDFLARE_HYPERDRIVE_ID>"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "R2_MATERIALS",
-      "bucket_name": "jami-materials"
-    }
-  ],
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
