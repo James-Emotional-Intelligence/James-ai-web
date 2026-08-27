@@ -535,10 +535,10 @@ export const TaskDetailPage: React.FC = () => {
           if (!task) return;
           try {
             await api.submitTaskEvidence(task.id, {
-              textValue: `[Tài liệu đính kèm]: ${res.materialTitle || res.fileName}${
+              evidenceNote: `[Tài liệu đính kèm]: ${res.materialTitle || res.fileName}${
                 res.savedToMaterials ? ' (Đã lưu vào Kho tài liệu)' : ''
               }`,
-              scoreValue: 5,
+              rating: 5,
             });
             confetti({ particleCount: 50, spread: 40 });
             await fetchTaskDetails();

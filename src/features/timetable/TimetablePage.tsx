@@ -253,7 +253,7 @@ export const TimetablePage: React.FC = () => {
           commuteAfterMinutes: entryCommuteAfter,
         });
       } else {
-        await api.addTimetableEntry({
+        await api.createTimetableEntry({
           timetableId: activeTimetable?.id,
           title: entryTitle.trim(),
           subjectId: entrySubjectId || undefined,
