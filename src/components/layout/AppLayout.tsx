@@ -66,20 +66,14 @@ const AppLayoutContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#050806] text-[#F3FAF5] flex flex-col font-sans selection:bg-[#16A34A] selection:text-[#050806]">
-      {/* 2-Tier Sticky Top Navigation */}
-      <div className="sticky top-0 z-40 bg-[#050806] shadow-xl">
-        {/* Tier 1: Brand, Hands-Free Voice Status, Voice CTA, Notifications, Profile */}
-        <TopAppBar
-          user={user || undefined}
-          profile={profile || undefined}
-          onOpenVoiceModal={() => setIsVoiceModalOpen(true)}
-          onToggleMobileMenu={() => setIsMobileMenuOpen(true)}
-          onLogout={handleLogout}
-        />
-
-        {/* Tier 2: 8 Strict Modules Horizontal Navigation */}
-        <TopModuleNav />
-      </div>
+      {/* Unified 2-Tier Sticky Top Navigation with Pixel-Perfect Grid Alignment */}
+      <TopAppBar
+        user={user || undefined}
+        profile={profile || undefined}
+        onOpenVoiceModal={() => setIsVoiceModalOpen(true)}
+        onToggleMobileMenu={() => setIsMobileMenuOpen(true)}
+        onLogout={handleLogout}
+      />
 
       {/* Main Content Viewport: Rộng rãi cho toàn bộ các trang và tính năng */}
       <main className="flex-1 p-3.5 sm:p-5 lg:p-6 w-full max-w-[1750px] mx-auto px-3 sm:px-6 lg:px-8 transition-all">

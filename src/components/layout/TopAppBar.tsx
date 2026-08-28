@@ -1,21 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   Mic,
   Bell,
-  User as UserIcon,
   Menu,
   Sparkles,
   Settings,
   Shield,
   LogOut,
   ChevronDown,
+  Layers,
+  ChevronRight,
+  Power,
 } from 'lucide-react';
 import { User, StudentProfile } from '../../../shared/types';
-
+import { MODULES_CONFIG } from '../../config/modules';
 import { useVoiceJami } from '../../context/VoiceJamiContext';
 import { useNotifications } from '../../context/NotificationContext';
-import { Power } from 'lucide-react';
 
 interface TopAppBarProps {
   user?: User;
@@ -33,10 +34,40 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   onLogout,
 }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const voice = useVoiceJami();
   const { unreadCount } = useNotifications();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  const [selectedGroup, setSelectedGroup] = useState<'1-4' | '5-8' | 'admin'>('1-4');
+
+  // Auto-switch group if user navigates to a route in 5-8, 1-4, or admin
+  useEffect(() => {
+    if (location.pathname.startsWith('/admin')) {
+      setSelectedGroup('admin');
+      return;
+    }
+    const currentModule = MODULES_CONFIG.find(
+      (m) => location.pathname === m.path || location.pathname.startsWith(m.path + '/')
+    );
+    if (currentModule) {
+      if (currentModule.order >= 5) {
+        setSelectedGroup('5-8');
+      } else {
+        setSelectedGroup('1-4');
+      }
+    }
+  }, [location.pathname]);
+
+  const toggleGroup = () => {
+    setSelectedGroup((prev) => (prev === '5-8' ? '1-4' : '5-8'));
+  };
+
+  const isGroup58 = selectedGroup === '5-8';
+  const visibleModules = MODULES_CONFIG.filter((m) =>
+    isGroup58 ? m.order >= 5 : m.order <= 4
+  );
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -58,10 +89,10 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
   const grade = profile?.gradeLevel || 9;
 
   return (
-    <header className="w-full bg-[#050806] border-b border-[rgba(34,197,94,0.25)] sticky top-0 z-40">
-      <div className="max-w-[1750px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-        {/* Left: Brand Identity + Tagline */}
-        <div className="flex items-center gap-3 min-w-0">
+    <header className="w-full bg-[#050806] border-b border-[rgba(34,197,94,0.25)] sticky top-0 z-40 shadow-xl">
+      <div className="max-w-[1750px] mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-[1fr_auto] items-center">
+        {/* ROW 1 - LEFT: Brand Identity + Tagline */}
+        <div className="h-16 flex items-center gap-3 min-w-0 pr-4">
           <button
             onClick={onToggleMobileMenu}
             className="lg:hidden p-2 rounded-lg text-[#A9B8AE] hover:text-[#F3FAF5] bg-[#101A13] border border-[rgba(34,197,94,0.18)] cursor-pointer"
@@ -88,8 +119,8 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
           </Link>
         </div>
 
-        {/* Right: Actions, Voice Goal, Notifications, Profile */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        {/* ROW 1 - RIGHT: Actions (Bật Jami, Nói mục tiêu, Notifications, Profile) */}
+        <div className="h-16 flex items-center gap-2 sm:gap-3 shrink-0">
           {/* Hands-Free Jami Voice Status / Toggle */}
           {voice.isHandsFreeEnabled ? (
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#14532D]/80 border border-[#22C55E]/40 text-[#86EFAC] text-xs font-bold shadow-md shadow-[#16A34A]/20">
@@ -244,7 +275,84 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
             )}
           </div>
         </div>
+
+        {/* HORIZONTAL DIVIDER ACROSS BOTH COLUMNS */}
+        <div className="col-span-2 border-t border-[rgba(34,197,94,0.18)]" />
+
+        {/* ROW 2 - LEFT: 8 Strict Modules Horizontal Navigation */}
+        <div className="py-1.5 flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar min-w-0 pr-4">
+          {visibleModules.map((item) => (
+            <NavLink
+              key={item.id}
+              to={item.path}
+              className={({ isActive }) =>
+                `flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap group shrink-0 ${
+                  isActive
+                    ? 'bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/40 shadow-sm shadow-[#16A34A]/20'
+                    : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13] border border-transparent'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <div
+                    className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-black shrink-0 ${
+                      isActive
+                        ? 'bg-[#22C55E] text-[#050806]'
+                        : 'bg-[#101A13] text-[#A9B8AE] group-hover:text-[#F3FAF5] group-hover:bg-[#142219]'
+                    }`}
+                  >
+                    {item.order}
+                  </div>
+                  <item.icon
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 transition-colors ${
+                      isActive ? 'text-[#86EFAC]' : 'text-[#A9B8AE] group-hover:text-[#22C55E]'
+                    }`}
+                  />
+                  <span className="tracking-wide text-[11px] sm:text-xs">{item.name}</span>
+                </>
+              )}
+            </NavLink>
+          ))}
+
+          {/* Exclusive Admin Quick Access Tab */}
+          {user?.role === 'admin' && (
+            <>
+              <div className="h-5 w-px bg-purple-500/40 shrink-0" />
+              <NavLink
+                to="/admin"
+                className={({ isActive }) =>
+                  `flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 rounded-xl text-xs font-black transition-all whitespace-nowrap group shrink-0 ${
+                    isActive
+                      ? 'bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 text-white border border-purple-300 shadow-lg shadow-purple-600/40 ring-2 ring-purple-400'
+                      : 'bg-purple-950/80 hover:bg-purple-900 border border-purple-500/50 text-purple-200 shadow-md'
+                  }`
+                }
+              >
+                <Shield className="w-4 h-4 text-purple-300 animate-pulse shrink-0" />
+                <span className="tracking-wide uppercase font-extrabold">👑 QUẢN TRỊ ADMIN (BAN / XÓA TK)</span>
+              </NavLink>
+            </>
+          )}
+        </div>
+
+        {/* ROW 2 - RIGHT: Switcher Button -> STARTS AT COLUMN 2, EXACTLY UNDER BẬT JAMI BUTTON! */}
+        <div className="py-1.5 flex items-center gap-2 sm:gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={toggleGroup}
+            className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3 py-1.5 shadow-md text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
+            title={isGroup58 ? 'Bấm để chuyển sang Mục 1 - 4' : 'Bấm để chuyển sang Mục 5 - 8'}
+          >
+            <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
+            <span>{isGroup58 ? 'Mục 5 - 8' : 'Mục 1 - 4'}</span>
+            <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
+              <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+            </div>
+          </button>
+        </div>
       </div>
     </header>
   );
 };
+
