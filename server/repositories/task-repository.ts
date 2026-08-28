@@ -622,6 +622,112 @@ export class TaskRepository {
     return this.updateExecutionStep(userId, taskId, stepId, 'completed', actualMinutes);
   }
 
+  public async reorderExecutionSteps(
+    userId: string,
+    taskId: string,
+    orderedStepIds: string[]
+  ): Promise<ExecutionGuide | null> {
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        for (let i = 0; i < orderedStepIds.length; i++) {
+          const stepId = orderedStepIds[i];
+          await conn.execute(
+            `UPDATE execution_steps s
+             JOIN execution_guides g ON s.guide_id = g.id
+             JOIN study_tasks t ON g.task_id = t.id
+             SET s.step_order = ?
+             WHERE s.id = ? AND g.task_id = ? AND t.user_id = ?`,
+            [i + 1, stepId, taskId, userId]
+          );
+        }
+      });
+    } else {
+      const guide = this.demoGuides.get(taskId);
+      if (guide && guide.steps) {
+        const stepMap = new Map(guide.steps.map((s) => [s.id, s]));
+        const newSteps: ExecutionStep[] = [];
+        for (let i = 0; i < orderedStepIds.length; i++) {
+          const s = stepMap.get(orderedStepIds[i]);
+          if (s) {
+            s.stepOrder = i + 1;
+            newSteps.push(s);
+          }
+        }
+        guide.steps = newSteps;
+      }
+    }
+
+    return this.getExecutionGuide(userId, taskId);
+  }
+
+  public async updateExecutionStepDetails(
+    userId: string,
+    taskId: string,
+    stepId: string,
+    updates: {
+      title?: string;
+      instruction?: string;
+      expectedOutput?: string;
+      plannedMinutes?: number;
+      status?: 'pending' | 'in_progress' | 'completed';
+    }
+  ): Promise<ExecutionGuide | null> {
+    if (db.isHealthy()) {
+      const setParts: string[] = [];
+      const values: any[] = [];
+
+      if (updates.title !== undefined) {
+        setParts.push('s.title = ?');
+        values.push(updates.title);
+      }
+      if (updates.instruction !== undefined) {
+        setParts.push('s.instruction = ?');
+        values.push(updates.instruction);
+      }
+      if (updates.expectedOutput !== undefined) {
+        setParts.push('s.expected_output = ?');
+        values.push(updates.expectedOutput);
+      }
+      if (updates.plannedMinutes !== undefined) {
+        setParts.push('s.planned_minutes = ?');
+        values.push(updates.plannedMinutes);
+      }
+      if (updates.status !== undefined) {
+        setParts.push('s.status = ?');
+        values.push(updates.status);
+        if (updates.status === 'completed') {
+          setParts.push('s.completed_at = NOW(3)');
+        }
+      }
+
+      if (setParts.length > 0) {
+        values.push(stepId, taskId, userId);
+        await db.execute(
+          `UPDATE execution_steps s
+           JOIN execution_guides g ON s.guide_id = g.id
+           JOIN study_tasks t ON g.task_id = t.id
+           SET ${setParts.join(', ')}
+           WHERE s.id = ? AND g.task_id = ? AND t.user_id = ?`,
+          values
+        );
+      }
+    } else {
+      const guide = this.demoGuides.get(taskId);
+      if (guide && guide.steps) {
+        const step = guide.steps.find((s) => s.id === stepId);
+        if (step) {
+          if (updates.title !== undefined) step.title = updates.title;
+          if (updates.instruction !== undefined) step.instruction = updates.instruction;
+          if (updates.expectedOutput !== undefined) step.expectedOutput = updates.expectedOutput;
+          if (updates.plannedMinutes !== undefined) step.plannedMinutes = updates.plannedMinutes;
+          if (updates.status !== undefined) step.status = updates.status;
+        }
+      }
+    }
+
+    return this.getExecutionGuide(userId, taskId);
+  }
+
   public async addEvidence(userId: string, evidence: Partial<TaskEvidence>): Promise<TaskEvidence> {
     const id = evidence.id || 'evid_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const created: TaskEvidence = {

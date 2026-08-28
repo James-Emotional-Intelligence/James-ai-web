@@ -643,6 +643,8 @@ export class DeterministicScheduler {
           if (slotIdx !== -1) {
             availableSlots.splice(slotIdx, 1);
           }
+        } else if (remainingTaskMinutes - allocMinutes > 0 && maxDailyMinutes - (dayMinutes + allocMinutes) >= minSession) {
+          candidates.unshift({ slot, score: best.score, reasons: best.reasons });
         }
 
         remainingTaskMinutes -= allocMinutes;

@@ -362,6 +362,34 @@ export class JamiRepository {
     };
   }
 
+  public async clearMessages(userId: string, conversationId?: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      if (conversationId) {
+        await db.execute(
+          `DELETE FROM jami_messages WHERE user_id = ? AND conversation_id = ?`,
+          [userId, conversationId]
+        );
+      } else {
+        await db.execute(
+          `DELETE FROM jami_messages WHERE user_id = ?`,
+          [userId]
+        );
+      }
+      return true;
+    }
+
+    if (conversationId) {
+      const list = this.demoMessages.get(userId) || [];
+      this.demoMessages.set(
+        userId,
+        list.filter((m) => m.conversationId !== conversationId)
+      );
+    } else {
+      this.demoMessages.delete(userId);
+    }
+    return true;
+  }
+
   // ==========================================
   // Preferences & Memory
   // ==========================================

@@ -297,6 +297,179 @@ export class QuizRepository {
     return quiz;
   }
 
+  public async generateSubjectQuiz(
+    userId: string,
+    options: {
+      subjectId?: string;
+      subjectName?: string;
+      topics?: string[];
+      scope?: string;
+      difficulty?: 'easy' | 'medium' | 'hard';
+      questionCount?: number;
+      format?: 'multiple_choice' | 'essay' | 'combined';
+      title?: string;
+    } = {}
+  ): Promise<Quiz> {
+    const subjects = await subjectRepo.getByUserId(userId);
+    const targetSubject = subjects.find((s) => s.id === options.subjectId || s.name.toLowerCase().includes((options.subjectName || '').toLowerCase())) || subjects[0];
+    const subjectId = targetSubject ? targetSubject.id : (options.subjectId || 'subj-math');
+    const subjectName = targetSubject ? targetSubject.name : (options.subjectName || 'Toán học');
+
+    const difficulty = options.difficulty || 'medium';
+    const questionCount = Math.min(30, Math.max(3, options.questionCount || 5));
+    const topics = options.topics && options.topics.length > 0 ? options.topics : [subjectName];
+
+    const draft = await AiAdapter.generateQuizDraft({
+      subject: subjectName,
+      scope: options.scope || 'Kiến thức trọng tâm',
+      topics,
+      milestone: 'D-7',
+      questionCount,
+      difficulty,
+    });
+
+    const quizTitle = options.title || draft.title || `Đề Luyện Tập AI - Môn ${subjectName} (${difficulty.toUpperCase()})`;
+    const quizId = 'quiz_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+
+    const questions: QuizQuestion[] = (draft.questions || []).map((q, idx) => ({
+      id: `q_${quizId}_${idx + 1}`,
+      quizId,
+      order: idx + 1,
+      type: q.type || (options.format === 'essay' ? 'short_answer' : 'multiple_choice'),
+      prompt: q.prompt,
+      options: q.options || [],
+      correctAnswer: q.correctAnswer,
+      explanation: q.explanation,
+      difficulty: q.difficulty || difficulty,
+      topicRef: q.topicRef || topics[0] || subjectName,
+    }));
+
+    const quiz: Quiz = {
+      id: quizId,
+      userId,
+      subjectId,
+      subjectName,
+      title: quizTitle,
+      type: 'practice',
+      difficulty,
+      status: 'ready',
+      questionCount: questions.length,
+      questions,
+      generatedByAi: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        await conn.execute(
+          `INSERT INTO quizzes (id, user_id, exam_id, subject_id, title, type, milestone, difficulty, status, generated_by_ai, created_at)
+           VALUES (?, ?, NULL, ?, ?, 'practice', 'D-7', ?, 'ready', 1, NOW(3))`,
+          [quiz.id, userId, quiz.subjectId, quiz.title, quiz.difficulty]
+        );
+
+        for (const q of questions) {
+          await conn.execute(
+            `INSERT INTO quiz_questions (id, quiz_id, question_order, type, prompt, options_json, correct_answer_server_only, explanation_server_only, difficulty, topic_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              q.id,
+              quiz.id,
+              q.order,
+              q.type,
+              q.prompt,
+              JSON.stringify(q.options || []),
+              q.correctAnswer || '',
+              q.explanation || '',
+              q.difficulty,
+              q.topicRef || null,
+            ]
+          );
+        }
+      });
+    } else {
+      const list = this.demoQuizzes.get(userId) || [];
+      list.unshift(quiz);
+      this.demoQuizzes.set(userId, list);
+      this.demoQuestions.set(quiz.id, questions);
+    }
+
+    return quiz;
+  }
+
+  public async generateRetakeWrongQuestionsQuiz(
+    userId: string,
+    originalQuizId: string,
+    wrongQuestionIds: string[]
+  ): Promise<Quiz> {
+    const originalQuestions = await this.getQuizQuestions(userId, originalQuizId, true);
+    const wrongQuestions = originalQuestions.filter((q) => wrongQuestionIds.includes(q.id));
+
+    if (wrongQuestions.length === 0) {
+      throw new Error('Không tìm thấy câu hỏi sai để làm lại.');
+    }
+
+    const quizId = 'quiz_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const quizTitle = `Luyện Lại Câu Sai - ${wrongQuestions.length} Câu`;
+
+    const questions: QuizQuestion[] = wrongQuestions.map((q, idx) => ({
+      ...q,
+      id: `q_${quizId}_${idx + 1}`,
+      quizId,
+      order: idx + 1,
+    }));
+
+    const quiz: Quiz = {
+      id: quizId,
+      userId,
+      subjectId: 'subj-math',
+      subjectName: 'Ôn tập câu sai',
+      title: quizTitle,
+      type: 'weak_topic',
+      difficulty: 'medium',
+      status: 'ready',
+      questionCount: questions.length,
+      questions,
+      generatedByAi: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        await conn.execute(
+          `INSERT INTO quizzes (id, user_id, exam_id, subject_id, title, type, milestone, difficulty, status, generated_by_ai, created_at)
+           VALUES (?, ?, NULL, ?, ?, 'weak_topic', NULL, 'medium', 'ready', 0, NOW(3))`,
+          [quiz.id, userId, quiz.subjectId, quiz.title]
+        );
+
+        for (const q of questions) {
+          await conn.execute(
+            `INSERT INTO quiz_questions (id, quiz_id, question_order, type, prompt, options_json, correct_answer_server_only, explanation_server_only, difficulty, topic_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              q.id,
+              quiz.id,
+              q.order,
+              q.type,
+              q.prompt,
+              JSON.stringify(q.options || []),
+              q.correctAnswer || '',
+              q.explanation || '',
+              q.difficulty,
+              q.topicRef || null,
+            ]
+          );
+        }
+      });
+    } else {
+      const list = this.demoQuizzes.get(userId) || [];
+      list.unshift(quiz);
+      this.demoQuizzes.set(userId, list);
+      this.demoQuestions.set(quiz.id, questions);
+    }
+
+    return quiz;
+  }
+
   /**
    * Starts a new in-progress attempt for a quiz
    */

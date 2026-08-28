@@ -19,7 +19,7 @@ import { api } from '../../lib/api-client';
 import { FocusSession, StudyTask } from '../../../shared/types';
 import confetti from 'canvas-confetti';
 
-type TimerMode = '45_10' | '25_5' | 'custom';
+type TimerMode = '15' | '25' | '45' | '60' | 'custom' | '45_10' | '25_5';
 type TimerPhase = 'work' | 'break';
 
 export const FocusTimerPage: React.FC = () => {
@@ -29,7 +29,9 @@ export const FocusTimerPage: React.FC = () => {
   const queryTaskId = searchParams.get('taskId') || undefined;
   const queryMinutes = searchParams.get('minutes') ? parseInt(searchParams.get('minutes')!, 10) : undefined;
 
-  const [mode, setMode] = useState<TimerMode>(queryMinutes ? 'custom' : '45_10');
+  const [mode, setMode] = useState<TimerMode>(
+    queryMinutes === 15 ? '15' : queryMinutes === 25 ? '25' : queryMinutes === 45 ? '45' : queryMinutes === 60 ? '60' : queryMinutes ? 'custom' : '45'
+  );
   const [phase, setPhase] = useState<TimerPhase>('work');
   const [customMinutes, setCustomMinutes] = useState<number>(queryMinutes || 30);
   const [customBreakMinutes, setCustomBreakMinutes] = useState<number>(5);
@@ -53,8 +55,10 @@ export const FocusTimerPage: React.FC = () => {
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
 
   const getPhaseDurationSeconds = useCallback((m: TimerMode, p: TimerPhase, customM: number, customBM: number) => {
-    if (m === '25_5') return p === 'work' ? 25 * 60 : 5 * 60;
-    if (m === '45_10') return p === 'work' ? 45 * 60 : 10 * 60;
+    if (m === '15') return p === 'work' ? 15 * 60 : 3 * 60;
+    if (m === '25' || m === '25_5') return p === 'work' ? 25 * 60 : 5 * 60;
+    if (m === '45' || m === '45_10') return p === 'work' ? 45 * 60 : 10 * 60;
+    if (m === '60') return p === 'work' ? 60 * 60 : 15 * 60;
     return p === 'work' ? customM * 60 : customBM * 60;
   }, []);
 
@@ -463,36 +467,56 @@ export const FocusTimerPage: React.FC = () => {
 
       {/* Mode Switcher Tabs */}
       <div className="flex justify-center">
-        <div className="bg-[#0B120D] p-1.5 rounded-2xl border border-[rgba(34,197,94,0.2)] flex items-center gap-2 shadow-xl overflow-x-auto">
+        <div className="bg-[#0B120D] p-1.5 rounded-2xl border border-[rgba(34,197,94,0.2)] flex flex-wrap items-center justify-center gap-1.5 shadow-xl">
           <button
-            onClick={() => handleSwitchMode('45_10')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-              mode === '45_10'
+            onClick={() => handleSwitchMode('15')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              mode === '15'
                 ? 'bg-[#16A34A] text-[#050806] shadow-md shadow-[#16A34A]/25'
                 : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13]'
             }`}
           >
-            45 Phút Học / 10 Phút Nghỉ (Khuyên dùng)
+            ⚡ 15 Phút
           </button>
           <button
-            onClick={() => handleSwitchMode('25_5')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-              mode === '25_5'
+            onClick={() => handleSwitchMode('25')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              mode === '25' || mode === '25_5'
                 ? 'bg-[#16A34A] text-[#050806] shadow-md shadow-[#16A34A]/25'
                 : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13]'
             }`}
           >
-            25 Phút Học / 5 Phút Nghỉ
+            🍅 25 Phút (Pomodoro)
+          </button>
+          <button
+            onClick={() => handleSwitchMode('45')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              mode === '45' || mode === '45_10'
+                ? 'bg-[#16A34A] text-[#050806] shadow-md shadow-[#16A34A]/25'
+                : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13]'
+            }`}
+          >
+            🎯 45 Phút (Tiết học chuẩn)
+          </button>
+          <button
+            onClick={() => handleSwitchMode('60')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              mode === '60'
+                ? 'bg-[#16A34A] text-[#050806] shadow-md shadow-[#16A34A]/25'
+                : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13]'
+            }`}
+          >
+            🧠 60 Phút (Luyện sâu)
           </button>
           <button
             onClick={() => handleSwitchMode('custom')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
               mode === 'custom'
                 ? 'bg-[#16A34A] text-[#050806] shadow-md shadow-[#16A34A]/25'
                 : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13]'
             }`}
           >
-            Tùy Chỉnh
+            ⚙️ Tùy Chỉnh
           </button>
         </div>
       </div>

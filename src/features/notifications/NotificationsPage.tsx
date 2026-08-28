@@ -18,10 +18,15 @@ import {
   AlertCircle,
   X,
   ExternalLink,
+  Play,
+  RotateCcw,
+  Sparkles,
+  Zap,
 } from 'lucide-react';
 import { useNotifications } from '../../context/NotificationContext';
 import { NotificationItem, NotificationType } from '../../../shared/types';
 import { useNavigate } from 'react-router-dom';
+import { api } from '../../lib/api-client';
 
 type FilterTab = 'all' | 'unread' | 'class' | 'exam' | 'task';
 
@@ -40,11 +45,13 @@ export const NotificationsPage: React.FC = () => {
     markAllAsRead,
     deleteNotification,
     updatePreferences,
+    playNotificationSound,
   } = useNotifications();
 
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSuccess, setSettingsSuccess] = useState(false);
+  const [pushStatus, setPushStatus] = useState<string | null>(null);
 
   // Settings local draft state
   const [draftPrefs, setDraftPrefs] = useState({
@@ -115,6 +122,26 @@ export const NotificationsPage: React.FC = () => {
         setSettingsSuccess(false);
         setIsSettingsOpen(false);
       }, 1500);
+    }
+  };
+
+  const handleEnableWebPush = async () => {
+    if (!('Notification' in window)) {
+      alert('Trình duyệt của bạn không hỗ trợ Web Push Notification.');
+      return;
+    }
+
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm === 'granted') {
+        setPushStatus('Đã cấp quyền thông báo Web Push thành công!');
+        setDraftPrefs((prev) => ({ ...prev, webPushEnabled: true }));
+        await updatePreferences({ webPushEnabled: true });
+      } else {
+        setPushStatus('Bạn đã từ chối quyền Web Push trên trình duyệt.');
+      }
+    } catch {
+      setPushStatus('Không thể kích hoạt quyền Web Push.');
     }
   };
 
@@ -196,11 +223,22 @@ export const NotificationsPage: React.FC = () => {
             )}
           </h1>
           <p className="text-xs text-[#A9B8AE] mt-1">
-            Tự động đồng bộ lịch học, nhiệm vụ cần làm & các mốc đếm ngược kỳ thi quan trọng
+            Tự động nhắc lịch học, đếm ngược ngày thi và đề xuất xếp lại nhiệm vụ quá hạn với AI
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              playNotificationSound();
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] font-bold text-xs transition-colors cursor-pointer"
+            title="Thử âm thanh robot Jami"
+          >
+            <Volume2 className="w-4 h-4 text-[#22C55E]" />
+            <span className="hidden sm:inline">Thử chuông</span>
+          </button>
+
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] font-bold text-xs transition-colors cursor-pointer"
@@ -279,7 +317,7 @@ export const NotificationsPage: React.FC = () => {
               : 'bg-[#0B120D] text-[#A9B8AE] hover:text-[#F3FAF5] border border-[rgba(34,197,94,0.18)]'
           }`}
         >
-          Nhiệm vụ
+          Nhiệm vụ & Quá hạn
         </button>
       </div>
 
@@ -313,61 +351,110 @@ export const NotificationsPage: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-3">
-          {notifications.map((n) => (
-            <div
-              key={n.id}
-              onClick={() => handleNotificationClick(n)}
-              className={`p-4 sm:p-5 rounded-3xl border transition-all cursor-pointer flex items-start gap-3 sm:gap-4 group ${
-                n.status === 'unread'
-                  ? 'bg-[#101A13] border-[#22C55E]/40 hover:border-[#22C55E] shadow-xl'
-                  : 'bg-[#0B120D] border-[rgba(34,197,94,0.18)] hover:border-[rgba(34,197,94,0.35)] opacity-85 hover:opacity-100'
-              }`}
-            >
-              <div className="w-10 h-10 rounded-2xl bg-[#050806] border border-[rgba(34,197,94,0.2)] flex items-center justify-center shrink-0 shadow-sm mt-0.5">
-                {getIcon(n.type)}
-              </div>
+          {notifications.map((n) => {
+            const isExam = n.type === 'upcoming_exam';
+            const isOverdue = n.type === 'task_overdue' || n.type === 'incomplete_task';
 
-              <div className="flex-1 space-y-1.5 min-w-0">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2">
-                    {getCategoryBadge(n.type)}
-                    <h3 className="text-xs sm:text-sm font-bold text-[#F3FAF5] truncate">{n.title}</h3>
+            return (
+              <div
+                key={n.id}
+                onClick={() => handleNotificationClick(n)}
+                className={`p-4 sm:p-5 rounded-3xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4 group ${
+                  n.status === 'unread'
+                    ? 'bg-[#101A13] border-[#22C55E]/40 hover:border-[#22C55E] shadow-xl'
+                    : 'bg-[#0B120D] border-[rgba(34,197,94,0.18)] hover:border-[rgba(34,197,94,0.35)] opacity-85 hover:opacity-100'
+                }`}
+              >
+                <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-[#050806] border border-[rgba(34,197,94,0.2)] flex items-center justify-center shrink-0 shadow-sm mt-0.5">
+                    {getIcon(n.type)}
                   </div>
-                  <span className="text-[11px] text-[#A9B8AE] font-mono">
-                    {formatNotificationTime(n.deliveredAt || n.createdAt)}
-                  </span>
+
+                  <div className="space-y-1.5 min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        {getCategoryBadge(n.type)}
+                        <h3 className="text-xs sm:text-sm font-bold text-[#F3FAF5] truncate">{n.title}</h3>
+                      </div>
+                      <span className="text-[11px] text-[#A9B8AE] font-mono">
+                        {formatNotificationTime(n.deliveredAt || n.createdAt)}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-[#A9B8AE] leading-relaxed break-words">{n.body}</p>
+
+                    {/* Interactive Action Quick Buttons */}
+                    <div className="pt-2 flex flex-wrap items-center gap-2">
+                      {isExam && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate('/exams');
+                          }}
+                          className="flex items-center gap-1 px-3 py-1 bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] rounded-xl text-[11px] font-bold transition-all cursor-pointer"
+                        >
+                          <Play className="w-3 h-3" />
+                          <span>Luyện đề ngay</span>
+                        </button>
+                      )}
+
+                      {isOverdue && (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate('/tasks');
+                            }}
+                            className="flex items-center gap-1 px-3 py-1 bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] rounded-xl text-[11px] font-bold transition-all cursor-pointer"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span>Mở nhiệm vụ</span>
+                          </button>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate('/timetable');
+                            }}
+                            className="flex items-center gap-1 px-3 py-1 bg-[#101A13] hover:bg-[#142219] text-amber-300 border border-amber-800/40 rounded-xl text-[11px] font-bold transition-all cursor-pointer"
+                          >
+                            <RotateCcw className="w-3 h-3 text-amber-400" />
+                            <span>Xếp lại lịch</span>
+                          </button>
+                        </>
+                      )}
+
+                      {n.actionUrl && !isExam && !isOverdue && (
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-[#86EFAC] group-hover:text-[#22C55E] transition-colors">
+                          <span>Xem chi tiết</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                <p className="text-xs text-[#A9B8AE] leading-relaxed break-words">{n.body}</p>
-
-                {n.actionUrl && (
-                  <div className="pt-1 flex items-center gap-1 text-[11px] font-bold text-[#86EFAC] group-hover:text-[#22C55E] transition-colors">
-                    <span>Xem chi tiết</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </div>
-                )}
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                  {n.status === 'unread' && (
+                    <span
+                      className="w-2.5 h-2.5 rounded-full bg-[#22C55E] ring-4 ring-[#22C55E]/20"
+                      title="Chưa đọc"
+                    />
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteNotification(n.id);
+                    }}
+                    className="p-2 rounded-xl text-[#526356] hover:text-rose-400 hover:bg-rose-950/30 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+                    title="Xóa thông báo"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-
-              <div className="flex items-center gap-2 shrink-0 self-center">
-                {n.status === 'unread' && (
-                  <span
-                    className="w-2.5 h-2.5 rounded-full bg-[#22C55E] ring-4 ring-[#22C55E]/20"
-                    title="Chưa đọc"
-                  />
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteNotification(n.id);
-                  }}
-                  className="p-2 rounded-xl text-[#526356] hover:text-rose-400 hover:bg-rose-950/30 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
-                  title="Xóa thông báo"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
 
           {/* Load More Button */}
           {hasMore && (
@@ -442,6 +529,16 @@ export const NotificationsPage: React.FC = () => {
                     className="accent-[#16A34A] w-4 h-4 cursor-pointer"
                   />
                 </label>
+
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-[#A9B8AE]">Âm thanh robot Jami khi ứng dụng đang mở</span>
+                  <input
+                    type="checkbox"
+                    checked={draftPrefs.soundEnabled}
+                    onChange={(e) => setDraftPrefs({ ...draftPrefs, soundEnabled: e.target.checked })}
+                    className="accent-[#16A34A] w-4 h-4 cursor-pointer"
+                  />
+                </label>
               </div>
 
               {/* Lead Times */}
@@ -476,6 +573,37 @@ export const NotificationsPage: React.FC = () => {
                     <option value={60}>60 phút</option>
                   </select>
                 </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-[#A9B8AE]">Nhắc kỳ thi trước:</span>
+                  <select
+                    value={draftPrefs.examLeadDays}
+                    onChange={(e) => setDraftPrefs({ ...draftPrefs, examLeadDays: Number(e.target.value) })}
+                    className="bg-[#050806] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-xl px-3 py-1.5 text-xs font-bold cursor-pointer [&>option]:bg-[#050806] [&>option]:text-[#F3FAF5]"
+                  >
+                    <option value={1}>1 ngày</option>
+                    <option value={3}>3 ngày</option>
+                    <option value={7}>7 ngày</option>
+                    <option value={14}>14 ngày</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Web Push & Channels */}
+              <div className="space-y-3 p-4 bg-[#101A13] rounded-2xl border border-[rgba(34,197,94,0.15)]">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-[#F3FAF5] text-xs">Web Push Notification</h3>
+                  <button
+                    type="button"
+                    onClick={handleEnableWebPush}
+                    className="px-3 py-1 rounded-xl bg-[#14532D] text-[#86EFAC] font-bold text-[11px] hover:bg-[#16A34A] hover:text-[#050806] cursor-pointer"
+                  >
+                    Bật Web Push
+                  </button>
+                </div>
+                {pushStatus && (
+                  <p className="text-[11px] text-[#86EFAC] font-semibold">{pushStatus}</p>
+                )}
               </div>
 
               {/* Quiet Hours */}
@@ -508,17 +636,6 @@ export const NotificationsPage: React.FC = () => {
                     />
                   </div>
                 </div>
-              </div>
-
-              {/* In-app & Web Push Policy */}
-              <div className="p-4 bg-[#101A13] rounded-2xl border border-[rgba(34,197,94,0.15)] space-y-2">
-                <div className="flex items-center gap-2 text-[#86EFAC] font-bold">
-                  <ShieldCheck className="w-4 h-4 text-[#22C55E]" />
-                  <span>Quyền riêng tư & Thông báo In-App</span>
-                </div>
-                <p className="text-[11px] text-[#A9B8AE] leading-relaxed">
-                  Thông báo trong ứng dụng luôn hoạt động độc lập và đầy đủ chức năng ngay cả khi bạn từ chối quyền Web Push của trình duyệt.
-                </p>
               </div>
 
               {/* Action Buttons */}

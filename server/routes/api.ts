@@ -98,27 +98,38 @@ function sendError(req: Request, res: Response, status: number, code: string, me
 
 // Auth Middleware
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const sessionToken = getSessionToken(req);
-  if (!sessionToken) {
-    return sendError(req, res, 401, 'UNAUTHORIZED', 'Chưa xác thực đăng nhập');
-  }
+  try {
+    const sessionToken = getSessionToken(req);
+    if (!sessionToken) {
+      return sendError(req, res, 401, 'UNAUTHORIZED', 'Chưa xác thực đăng nhập');
+    }
 
-  const session = await authService.getSession(sessionToken);
-  if (!session) {
-    authService.clearAuthCookie(res);
-    return sendError(req, res, 401, 'SESSION_EXPIRED', 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ');
-  }
+    const session = await authService.getSession(sessionToken);
+    if (!session) {
+      authService.clearAuthCookie(res);
+      return sendError(req, res, 401, 'SESSION_EXPIRED', 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ');
+    }
 
-  const user = await userRepo.findById(session.userId);
-  if (!user || user.status !== 'active') {
-    authService.clearAuthCookie(res);
-    return sendError(req, res, 401, 'USER_INACTIVE', 'Tài khoản không tồn tại hoặc đã bị vô hiệu hóa');
-  }
+    const user = await userRepo.findById(session.userId);
+    if (!user || user.status !== 'active') {
+      authService.clearAuthCookie(res);
+      return sendError(req, res, 401, 'USER_INACTIVE', 'Tài khoản không tồn tại hoặc đã bị vô hiệu hóa');
+    }
 
-  (req as any).user = user;
-  (req as any).userId = user.id;
-  (req as any).session = session;
-  next();
+    (req as any).user = user;
+    (req as any).userId = user.id;
+    (req as any).session = session;
+    next();
+  } catch (err: any) {
+    console.error('[API requireAuth ERROR]:', err.message);
+    return sendError(
+      req,
+      res,
+      503,
+      'DATABASE_UNAVAILABLE',
+      'Kết nối cơ sở dữ liệu tạm thời gián đoạn. Vui lòng tải lại trang hoặc thử lại.'
+    );
+  }
 }
 
 // Admin Protection Middleware (Timing safe ADMIN_SECRET_KEY or role === 'admin' session check)
@@ -731,6 +742,38 @@ apiRouter.get('/dashboard/overview', requireAuth, asyncHandler(async (req: Reque
     ? Math.min(100, Math.round((completedMinutes / plannedMinutes) * 100))
     : (completedMinutes > 0 ? 100 : 0);
 
+  // 4b. Yesterday Focus Comparison Calculation
+  const yesterdayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const yesterdayDate = new Date(now.getTime() - 86400000);
+  const yesterdayDateStr = yesterdayFormatter.format(yesterdayDate);
+
+  const completedYesterdaySessions = focusSessions.filter((s) => {
+    if (s.state !== 'completed') return false;
+    const dateStr = s.startedAt || s.createdAt;
+    return dateStr ? dateStr.startsWith(yesterdayDateStr) : false;
+  });
+  const yesterdayFocusMinutes = completedYesterdaySessions.reduce(
+    (acc, s) => acc + (s.actualMinutes || Math.round((s.actualFocusSeconds || 0) / 60)),
+    0
+  );
+
+  const yesterdayDiffMinutes = actualFocusMinutes - yesterdayFocusMinutes;
+  let yesterdayComparisonLabel = 'Chưa có dữ liệu hôm qua';
+  if (yesterdayFocusMinutes > 0) {
+    const pct = Math.round((Math.abs(yesterdayDiffMinutes) / yesterdayFocusMinutes) * 100);
+    if (yesterdayDiffMinutes > 0) {
+      yesterdayComparisonLabel = `+${yesterdayDiffMinutes} phút (+${pct}%) so với hôm qua ↗️`;
+    } else if (yesterdayDiffMinutes < 0) {
+      yesterdayComparisonLabel = `${yesterdayDiffMinutes} phút (-${pct}%) so với hôm qua ↘️`;
+    } else {
+      yesterdayComparisonLabel = `Bằng thời gian hôm qua (${actualFocusMinutes} phút)`;
+    }
+  } else if (actualFocusMinutes > 0) {
+    yesterdayComparisonLabel = `+${actualFocusMinutes} phút (hôm qua chưa ghi nhận) ↗️`;
+  }
+
+  const dailyGoalMinutes = profile?.maxDailyStudyMinutes || 120;
+
   // 5. Real Streak Days Calculation
   const studyDates = new Set<string>();
   for (const s of focusSessions) {
@@ -819,6 +862,12 @@ apiRouter.get('/dashboard/overview', requireAuth, asyncHandler(async (req: Reque
       plannedMinutes,
       completedPercent,
       streakDays,
+      dailyGoalMinutes,
+      completedTasksCount: completedTodayTasks.length,
+      totalTasksCount: todayTasks.length,
+      yesterdayFocusMinutes,
+      yesterdayComparisonLabel,
+      yesterdayDiffMinutes,
     },
     jami: {
       latestMessage,
@@ -1244,6 +1293,19 @@ apiRouter.patch('/tasks/:taskId/checklist/:itemId', requireAuth, asyncHandler(as
   res.json({ success: true, checked: parsed.data.checked });
 }));
 
+// Generate Steps / Guide alias
+apiRouter.post('/tasks/:taskId/generate-steps', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const task = await taskRepo.getById(userId, req.params.taskId);
+  if (!task) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
+
+  const profile = await profileRepo.getByUserId(userId);
+  const guide = await AiAdapter.generateExecutionGuide(task, profile?.gradeLevel || 9, task.subjectName, req.body?.additionalNotes);
+  const savedGuide = await taskRepo.saveExecutionGuide(userId, task.id, guide);
+
+  res.json({ guide: savedGuide, isDemoMode: !AiAdapter.isConfigured() });
+}));
+
 apiRouter.post('/tasks/:taskId/steps/:stepId/start', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const result = await taskRepo.updateExecutionStep(userId, req.params.taskId, req.params.stepId, 'in_progress');
@@ -1263,6 +1325,93 @@ apiRouter.post('/tasks/:taskId/steps/:stepId/complete', requireAuth, asyncHandle
     return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ hoặc bước thực hiện');
   }
   res.json(result);
+}));
+
+apiRouter.patch('/tasks/:taskId/steps/:stepId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { title, instruction, expectedOutput, plannedMinutes, status } = req.body || {};
+  const guide = await taskRepo.updateExecutionStepDetails(userId, req.params.taskId, req.params.stepId, {
+    title,
+    instruction,
+    expectedOutput,
+    plannedMinutes,
+    status,
+  });
+  if (!guide) {
+    return sendError(req, res, 404, 'STEP_NOT_FOUND', 'Không tìm thấy bước thực hiện');
+  }
+  res.json({ success: true, guide });
+}));
+
+apiRouter.patch('/task-steps/:stepId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const taskId = req.body?.taskId;
+  if (!taskId) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Yêu cầu taskId khi cập nhật bước');
+  }
+  const { title, instruction, expectedOutput, plannedMinutes, status } = req.body || {};
+  const guide = await taskRepo.updateExecutionStepDetails(userId, taskId, req.params.stepId, {
+    title,
+    instruction,
+    expectedOutput,
+    plannedMinutes,
+    status,
+  });
+  res.json({ success: true, guide });
+}));
+
+apiRouter.post('/tasks/:taskId/steps/reorder', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { orderedStepIds } = req.body || {};
+  if (!Array.isArray(orderedStepIds) || orderedStepIds.length === 0) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Danh sách thứ tự các bước không hợp lệ');
+  }
+
+  const guide = await taskRepo.reorderExecutionSteps(userId, req.params.taskId, orderedStepIds);
+  res.json({ success: true, guide });
+}));
+
+apiRouter.post('/tasks/:taskId/explain-step', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { stepId, stepTitle, instruction, expectedOutput, plannedMinutes, studentQuestion } = req.body || {};
+  const task = await taskRepo.getById(userId, req.params.taskId);
+  if (!task) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
+
+  const explanation = await AiAdapter.explainStep(
+    {
+      title: stepTitle || 'Bước học tập',
+      instruction: instruction || '',
+      expectedOutput: expectedOutput || '',
+      plannedMinutes: Number(plannedMinutes) || 15,
+    },
+    task.title,
+    task.subjectName || 'Môn học',
+    studentQuestion
+  );
+
+  res.json({ explanation });
+}));
+
+apiRouter.post('/tasks/:taskId/evaluate-evidence', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { textValue, fileUrl, type } = req.body || {};
+  const task = await taskRepo.getById(userId, req.params.taskId);
+  if (!task) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
+
+  const guide = await taskRepo.getExecutionGuide(userId, task.id);
+  const criteria = [
+    ...(guide?.successCriteria || []),
+    ...(guide?.excellentCriteria || []),
+  ];
+
+  const evaluation = await AiAdapter.evaluateEvidence(
+    task.title,
+    task.subjectName || 'Môn học',
+    textValue || `Đã đính kèm tệp ${type}: ${fileUrl}`,
+    criteria
+  );
+
+  res.json({ evaluation });
 }));
 
 apiRouter.post('/tasks/:taskId/evidence', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -1292,6 +1441,32 @@ apiRouter.post('/tasks/:taskId/complete', requireAuth, asyncHandler(async (req: 
   const userId = (req as any).userId;
   const task = await taskRepo.completeTask(userId, req.params.taskId);
   if (!task) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
+  res.json({ task });
+}));
+
+apiRouter.post('/tasks/:taskId/postpone', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { postponeMinutes, newScheduledStartAt } = req.body || {};
+  const currentTask = await taskRepo.getById(userId, req.params.taskId);
+  if (!currentTask) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
+
+  let nextStart: string;
+  if (newScheduledStartAt) {
+    nextStart = new Date(newScheduledStartAt).toISOString();
+  } else {
+    const baseDate = currentTask.scheduledStartAt ? new Date(currentTask.scheduledStartAt) : new Date();
+    const addMins = typeof postponeMinutes === 'number' ? postponeMinutes : 60;
+    nextStart = new Date(baseDate.getTime() + addMins * 60 * 1000).toISOString();
+  }
+
+  const duration = currentTask.estimatedMinutes || 45;
+  const nextEnd = new Date(new Date(nextStart).getTime() + duration * 60 * 1000).toISOString();
+
+  const task = await taskRepo.update(userId, req.params.taskId, {
+    scheduledStartAt: nextStart,
+    scheduledEndAt: nextEnd,
+    status: 'pending',
+  });
   res.json({ task });
 }));
 
@@ -2016,6 +2191,13 @@ apiRouter.get('/jami/messages', requireAuth, asyncHandler(async (req: Request, r
   res.json({ messages });
 }));
 
+apiRouter.delete('/jami/messages', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const conversationId = req.query.conversationId as string | undefined;
+  const success = await jamiRepo.clearMessages(userId, conversationId);
+  res.json({ success });
+}));
+
 apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = JamiChatRequestSchema.safeParse(req.body);
@@ -2500,7 +2682,32 @@ apiRouter.post('/quizzes/generate', requireAuth, asyncHandler(async (req: Reques
     const result = await materialProcessor.generateQuizFromMaterial(userId, materialId, req.body);
     return res.json(result);
   }
-  res.status(400).json({ error: 'Cần cung cấp examId hoặc materialId để tạo đề ôn tập.' });
+  const { subjectId, subjectName, topics, difficulty, questionCount, format, title, scope } = req.body || {};
+  if (subjectId || subjectName) {
+    const quiz = await quizRepo.generateSubjectQuiz(userId, {
+      subjectId,
+      subjectName,
+      topics,
+      difficulty,
+      questionCount,
+      format,
+      title,
+      scope,
+    });
+    return res.json({ quiz });
+  }
+  res.status(400).json({ error: 'Cần cung cấp examId, materialId hoặc subjectId/subjectName để tạo đề ôn tập.' });
+}));
+
+apiRouter.post('/quizzes/retake-wrong', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { originalQuizId, wrongQuestionIds } = req.body || {};
+  if (!originalQuizId || !Array.isArray(wrongQuestionIds) || wrongQuestionIds.length === 0) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Yêu cầu originalQuizId và danh sách wrongQuestionIds để tạo đề thi lại.');
+  }
+
+  const quiz = await quizRepo.generateRetakeWrongQuestionsQuiz(userId, originalQuizId, wrongQuestionIds);
+  res.json({ quiz });
 }));
 
 apiRouter.post('/quizzes/:id/start', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -2529,16 +2736,79 @@ apiRouter.post('/materials/upload', requireAuth, asyncHandler(async (req: Reques
   res.json(intent);
 }));
 
+apiRouter.patch('/materials/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { title } = req.body || {};
+  const updated = await materialRepo.rename(userId, req.params.id, title);
+  if (!updated) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy tài liệu.');
+  }
+  res.json({ material: updated });
+}));
+
+apiRouter.get('/materials/:id/download', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const downloadInfo = await materialRepo.getDownloadUrl(userId, req.params.id);
+  if (!downloadInfo) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy file để tải xuống.');
+  }
+  res.json(downloadInfo);
+}));
+
 apiRouter.post('/materials/:id/summarize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const result = await materialProcessor.processMaterial(userId, req.params.id);
   res.json(result);
 }));
 
+apiRouter.post('/materials/:id/outline', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const outline = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, req.body || {});
+  res.json({ outline });
+}));
+
 apiRouter.post('/materials/:id/generate-quiz', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const result = await materialProcessor.generateQuizFromMaterial(userId, req.params.id, req.body || {});
   res.json(result);
+}));
+
+// Outlines Endpoints (6.2)
+apiRouter.get('/outlines', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const subjectId = req.query.subjectId as string | undefined;
+  const outlines = await materialRepo.getOutlines(userId, subjectId);
+  res.json({ outlines });
+}));
+
+apiRouter.get('/outlines/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const outline = await materialRepo.getOutline(userId, req.params.id);
+  if (!outline) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy đề cương.');
+  }
+  res.json({ outline });
+}));
+
+apiRouter.post('/outlines', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const outline = await materialRepo.createOutline(userId, req.body || {});
+  res.json({ outline });
+}));
+
+apiRouter.patch('/outlines/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const outline = await materialRepo.updateOutline(userId, req.params.id, req.body || {});
+  if (!outline) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy đề cương.');
+  }
+  res.json({ outline });
+}));
+
+apiRouter.delete('/outlines/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await materialRepo.deleteOutline(userId, req.params.id);
+  res.json({ success });
 }));
 
 // Module 7: Báo cáo học tập

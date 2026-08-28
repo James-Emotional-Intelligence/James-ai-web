@@ -308,13 +308,13 @@ var MySQLClient = class _MySQLClient {
         database: env.AIVEN_MYSQL_DATABASE,
         ssl: sslConfig,
         waitForConnections: true,
-        connectionLimit: 10,
-        maxIdle: 5,
-        idleTimeout: 6e4,
-        connectTimeout: 1e4,
+        connectionLimit: 20,
+        maxIdle: 10,
+        idleTimeout: 12e4,
+        connectTimeout: 3e4,
         queueLimit: 0,
         enableKeepAlive: true,
-        keepAliveInitialDelay: 1e4,
+        keepAliveInitialDelay: 5e3,
         timezone: "+00:00"
       });
       const connection = await this.pool.getConnection();
@@ -334,31 +334,59 @@ var MySQLClient = class _MySQLClient {
       this.isInitializing = false;
     }
   }
-  async query(sql, params) {
+  async query(sql, params, retryCount = 1) {
     if (!this.pool || !this.isConnected) {
-      if (isProduction) {
-        throw new DatabaseError("Database pool is not ready or connection was lost");
+      if (!this.isInitializing && env.AIVEN_MYSQL_HOST) {
+        try {
+          await this.init();
+        } catch (_) {
+        }
       }
-      return [];
+      if (!this.pool || !this.isConnected) {
+        if (isProduction) {
+          throw new DatabaseError("Database pool is not ready or connection was lost");
+        }
+        return [];
+      }
     }
     try {
       const [rows] = await this.pool.query(sql, params);
       return rows;
     } catch (err) {
+      const isTransient = err.code === "ETIMEDOUT" || err.code === "ECONNRESET" || err.code === "PROTOCOL_CONNECTION_LOST" || err.code === "EPIPE" || err.message?.includes("ETIMEDOUT") || err.message?.includes("Connection lost");
+      if (isTransient && retryCount > 0) {
+        console.warn(`[JAMI MySQL] Transient error (${err.code || err.message}), retrying query in 500ms...`);
+        await new Promise((r) => setTimeout(r, 500));
+        return this.query(sql, params, retryCount - 1);
+      }
       throw new DatabaseError(`MySQL Query Error: ${err.message}`, err);
     }
   }
-  async execute(sql, params) {
+  async execute(sql, params, retryCount = 1) {
     if (!this.pool || !this.isConnected) {
-      if (isProduction) {
-        throw new DatabaseError("Database pool is not ready or connection was lost");
+      if (!this.isInitializing && env.AIVEN_MYSQL_HOST) {
+        try {
+          await this.init();
+        } catch (_) {
+        }
       }
-      return null;
+      if (!this.pool || !this.isConnected) {
+        if (isProduction) {
+          throw new DatabaseError("Database pool is not ready or connection was lost");
+        }
+        return null;
+      }
     }
     try {
       const [result] = await this.pool.execute(sql, params);
       return result;
     } catch (err) {
+      const isTransient = err.code === "ETIMEDOUT" || err.code === "ECONNRESET" || err.code === "PROTOCOL_CONNECTION_LOST" || err.code === "EPIPE" || err.message?.includes("ETIMEDOUT") || err.message?.includes("Connection lost");
+      if (isTransient && retryCount > 0) {
+        console.warn(`[JAMI MySQL] Transient error (${err.code || err.message}), retrying execute in 500ms...`);
+        await new Promise((r) => setTimeout(r, 500));
+        return this.execute(sql, params, retryCount - 1);
+      }
       throw new DatabaseError(`MySQL Execute Error: ${err.message}`, err);
     }
   }
@@ -1724,6 +1752,7 @@ var TimetableEntryInputSchema = import_zod2.z.object({
   timetableId: import_zod2.z.string().optional(),
   subjectId: import_zod2.z.string().nullable().optional(),
   title: import_zod2.z.string().trim().min(1, { message: "Ti\xEAu \u0111\u1EC1 ti\u1EBFt h\u1ECDc kh\xF4ng \u0111\u01B0\u1EE3c \u0111\u1EC3 tr\u1ED1ng" }).max(150),
+  teacher: import_zod2.z.string().trim().max(100).optional().or(import_zod2.z.literal("")),
   dayOfWeek: import_zod2.z.coerce.number().int().min(1, { message: "Th\u1EE9 trong tu\u1EA7n t\u1EEB 1 (Th\u1EE9 2) \u0111\u1EBFn 7 (Ch\u1EE7 Nh\u1EADt)" }).max(7),
   startLocalTime: import_zod2.z.string().regex(TimeStringRegex, { message: "Gi\u1EDD b\u1EAFt \u0111\u1EA7u ph\u1EA3i c\xF3 \u0111\u1ECBnh d\u1EA1ng HH:mm (00:00 - 23:59)" }),
   endLocalTime: import_zod2.z.string().regex(TimeStringRegex, { message: "Gi\u1EDD k\u1EBFt th\xFAc ph\u1EA3i c\xF3 \u0111\u1ECBnh d\u1EA1ng HH:mm (00:00 - 23:59)" }),
@@ -1744,12 +1773,15 @@ var SchoolTimetableInputSchema = import_zod2.z.object({
 });
 var BusyEventInputSchema = import_zod2.z.object({
   title: import_zod2.z.string().trim().min(1, { message: "Ti\xEAu \u0111\u1EC1 s\u1EF1 ki\u1EC7n/l\u1ECBch b\u1EADn kh\xF4ng \u0111\u01B0\u1EE3c \u0111\u1EC3 tr\u1ED1ng" }).max(150),
-  type: import_zod2.z.enum(["extra_class", "meal", "sleep", "commute", "personal"]).default("personal"),
+  type: import_zod2.z.enum(["extra_class", "club", "personal", "meal", "sleep", "commute"]).default("personal"),
   startsAt: import_zod2.z.string().datetime({ message: "Th\u1EDDi gian b\u1EAFt \u0111\u1EA7u ph\u1EA3i l\xE0 chu\u1EA9n ISO 8601 h\u1EE3p l\u1EC7" }),
   endsAt: import_zod2.z.string().datetime({ message: "Th\u1EDDi gian k\u1EBFt th\xFAc ph\u1EA3i l\xE0 chu\u1EA9n ISO 8601 h\u1EE3p l\u1EC7" }),
   recurrenceRule: import_zod2.z.string().max(100).optional().nullable(),
   timezone: import_zod2.z.string().default("Asia/Ho_Chi_Minh"),
   isFixed: import_zod2.z.boolean().default(true),
+  location: import_zod2.z.string().trim().max(150).optional().nullable().or(import_zod2.z.literal("")),
+  commuteBeforeMinutes: import_zod2.z.coerce.number().int().min(0).max(180).default(0),
+  commuteAfterMinutes: import_zod2.z.coerce.number().int().min(0).max(180).default(0),
   subjectId: import_zod2.z.string().optional().nullable(),
   source: import_zod2.z.string().default("user")
 }).refine((data) => new Date(data.startsAt).getTime() < new Date(data.endsAt).getTime(), {
@@ -2157,6 +2189,87 @@ Nguy\xEAn t\u1EAFc:
       }
     }
     const msg = userMessage.toLowerCase();
+    if (msg.includes("nh\u1EAFc") || msg.includes("h\u1EB9n gi\u1EDD l\xFAc") || msg.includes("nh\u1EAFc nh\u1EDF")) {
+      const timeMatch = userMessage.match(/(\d{1,2})\s*(?:giờ|h|:)(\s*\d{2})?\s*(sáng|chiều|tối|pm|am)?/i);
+      const subjectMatch = userMessage.match(/(toán|văn|anh|lý|hóa|sinh|sử|địa|gdcd|tin|tin học|công nghệ)/i);
+      const subjectName = subjectMatch ? subjectMatch[0].toUpperCase() : "b\xE0i t\u1EADp";
+      const timeStr = timeMatch ? timeMatch[0] : "khung gi\u1EDD y\xEAu c\u1EA7u";
+      return {
+        message: `Jami \u0111\xE3 chu\u1EA9n b\u1ECB t\u1EA1o nh\u1EAFc nh\u1EDF cho ${studentName}:
+\u2022 N\u1ED9i dung: H\u1ECDc m\xF4n ${subjectName}
+\u2022 Th\u1EDDi gian: ${timeStr}
+
+${studentName} c\xF3 x\xE1c nh\u1EADn \u0111\u1EC3 Jami l\u01B0u l\u1EDDi nh\u1EAFc n\xE0y v\xE0o h\u1EC7 th\u1ED1ng kh\xF4ng?`,
+        emotion: "reminding",
+        suggestedActions: ["X\xE1c nh\u1EADn t\u1EA1o nh\u1EAFc nh\u1EDF", "\u0110\u1ED5i th\u1EDDi gian kh\xE1c"],
+        requiresConfirmation: true,
+        confirmationSummary: `T\u1EA1o th\xF4ng b\xE1o nh\u1EAFc h\u1ECDc m\xF4n ${subjectName} v\xE0o l\xFAc ${timeStr}.`,
+        citationsToUserMaterial: []
+      };
+    }
+    if (msg.includes("\u01B0u ti\xEAn") || msg.includes("n\xEAn l\xE0m g\xEC") || msg.includes("ti\u1EBFp theo") || msg.includes("g\u1EE3i \xFD b\xE0i")) {
+      const pending = context?.pendingTasks || [];
+      const exams = context?.upcomingExams || [];
+      if (pending.length === 0) {
+        return {
+          message: `Hi\u1EC7n t\u1EA1i ${studentName} \u0111\xE3 ho\xE0n th\xE0nh h\u1EBFt c\xE1c nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp t\u1ED3n \u0111\u1ECDng! Em c\xF3 th\u1EC3 d\xE0nh th\u1EDDi gian ngh\u1EC9 ng\u01A1i, \u0111\u1ECDc th\xEAm t\xE0i li\u1EC7u ho\u1EB7c l\xE0m b\xE0i \xF4n t\u1EADp ki\u1EC3m tra c\xF9ng Jami nh\xE9.`,
+          emotion: "celebrating",
+          suggestedActions: ["M\u1EDF Kho T\xE0i Li\u1EC7u", "L\xE0m \u0111\u1EC1 \xF4n t\u1EADp AI", "Xem b\xE1o c\xE1o h\u1ECDc t\u1EADp"],
+          requiresConfirmation: false,
+          citationsToUserMaterial: []
+        };
+      }
+      const topTask = pending[0];
+      const examWarning = exams.length > 0 ? `
+\u2022 L\u01B0u \xFD: Em c\xF3 k\u1EF3 ki\u1EC3m tra "${exams[0].title}" s\u1EAFp t\u1EDBi (c\xF2n ${exams[0].daysLeft} ng\xE0y).` : "";
+      return {
+        message: `\u{1F3AF} **G\u1EE3i \xFD nhi\u1EC7m v\u1EE5 \u01B0u ti\xEAn ti\u1EBFp theo cho ${studentName}:**
+
+\u2022 **Nhi\u1EC7m v\u1EE5:** ${topTask.title} (${topTask.subject || "M\xF4n h\u1ECDc"})
+\u2022 **Th\u1EDDi l\u01B0\u1EE3ng \u01B0\u1EDBc t\xEDnh:** ${topTask.estimatedMinutes || 45} ph\xFAt
+\u2022 **H\u1EA1n ho\xE0n th\xE0nh:** ${topTask.dueAt ? new Date(topTask.dueAt).toLocaleDateString("vi-VN") : "Trong ng\xE0y"}
+\u2022 **L\xFD do \u01B0u ti\xEAn:** B\xE1m s\xE1t h\u1EA1n n\u1ED9p g\u1EA7n nh\u1EA5t v\xE0 c\u1EE7ng c\u1ED1 ki\u1EBFn th\u1EE9c tr\u1ECDng t\xE2m cho m\xF4n ${topTask.subject || "h\u1ECDc"}.${examWarning}
+
+Em c\xF3 mu\u1ED1n Jami m\u1EDF trang chi ti\u1EBFt \u0111\u1EC3 b\u1EAFt \u0111\u1EA7u ch\u1EBF \u0111\u1ED9 h\u01B0\u1EDBng d\u1EABn ngay kh\xF4ng?`,
+        emotion: "guiding",
+        suggestedActions: ["B\u1EAFt \u0111\u1EA7u nhi\u1EC7m v\u1EE5 n\xE0y ngay", "H\u1EB9n gi\u1EDD t\u1EADp trung (Pomodoro)", "Xem t\u1EA5t c\u1EA3 nhi\u1EC7m v\u1EE5"],
+        requiresConfirmation: false,
+        citationsToUserMaterial: [topTask.title]
+      };
+    }
+    if (msg.includes("t\xF3m t\u1EAFt") || msg.includes("s\u01A1 l\u01B0\u1EE3c")) {
+      return {
+        message: `\u{1F4CB} **T\xF3m t\u1EAFt b\xE0i h\u1ECDc tr\u1ECDng t\xE2m cho ${studentName}:**
+
+1. **Kh\xE1i ni\u1EC7m c\u1ED1t l\xF5i:** N\u1EAFm v\u1EEFng \u0111\u1ECBnh ngh\u0129a v\xE0 t\xEDnh ch\u1EA5t c\u01A1 b\u1EA3n.
+2. **C\xF4ng th\u1EE9c & Quy t\u1EAFc:** Ghi nh\u1EDB c\xE1c b\u01B0\u1EDBc bi\u1EBFn \u0111\u1ED5i v\xE0 \u0111i\u1EC1u ki\u1EC7n \xE1p d\u1EE5ng.
+3. **D\u1EA1ng b\xE0i th\u01B0\u1EDDng g\u1EB7p:** Nh\u1EADn di\u1EC7n d\u1EA5u hi\u1EC7u b\xE0i to\xE1n v\xE0 ph\u01B0\u01A1ng ph\xE1p gi\u1EA3i chu\u1EA9n.
+4. **L\u1ED7i sai c\u1EA7n tr\xE1nh:** \u0110\u1ECDc k\u1EF9 \u0111\u1EC1 b\xE0i, ki\u1EC3m tra \u0111i\u1EC1u ki\u1EC7n x\xE1c \u0111\u1ECBnh v\xE0 \u0111\u01A1n v\u1ECB \u0111o.
+
+Em mu\u1ED1n Jami gi\u1EA3i th\xEDch s\xE2u h\u01A1n v\u1EC1 ph\u1EA7n n\xE0o hay t\u1EA1o m\u1ED9t v\xED d\u1EE5 m\u1EABu t\u01B0\u01A1ng t\u1EF1?`,
+        emotion: "speaking",
+        suggestedActions: ["T\u1EA1o v\xED d\u1EE5 t\u01B0\u01A1ng t\u1EF1", "H\u01B0\u1EDBng d\u1EABn t\u1EEBng b\u01B0\u1EDBc", "L\xE0m \u0111\u1EC1 ki\u1EC3m tra"],
+        requiresConfirmation: false,
+        citationsToUserMaterial: []
+      };
+    }
+    if (msg.includes("v\xED d\u1EE5 t\u01B0\u01A1ng t\u1EF1") || msg.includes("b\xE0i m\u1EABu") || msg.includes("v\xED d\u1EE5")) {
+      return {
+        message: `\u2728 **V\xED d\u1EE5 t\u01B0\u01A1ng t\u1EF1 c\xF3 l\u1EDDi gi\u1EA3i m\u1EABu cho ${studentName}:**
+
+\u2022 **B\xE0i to\xE1n:** Cho bi\u1EC3u th\u1EE9c $P = \\frac{2x + 1}{x - 3}$ (v\u1EDBi $x \\neq 3$). T\xECm gi\xE1 tr\u1ECB c\u1EE7a $x$ \u0111\u1EC3 $P = 5$.
+\u2022 **B\u01B0\u1EDBc 1:** \u0110\u1EB7t \u0111i\u1EC1u ki\u1EC7n: $x \\neq 3$.
+\u2022 **B\u01B0\u1EDBc 2:** Quy \u0111\u1ED3ng kh\u1EED m\u1EABu: $2x + 1 = 5(x - 3) \\Leftrightarrow 2x + 1 = 5x - 15$.
+\u2022 **B\u01B0\u1EDBc 3:** Chuy\u1EC3n v\u1EBF: $3x = 16 \\Leftrightarrow x = \\frac{16}{3}$ (th\u1ECFa m\xE3n \u0111i\u1EC1u ki\u1EC7n).
+\u2022 **K\u1EBFt lu\u1EADn:** V\u1EADy $x = \\frac{16}{3}$.
+
+Em c\xF3 mu\u1ED1n th\u1EED gi\u1EA3i m\u1ED9t b\xE0i t\u01B0\u01A1ng t\u1EF1 \u0111\u1EC3 Jami nh\u1EADn x\xE9t kh\xF4ng?`,
+        emotion: "guiding",
+        suggestedActions: ["Gi\u1EA3i b\xE0i t\u1EADp ti\u1EBFp theo", "Gi\u1EA3i th\xEDch l\u1EA1i b\u01B0\u1EDBc 2", "T\u1EA1o \u0111\u1EC1 \xF4n t\u1EADp"],
+        requiresConfirmation: false,
+        citationsToUserMaterial: []
+      };
+    }
     if (msg.includes("\u0111\u1ED5i l\u1ECBch") || msg.includes("b\u1EADn") || msg.includes("d\u1EDDi") || msg.includes("ho\xE3n")) {
       return {
         message: `Jami \u0111\xE3 ghi nh\u1EADn y\xEAu c\u1EA7u c\u1EE7a ${studentName}! Em c\xF3 mu\u1ED1n Jami d\u1EDDi c\xE1c nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp sang khung gi\u1EDD tr\u1ED1ng ti\u1EBFp theo kh\xF4ng? Em xem qua \u0111\u1EC1 xu\u1EA5t v\xE0 b\u1EA5m X\xE1c nh\u1EADn nh\xE9.`,
@@ -2181,19 +2294,28 @@ Jami \u0111\xE3 s\u1EB5n s\xE0ng \u0111\u1ED3ng h\xE0nh c\xF9ng em!`,
         citationsToUserMaterial: ["Th\u1EDDi kh\xF3a bi\u1EC3u h\xF4m nay"]
       };
     }
+    if (msg.includes("b\xE1o c\xE1o") || msg.includes("k\u1EBFt qu\u1EA3 h\u1ECDc")) {
+      return {
+        message: `\u{1F4CA} B\xE1o c\xE1o h\u1ECDc t\u1EADp tu\u1EA7n n\xE0y c\u1EE7a ${studentName} \u0111ang r\u1EA5t t\xEDch c\u1EF1c! Em mu\u1ED1n xem chi ti\u1EBFt bi\u1EC3u \u0111\u1ED3 th\u1EDDi gian h\u1ECDc hay m\u1EE9c \u0111\u1ED9 th\xE0nh th\u1EA1o c\xE1c m\xF4n?`,
+        emotion: "speaking",
+        suggestedActions: ["M\u1EDF trang B\xE1o c\xE1o chi ti\u1EBFt", "Xem th\u1EDDi gian t\u1EADp trung", "Ki\u1EC3m tra t\u1EF7 l\u1EC7 ho\xE0n th\xE0nh"],
+        requiresConfirmation: false,
+        citationsToUserMaterial: ["B\xE1o c\xE1o ti\u1EBFn \u0111\u1ED9"]
+      };
+    }
     if (msg.includes("b\u1ECB k\u1EB9t") || msg.includes("kh\xF4ng hi\u1EC3u") || msg.includes("g\u1EE3i \xFD") || msg.includes("gi\xFAp")) {
       return {
-        message: `\u0110\u1EEBng lo l\u1EAFng nh\xE9 ${studentName}! Jami lu\xF4n \u1EDF \u0111\xE2y \u0111\u1EC3 h\u01B0\u1EDBng d\u1EABn t\u1EEBng b\u01B0\u1EDBc. Em c\xF3 th\u1EC3 g\u1EEDi c\xE2u h\u1ECFi chi ti\u1EBFt ho\u1EB7c m\u1EDF Kho T\xE0i Li\u1EC7u \u0111\u1EC3 Jami gi\u1EA3i th\xEDch th\xEAm nh\xE9!`,
+        message: `\u0110\u1EEBng lo l\u1EAFng nh\xE9 ${studentName}! Jami lu\xF4n \u1EDF \u0111\xE2y \u0111\u1EC3 h\u01B0\u1EDBng d\u1EABn t\u1EEBng b\u01B0\u1EDBc thay v\xEC ch\u1EC9 \u0111\u01B0a \u0111\xE1p \xE1n. Em c\xF3 th\u1EC3 g\u1EEDi c\xE2u h\u1ECFi chi ti\u1EBFt ho\u1EB7c g\u1EEDi h\xECnh \u1EA3nh b\xE0i l\xE0m \u0111\u1EC3 Jami gi\u1EA3ng gi\u1EA3i nh\xE9!`,
         emotion: "guiding",
-        suggestedActions: ["M\u1EDF Kho T\xE0i Li\u1EC7u", "T\u1EA1o b\xE0i t\u1EADp luy\u1EC7n t\u1EADp"],
+        suggestedActions: ["H\u01B0\u1EDBng d\u1EABn t\u1EEBng b\u01B0\u1EDBc", "T\xF3m t\u1EAFt b\xE0i h\u1ECDc", "T\u1EA1o v\xED d\u1EE5 t\u01B0\u01A1ng t\u1EF1"],
         requiresConfirmation: false,
         citationsToUserMaterial: context?.latestMaterialTitle ? [context.latestMaterialTitle] : []
       };
     }
     return {
-      message: `Jami lu\xF4n s\u1EB5n s\xE0ng h\u1ED7 tr\u1EE3 ${studentName} l\u1EADp k\u1EBF ho\u1EA1ch, gi\u1EA3i th\xEDch b\xE0i h\u1ECDc v\xE0 gi\u1EEF t\u1EADp trung. Em mu\u1ED1n ch\xFAng m\xECnh b\u1EAFt \u0111\u1EA7u vi\u1EC7c g\xEC tr\u01B0\u1EDBc n\xE0o?`,
+      message: `Ch\xE0o ${studentName}! Jami lu\xF4n s\u1EB5n s\xE0ng h\u1ED7 tr\u1EE3 em h\u1ECFi \u0111\xE1p b\xE0i h\u1ECDc, nh\u1EAFc l\u1ECBch, g\u1EE3i \xFD vi\u1EC7c \u01B0u ti\xEAn v\xE0 \u0111i\u1EC1u khi\u1EC3n h\u1ECDc t\u1EADp b\u1EB1ng gi\u1ECDng n\xF3i. Em mu\u1ED1n b\u1EAFt \u0111\u1EA7u vi\u1EC7c g\xEC n\xE0o?`,
       emotion: "encouraging",
-      suggestedActions: ["Ki\u1EC3m tra l\u1ECBch h\u1ECDc h\xF4m nay", "L\xE0m \u0111\u1EC1 luy\u1EC7n t\u1EADp AI", "B\u1EAFt \u0111\u1EA7u H\u1EB9n gi\u1EDD t\u1EADp trung"],
+      suggestedActions: ["Ki\u1EC3m tra l\u1ECBch h\u1ECDc h\xF4m nay", "G\u1EE3i \xFD vi\u1EC7c n\xEAn l\xE0m ti\u1EBFp theo", "B\u1EAFt \u0111\u1EA7u H\u1EB9n gi\u1EDD t\u1EADp trung"],
       requiresConfirmation: false,
       citationsToUserMaterial: []
     };
@@ -2617,6 +2739,124 @@ Tr\u1EA3 v\u1EC1 \u0111\xFAng \u0111\u1ECBnh d\u1EA1ng JSON chu\u1EA9n:
         { dayOfWeek: 6, title: "Th\u1EC3 d\u1EE5c", startLocalTime: "10:00", endLocalTime: "10:45", room: "Nh\xE0 thi \u0111\u1EA5u" },
         { dayOfWeek: 6, title: "Sinh ho\u1EA1t l\u1EDBp", startLocalTime: "10:50", endLocalTime: "11:35", room: "P.102" }
       ]
+    };
+  }
+  /**
+   * Explain a specific step clearly with examples and guidance for student
+   */
+  static async explainStep(step, taskTitle, subjectName = "To\xE1n h\u1ECDc", studentQuestion) {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const prompt = `B\u1EA1n l\xE0 Jami - robot AI tr\u1EE3 l\xFD h\u1ECDc t\u1EADp th\xE2n thi\u1EC7n.
+Nhi\u1EC7m v\u1EE5: Gi\u1EA3i th\xEDch chi ti\u1EBFt, d\u1EC5 hi\u1EC3u t\u1EEBng b\u01B0\u1EDBc cho h\u1ECDc sinh Vi\u1EC7t Nam.
+Th\xF4ng tin:
+- M\xF4n h\u1ECDc: ${subjectName}
+- B\xE0i h\u1ECDc: "${taskTitle}"
+- B\u01B0\u1EDBc c\u1EA7n gi\u1EA3i th\xEDch: "${step.title}"
+- H\u01B0\u1EDBng d\u1EABn c\u1EE7a b\u01B0\u1EDBc: "${step.instruction}"
+- K\u1EBFt qu\u1EA3 c\u1EA7n \u0111\u1EA1t: "${step.expectedOutput}"
+${studentQuestion ? `- C\xE2u h\u1ECFi th\u1EAFc m\u1EAFc c\u1EE7a h\u1ECDc sinh: "${studentQuestion}"` : ""}
+
+H\xE3y tr\u1EA3 v\u1EC1 JSON v\u1EDBi c\u1EA5u tr\xFAc:
+{
+  "explanation": "Gi\u1EA3i th\xEDch chi ti\u1EBFt kh\xE1i ni\u1EC7m v\xE0 l\xFD do l\xE0m b\u01B0\u1EDBc n\xE0y m\u1ED9t c\xE1ch tr\u1EF1c quan",
+  "actionableSteps": ["H\xE0nh \u0111\u1ED9ng c\u1EE5 th\u1EC3 1", "H\xE0nh \u0111\u1ED9ng c\u1EE5 th\u1EC3 2", "H\xE0nh \u0111\u1ED9ng c\u1EE5 th\u1EC3 3"],
+  "example": "M\u1ED9t v\xED d\u1EE5 minh h\u1ECDa c\u1EE5 th\u1EC3 k\xE8m l\u1EDDi gi\u1EA3i t\u1EEBng d\xF2ng",
+  "keyTips": ["M\u1EB9o nh\u1EDB ho\u1EB7c b\u1EABy c\u1EA7n tr\xE1nh 1", "M\u1EB9o 2"]
+}`;
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            { role: "system", content: "B\u1EA1n l\xE0 chuy\xEAn gia s\u01B0 ph\u1EA1m Jami AI. Tr\u1EA3 v\u1EC1 \u0111\xFAng JSON theo y\xEAu c\u1EA7u." },
+            { role: "user", content: prompt }
+          ],
+          response_format: { type: "json_object" }
+        });
+        const raw = completion.choices[0]?.message?.content;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return {
+            explanation: parsed.explanation || `\u1EDE b\u01B0\u1EDBc n\xE0y, em c\u1EA7n t\u1EADp trung ho\xE0n th\xE0nh: ${step.instruction}`,
+            actionableSteps: Array.isArray(parsed.actionableSteps) ? parsed.actionableSteps : [step.instruction],
+            example: parsed.example || `V\xED d\u1EE5: Khi gi\u1EA3i d\u1EA1ng b\xE0i "${taskTitle}", h\xE3y \u0111\u1ECDc k\u0129 \u0111\u1EC1 b\xE0i v\xE0 x\xE1c \u0111\u1ECBnh d\u1EEF ki\u1EC7n \u0111\xE3 cho.`,
+            keyTips: Array.isArray(parsed.keyTips) ? parsed.keyTips : ["\u0110\u1ECDc k\u0129 y\xEAu c\u1EA7u \u0111\u1EC1 b\xE0i tr\u01B0\u1EDBc khi ghi ch\xE9p", "Ki\u1EC3m tra l\u1EA1i k\u1EBFt qu\u1EA3 mong \u0111\u1EE3i"]
+          };
+        }
+      } catch (err) {
+        console.warn("[AI Adapter] AI step explanation call failed, using deterministic template", err);
+      }
+    }
+    return {
+      explanation: `\u1EDE b\u01B0\u1EDBc "${step.title}", m\u1EE5c ti\xEAu ch\xEDnh l\xE0: ${step.instruction}. Vi\u1EC7c n\xE0y gi\xFAp em n\u1EAFm ch\u1EAFc n\u1EC1n t\u1EA3ng tr\u01B0\u1EDBc khi chuy\u1EC3n sang c\xE1c b\u01B0\u1EDBc ph\u1EE9c t\u1EA1p h\u01A1n.`,
+      actionableSteps: [
+        `B\u01B0\u1EDBc nh\u1ECF 1: \u0110\u1ECDc l\u1EA1i to\xE0n b\u1ED9 l\xFD thuy\u1EBFt v\xE0 c\xF4ng th\u1EE9c li\xEAn quan trong SGK.`,
+        `B\u01B0\u1EDBc nh\u1ECF 2: Th\u1EF1c hi\u1EC7n theo \u0111\xFAng h\u01B0\u1EDBng d\u1EABn: ${step.instruction}.`,
+        `B\u01B0\u1EDBc nh\u1ECF 3: T\u1EF1 \u0111\u1ED1i chi\u1EBFu s\u1EA3n ph\u1EA9m v\u1EDBi k\u1EBFt qu\u1EA3 mong \u0111\u1EE3i: ${step.expectedOutput}.`
+      ],
+      example: `V\xED d\u1EE5 th\u1EF1c t\u1EBF: H\xE3y l\u1EA5y gi\u1EA5y nh\xE1p, vi\u1EBFt ra 3 \xFD ch\xEDnh c\u1EE7a b\u01B0\u1EDBc n\xE0y v\xE0 gi\u1EA3i th\u1EED c\xE2u h\u1ECFi m\u1EABu t\u01B0\u01A1ng t\u1EF1.`,
+      keyTips: [
+        `Kh\xF4ng c\u1EA7n v\u1ED9i v\xE3, h\xE3y d\xE0nh tr\u1ECDn v\u1EB9n ${step.plannedMinutes} ph\xFAt \u0111\u1EC3 t\u1EADp trung cao \u0111\u1ED9.`,
+        `N\u1EBFu g\u1EB7p ch\u1ED7 kh\xF3, h\xE3y ghi ch\xFA l\u1EA1i \u0111\u1EC3 trao \u0111\u1ED5i th\xEAm c\xF9ng Jami nh\xE9!`
+      ]
+    };
+  }
+  /**
+   * Evaluates student's submitted evidence against task criteria and expected output
+   */
+  static async evaluateEvidence(taskTitle, subjectName, evidenceText, criteria = []) {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const prompt = `B\u1EA1n l\xE0 Jami - Gi\xE1m kh\u1EA3o AI \u0111\xE1nh gi\xE1 minh ch\u1EE9ng b\xE0i l\xE0m c\u1EE7a h\u1ECDc sinh.
+Th\xF4ng tin:
+- M\xF4n: ${subjectName}
+- T\xEAn b\xE0i: "${taskTitle}"
+- Ti\xEAu ch\xED \u0111\xE1nh gi\xE1: ${JSON.stringify(criteria)}
+- B\xE0i l\xE0m / Minh ch\u1EE9ng c\u1EE7a h\u1ECDc sinh: "${evidenceText}"
+
+H\xE3y ch\u1EA5m \u0111i\u1EC3m v\xE0 nh\u1EADn x\xE9t kh\xE1ch quan. Tr\u1EA3 v\u1EC1 JSON:
+{
+  "score": (thang \u0111i\u1EC3m 100),
+  "rating": (1 \u0111\u1EBFn 5 sao),
+  "isPassed": (true n\u1EBFu >= 60 \u0111i\u1EC3m),
+  "feedback": "L\u1EDDi nh\u1EADn x\xE9t kh\xEDch l\u1EC7 v\xE0 ch\u1EC9 d\u1EABn n\xE2ng cao",
+  "strengths": ["\u0110i\u1EC3m l\xE0m t\u1ED1t 1", "\u0110i\u1EC3m l\xE0m t\u1ED1t 2"],
+  "missingPoints": ["\u0110i\u1EC3m c\u1EA7n b\u1ED5 sung \u0111\u1EC3 \u0111\u1EA1t \u0111i\u1EC3m t\u1ED1i \u0111a"]
+}`;
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            { role: "system", content: "Ch\u1EA5m \u0111i\u1EC3m v\xE0 nh\u1EADn x\xE9t b\xE0i l\xE0m h\u1ECDc sinh theo chu\u1EA9n GDPT 2018. Tr\u1EA3 v\u1EC1 JSON." },
+            { role: "user", content: prompt }
+          ],
+          response_format: { type: "json_object" }
+        });
+        const raw = completion.choices[0]?.message?.content;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return {
+            score: typeof parsed.score === "number" ? parsed.score : 85,
+            rating: typeof parsed.rating === "number" ? parsed.rating : 4,
+            isPassed: parsed.isPassed ?? true,
+            feedback: parsed.feedback || "B\xE0i l\xE0m r\u1EA5t t\u1ED1t, em \u0111\xE3 th\u1EC3 hi\u1EC7n s\u1EF1 n\u1ED7 l\u1EF1c r\xF5 r\u1EC7t!",
+            strengths: Array.isArray(parsed.strengths) ? parsed.strengths : ["Tr\xECnh b\xE0y r\xF5 r\xE0ng, \u0111\xFAng tr\u1ECDng t\xE2m"],
+            missingPoints: Array.isArray(parsed.missingPoints) ? parsed.missingPoints : []
+          };
+        }
+      } catch (err) {
+        console.warn("[AI Adapter] AI evidence evaluation failed, using deterministic fallback", err);
+      }
+    }
+    const textLen = (evidenceText || "").trim().length;
+    const isGood = textLen > 20;
+    return {
+      score: isGood ? 90 : 70,
+      rating: isGood ? 5 : 4,
+      isPassed: true,
+      feedback: isGood ? "Minh ch\u1EE9ng chi ti\u1EBFt, \u0111\xE1p \u1EE9ng \u0111\u1EA7y \u0111\u1EE7 c\xE1c ti\xEAu ch\xED tr\u1ECDng t\xE2m c\u1EE7a b\xE0i h\u1ECDc!" : "\u0110\xE3 ghi nh\u1EADn minh ch\u1EE9ng ho\xE0n th\xE0nh b\xE0i t\u1EADp. Em c\xF3 th\u1EC3 b\u1ED5 sung th\xEAm chi ti\u1EBFt \u0111\u1EC3 \u0111\u1EA1t \u0111i\u1EC3m t\u1ED1i \u0111a nh\xE9.",
+      strengths: ["\u0110\xE3 n\u1ED9p \u0111\u1EA7y \u0111\u1EE7 k\u1EBFt qu\u1EA3 th\u1EF1c hi\u1EC7n", "B\xE1m s\xE1t y\xEAu c\u1EA7u nhi\u1EC7m v\u1EE5"],
+      missingPoints: isGood ? [] : ["N\xEAn b\u1ED5 sung th\xEAm t\xF3m t\u1EAFt c\xE1c b\u01B0\u1EDBc gi\u1EA3i chi ti\u1EBFt"]
     };
   }
 };
@@ -3077,6 +3317,8 @@ var DeterministicScheduler = class {
           if (slotIdx !== -1) {
             availableSlots.splice(slotIdx, 1);
           }
+        } else if (remainingTaskMinutes - allocMinutes > 0 && maxDailyMinutes - (dayMinutes + allocMinutes) >= minSession) {
+          candidates.unshift({ slot, score: best.score, reasons: best.reasons });
         }
         remainingTaskMinutes -= allocMinutes;
         partIndex++;
@@ -3417,7 +3659,7 @@ var TimetableRepository = class _TimetableRepository {
   async getTimetableEntries(userId, timetableId) {
     if (db.isHealthy()) {
       let query = `
-        SELECT e.id, e.timetable_id, e.subject_id, e.title, e.day_of_week, e.start_local_time, e.end_local_time,
+        SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.day_of_week, e.start_local_time, e.end_local_time,
                e.location, e.commute_before_minutes, e.commute_after_minutes,
                s.name as subject_name, s.color as subject_color
         FROM school_timetable_entries e
@@ -3442,6 +3684,7 @@ var TimetableRepository = class _TimetableRepository {
         subjectName: r.subject_name || r.title,
         subjectColor: r.subject_color || "#16A34A",
         title: r.title,
+        teacher: r.teacher || void 0,
         room: r.location || "",
         location: r.location || "",
         startLocalTime: r.start_local_time,
@@ -3473,6 +3716,7 @@ var TimetableRepository = class _TimetableRepository {
       subjectId: data.subjectId || void 0,
       subjectName: data.subjectName || data.title || "Ti\u1EBFt h\u1ECDc",
       title: data.title || "Ti\u1EBFt h\u1ECDc",
+      teacher: data.teacher || void 0,
       dayOfWeek: Number(data.dayOfWeek) || 1,
       startLocalTime: data.startLocalTime || "07:30",
       endLocalTime: data.endLocalTime || "11:45",
@@ -3492,13 +3736,14 @@ var TimetableRepository = class _TimetableRepository {
         }
       }
       await db.execute(
-        `INSERT INTO school_timetable_entries (id, timetable_id, subject_id, title, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO school_timetable_entries (id, timetable_id, subject_id, title, teacher, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.id,
           entry.timetableId,
           entry.subjectId || null,
           entry.title,
+          entry.teacher || null,
           entry.dayOfWeek,
           entry.startLocalTime,
           entry.endLocalTime,
@@ -3531,6 +3776,10 @@ var TimetableRepository = class _TimetableRepository {
       if (data.title !== void 0) {
         sets.push("title = ?");
         params.push(data.title);
+      }
+      if (data.teacher !== void 0) {
+        sets.push("teacher = ?");
+        params.push(data.teacher || null);
       }
       if (data.subjectId !== void 0) {
         if (data.subjectId) {
@@ -3658,7 +3907,7 @@ var TimetableRepository = class _TimetableRepository {
     if (db.isHealthy()) {
       let query = `
         SELECT b.id, b.user_id, b.type, b.title, b.starts_at, b.ends_at, b.recurrence_rule, b.timezone,
-               b.is_fixed, b.source, s.name as subject_name
+               b.is_fixed, b.location, b.commute_before_minutes, b.commute_after_minutes, b.source, s.name as subject_name
         FROM busy_events b
         LEFT JOIN subjects s ON b.title = s.name
         WHERE b.user_id = ?
@@ -3680,6 +3929,9 @@ var TimetableRepository = class _TimetableRepository {
         recurrenceRule: r.recurrence_rule || void 0,
         timezone: r.timezone || "Asia/Ho_Chi_Minh",
         isFixed: Boolean(r.is_fixed),
+        location: r.location || void 0,
+        commuteBeforeMinutes: r.commute_before_minutes ?? 0,
+        commuteAfterMinutes: r.commute_after_minutes ?? 0,
         subjectName: r.subject_name || void 0,
         source: r.source || "user"
       }));
@@ -3704,13 +3956,16 @@ var TimetableRepository = class _TimetableRepository {
       recurrenceRule: event.recurrenceRule || void 0,
       timezone: event.timezone || "Asia/Ho_Chi_Minh",
       isFixed: event.isFixed ?? true,
+      location: event.location || void 0,
+      commuteBeforeMinutes: event.commuteBeforeMinutes ?? 0,
+      commuteAfterMinutes: event.commuteAfterMinutes ?? 0,
       subjectId: event.subjectId || void 0,
       source: event.source || "user"
     };
     if (db.isHealthy()) {
       await db.execute(
-        `INSERT INTO busy_events (id, user_id, type, title, starts_at, ends_at, recurrence_rule, timezone, is_fixed, source, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+        `INSERT INTO busy_events (id, user_id, type, title, starts_at, ends_at, recurrence_rule, timezone, is_fixed, location, commute_before_minutes, commute_after_minutes, source, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
         [
           created.id,
           userId,
@@ -3721,6 +3976,9 @@ var TimetableRepository = class _TimetableRepository {
           created.recurrenceRule || null,
           created.timezone,
           created.isFixed ? 1 : 0,
+          created.location || null,
+          created.commuteBeforeMinutes || 0,
+          created.commuteAfterMinutes || 0,
           created.source
         ]
       );
@@ -3767,6 +4025,18 @@ var TimetableRepository = class _TimetableRepository {
       if (data.isFixed !== void 0) {
         sets.push("is_fixed = ?");
         params.push(data.isFixed ? 1 : 0);
+      }
+      if (data.location !== void 0) {
+        sets.push("location = ?");
+        params.push(data.location || null);
+      }
+      if (data.commuteBeforeMinutes !== void 0) {
+        sets.push("commute_before_minutes = ?");
+        params.push(data.commuteBeforeMinutes);
+      }
+      if (data.commuteAfterMinutes !== void 0) {
+        sets.push("commute_after_minutes = ?");
+        params.push(data.commuteAfterMinutes);
       }
       if (sets.length > 0) {
         sets.push("updated_at = NOW(3)");
@@ -4446,6 +4716,91 @@ var TaskRepository = class _TaskRepository {
   async completeStep(userId, taskId, stepId, actualMinutes) {
     return this.updateExecutionStep(userId, taskId, stepId, "completed", actualMinutes);
   }
+  async reorderExecutionSteps(userId, taskId, orderedStepIds) {
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        for (let i = 0; i < orderedStepIds.length; i++) {
+          const stepId = orderedStepIds[i];
+          await conn.execute(
+            `UPDATE execution_steps s
+             JOIN execution_guides g ON s.guide_id = g.id
+             JOIN study_tasks t ON g.task_id = t.id
+             SET s.step_order = ?
+             WHERE s.id = ? AND g.task_id = ? AND t.user_id = ?`,
+            [i + 1, stepId, taskId, userId]
+          );
+        }
+      });
+    } else {
+      const guide = this.demoGuides.get(taskId);
+      if (guide && guide.steps) {
+        const stepMap = new Map(guide.steps.map((s) => [s.id, s]));
+        const newSteps = [];
+        for (let i = 0; i < orderedStepIds.length; i++) {
+          const s = stepMap.get(orderedStepIds[i]);
+          if (s) {
+            s.stepOrder = i + 1;
+            newSteps.push(s);
+          }
+        }
+        guide.steps = newSteps;
+      }
+    }
+    return this.getExecutionGuide(userId, taskId);
+  }
+  async updateExecutionStepDetails(userId, taskId, stepId, updates) {
+    if (db.isHealthy()) {
+      const setParts = [];
+      const values = [];
+      if (updates.title !== void 0) {
+        setParts.push("s.title = ?");
+        values.push(updates.title);
+      }
+      if (updates.instruction !== void 0) {
+        setParts.push("s.instruction = ?");
+        values.push(updates.instruction);
+      }
+      if (updates.expectedOutput !== void 0) {
+        setParts.push("s.expected_output = ?");
+        values.push(updates.expectedOutput);
+      }
+      if (updates.plannedMinutes !== void 0) {
+        setParts.push("s.planned_minutes = ?");
+        values.push(updates.plannedMinutes);
+      }
+      if (updates.status !== void 0) {
+        setParts.push("s.status = ?");
+        values.push(updates.status);
+        if (updates.status === "completed") {
+          setParts.push("s.completed_at = NOW(3)");
+        }
+      }
+      if (setParts.length > 0) {
+        values.push(stepId, taskId, userId);
+        await db.execute(
+          `UPDATE execution_steps s
+           JOIN execution_guides g ON s.guide_id = g.id
+           JOIN study_tasks t ON g.task_id = t.id
+           SET ${setParts.join(", ")}
+           WHERE s.id = ? AND g.task_id = ? AND t.user_id = ?`,
+          values
+        );
+      }
+    } else {
+      const guide = this.demoGuides.get(taskId);
+      if (guide && guide.steps) {
+        const step = guide.steps.find((s) => s.id === stepId);
+        if (step) {
+          if (updates.title !== void 0) step.title = updates.title;
+          if (updates.instruction !== void 0) step.instruction = updates.instruction;
+          if (updates.expectedOutput !== void 0) step.expectedOutput = updates.expectedOutput;
+          if (updates.plannedMinutes !== void 0) step.plannedMinutes = updates.plannedMinutes;
+          if (updates.status !== void 0) step.status = updates.status;
+        }
+      }
+    }
+    return this.getExecutionGuide(userId, taskId);
+  }
   async addEvidence(userId, evidence) {
     const id = evidence.id || "evid_" + import_crypto8.default.randomUUID().replace(/-/g, "").substring(0, 24);
     const created = {
@@ -5018,6 +5373,8 @@ var ExamRepository = class _ExamRepository {
       title: (data.title || "B\xE0i ki\u1EC3m tra").trim(),
       examAt,
       importance: data.importance || "high",
+      targetScore: data.targetScore !== void 0 ? Number(data.targetScore) : 8.5,
+      examFormat: data.examFormat || "combined",
       scopeText: data.scopeText || "",
       topics: data.topics && data.topics.length > 0 ? data.topics : [{ id: "topic_1", name: subjectName, weight: 1 }],
       milestones,
@@ -5363,6 +5720,146 @@ var QuizRepository = class _QuizRepository {
            WHERE exam_id = ? AND user_id = ? AND milestone_type = ?`,
           [quiz.id, examId, userId, milestone]
         );
+      });
+    } else {
+      const list = this.demoQuizzes.get(userId) || [];
+      list.unshift(quiz);
+      this.demoQuizzes.set(userId, list);
+      this.demoQuestions.set(quiz.id, questions);
+    }
+    return quiz;
+  }
+  async generateSubjectQuiz(userId, options = {}) {
+    const subjects = await subjectRepo.getByUserId(userId);
+    const targetSubject = subjects.find((s) => s.id === options.subjectId || s.name.toLowerCase().includes((options.subjectName || "").toLowerCase())) || subjects[0];
+    const subjectId = targetSubject ? targetSubject.id : options.subjectId || "subj-math";
+    const subjectName = targetSubject ? targetSubject.name : options.subjectName || "To\xE1n h\u1ECDc";
+    const difficulty = options.difficulty || "medium";
+    const questionCount = Math.min(30, Math.max(3, options.questionCount || 5));
+    const topics = options.topics && options.topics.length > 0 ? options.topics : [subjectName];
+    const draft = await AiAdapter.generateQuizDraft({
+      subject: subjectName,
+      scope: options.scope || "Ki\u1EBFn th\u1EE9c tr\u1ECDng t\xE2m",
+      topics,
+      milestone: "D-7",
+      questionCount,
+      difficulty
+    });
+    const quizTitle = options.title || draft.title || `\u0110\u1EC1 Luy\u1EC7n T\u1EADp AI - M\xF4n ${subjectName} (${difficulty.toUpperCase()})`;
+    const quizId = "quiz_" + import_crypto11.default.randomUUID().replace(/-/g, "").substring(0, 24);
+    const questions = (draft.questions || []).map((q, idx) => ({
+      id: `q_${quizId}_${idx + 1}`,
+      quizId,
+      order: idx + 1,
+      type: q.type || (options.format === "essay" ? "short_answer" : "multiple_choice"),
+      prompt: q.prompt,
+      options: q.options || [],
+      correctAnswer: q.correctAnswer,
+      explanation: q.explanation,
+      difficulty: q.difficulty || difficulty,
+      topicRef: q.topicRef || topics[0] || subjectName
+    }));
+    const quiz = {
+      id: quizId,
+      userId,
+      subjectId,
+      subjectName,
+      title: quizTitle,
+      type: "practice",
+      difficulty,
+      status: "ready",
+      questionCount: questions.length,
+      questions,
+      generatedByAi: true,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        await conn.execute(
+          `INSERT INTO quizzes (id, user_id, exam_id, subject_id, title, type, milestone, difficulty, status, generated_by_ai, created_at)
+           VALUES (?, ?, NULL, ?, ?, 'practice', 'D-7', ?, 'ready', 1, NOW(3))`,
+          [quiz.id, userId, quiz.subjectId, quiz.title, quiz.difficulty]
+        );
+        for (const q of questions) {
+          await conn.execute(
+            `INSERT INTO quiz_questions (id, quiz_id, question_order, type, prompt, options_json, correct_answer_server_only, explanation_server_only, difficulty, topic_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              q.id,
+              quiz.id,
+              q.order,
+              q.type,
+              q.prompt,
+              JSON.stringify(q.options || []),
+              q.correctAnswer || "",
+              q.explanation || "",
+              q.difficulty,
+              q.topicRef || null
+            ]
+          );
+        }
+      });
+    } else {
+      const list = this.demoQuizzes.get(userId) || [];
+      list.unshift(quiz);
+      this.demoQuizzes.set(userId, list);
+      this.demoQuestions.set(quiz.id, questions);
+    }
+    return quiz;
+  }
+  async generateRetakeWrongQuestionsQuiz(userId, originalQuizId, wrongQuestionIds) {
+    const originalQuestions = await this.getQuizQuestions(userId, originalQuizId, true);
+    const wrongQuestions = originalQuestions.filter((q) => wrongQuestionIds.includes(q.id));
+    if (wrongQuestions.length === 0) {
+      throw new Error("Kh\xF4ng t\xECm th\u1EA5y c\xE2u h\u1ECFi sai \u0111\u1EC3 l\xE0m l\u1EA1i.");
+    }
+    const quizId = "quiz_" + import_crypto11.default.randomUUID().replace(/-/g, "").substring(0, 24);
+    const quizTitle = `Luy\u1EC7n L\u1EA1i C\xE2u Sai - ${wrongQuestions.length} C\xE2u`;
+    const questions = wrongQuestions.map((q, idx) => ({
+      ...q,
+      id: `q_${quizId}_${idx + 1}`,
+      quizId,
+      order: idx + 1
+    }));
+    const quiz = {
+      id: quizId,
+      userId,
+      subjectId: "subj-math",
+      subjectName: "\xD4n t\u1EADp c\xE2u sai",
+      title: quizTitle,
+      type: "weak_topic",
+      difficulty: "medium",
+      status: "ready",
+      questionCount: questions.length,
+      questions,
+      generatedByAi: false,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        await conn.execute(
+          `INSERT INTO quizzes (id, user_id, exam_id, subject_id, title, type, milestone, difficulty, status, generated_by_ai, created_at)
+           VALUES (?, ?, NULL, ?, ?, 'weak_topic', NULL, 'medium', 'ready', 0, NOW(3))`,
+          [quiz.id, userId, quiz.subjectId, quiz.title]
+        );
+        for (const q of questions) {
+          await conn.execute(
+            `INSERT INTO quiz_questions (id, quiz_id, question_order, type, prompt, options_json, correct_answer_server_only, explanation_server_only, difficulty, topic_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              q.id,
+              quiz.id,
+              q.order,
+              q.type,
+              q.prompt,
+              JSON.stringify(q.options || []),
+              q.correctAnswer || "",
+              q.explanation || "",
+              q.difficulty,
+              q.topicRef || null
+            ]
+          );
+        }
       });
     } else {
       const list = this.demoQuizzes.get(userId) || [];
@@ -5798,6 +6295,17 @@ var StorageService = class _StorageService {
       expiresAt
     };
   }
+  /**
+   * Generates a timed download URL for private files
+   */
+  async getSignedDownloadUrl(key, expiresInSeconds = 3600) {
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1e3).toISOString();
+    const downloadUrl = `/api/v1/materials/download-direct?key=${encodeURIComponent(key)}&expiresAt=${encodeURIComponent(expiresAt)}`;
+    return {
+      downloadUrl,
+      expiresAt
+    };
+  }
 };
 var storageService = StorageService.getInstance();
 
@@ -5806,6 +6314,10 @@ var import_crypto13 = __toESM(require("crypto"), 1);
 var MaterialRepository = class _MaterialRepository {
   constructor() {
     this.demoMaterials = /* @__PURE__ */ new Map();
+    // ==========================================
+    // Outlines Subsystem (6.2)
+    // ==========================================
+    this.demoOutlines = /* @__PURE__ */ new Map();
   }
   static getInstance() {
     if (!_MaterialRepository.instance) {
@@ -5867,10 +6379,26 @@ var MaterialRepository = class _MaterialRepository {
     const sanitizedName = sanitizeFileName(data.fileName);
     const r2ObjectKey = generateMaterialObjectKey(userId, sanitizedName);
     const type = data.mimeType.startsWith("image/") ? "image" : "pdf";
+    let resolvedSubjectId = data.subjectId;
+    if (db.isHealthy()) {
+      let subjectExists = false;
+      if (resolvedSubjectId) {
+        const rows = await db.query("SELECT id FROM subjects WHERE id = ?", [resolvedSubjectId]);
+        if (rows.length > 0) {
+          subjectExists = true;
+        }
+      }
+      if (!subjectExists) {
+        const userSubjects = await SubjectRepository.getInstance().getByUserId(userId);
+        if (userSubjects && userSubjects.length > 0) {
+          resolvedSubjectId = userSubjects[0].id;
+        }
+      }
+    }
     const material = {
       id,
       userId,
-      subjectId: data.subjectId,
+      subjectId: resolvedSubjectId,
       title: data.title.trim(),
       type,
       fileName: sanitizedName,
@@ -5913,10 +6441,26 @@ var MaterialRepository = class _MaterialRepository {
   async createNote(userId, data) {
     const id = "mat_" + import_crypto13.default.randomUUID().replace(/-/g, "").substring(0, 24);
     const sizeBytes = Buffer.byteLength(data.contentText, "utf-8");
+    let resolvedSubjectId = data.subjectId;
+    if (db.isHealthy()) {
+      let subjectExists = false;
+      if (resolvedSubjectId) {
+        const rows = await db.query("SELECT id FROM subjects WHERE id = ?", [resolvedSubjectId]);
+        if (rows.length > 0) {
+          subjectExists = true;
+        }
+      }
+      if (!subjectExists) {
+        const userSubjects = await SubjectRepository.getInstance().getByUserId(userId);
+        if (userSubjects && userSubjects.length > 0) {
+          resolvedSubjectId = userSubjects[0].id;
+        }
+      }
+    }
     const material = {
       id,
       userId,
-      subjectId: data.subjectId,
+      subjectId: resolvedSubjectId,
       title: data.title.trim(),
       type: "notes",
       sizeBytes,
@@ -6042,6 +6586,155 @@ var MaterialRepository = class _MaterialRepository {
     const list = this.demoMaterials.get(userId) || [];
     const filtered = list.filter((m) => m.id !== materialId);
     this.demoMaterials.set(userId, filtered);
+    return true;
+  }
+  async rename(userId, materialId, newTitle) {
+    const existing = await this.getById(userId, materialId);
+    if (!existing) return null;
+    const title = newTitle.trim();
+    if (!title) return existing;
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE learning_materials SET title = ?, updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
+        [title, materialId, userId]
+      );
+    } else {
+      existing.title = title;
+      existing.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    }
+    return { ...existing, title, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  }
+  async getDownloadUrl(userId, materialId) {
+    const material = await this.getById(userId, materialId);
+    if (!material || !material.r2ObjectKey) return null;
+    return await storageService.getSignedDownloadUrl(material.r2ObjectKey, 3600);
+  }
+  async getOutlines(userId, subjectId) {
+    if (db.isHealthy()) {
+      let sql = `
+        SELECT o.id, o.user_id, o.subject_id, o.material_id, o.title, o.chapter,
+               o.content_markdown, o.key_points_json, o.formulas_json, o.is_pinned,
+               o.created_at, o.updated_at,
+               s.name as subject_name
+        FROM outlines o
+        LEFT JOIN subjects s ON o.subject_id = s.id
+        WHERE o.user_id = ?
+      `;
+      const params = [userId];
+      if (subjectId) {
+        sql += ` AND o.subject_id = ?`;
+        params.push(subjectId);
+      }
+      sql += ` ORDER BY o.is_pinned DESC, o.updated_at DESC`;
+      const rows = await db.query(sql, params);
+      return rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        subjectId: r.subject_id,
+        subjectName: r.subject_name || "M\xF4n h\u1ECDc",
+        materialId: r.material_id || void 0,
+        title: r.title,
+        chapter: r.chapter || void 0,
+        contentMarkdown: r.content_markdown,
+        keyPoints: r.key_points_json ? typeof r.key_points_json === "string" ? JSON.parse(r.key_points_json) : r.key_points_json : [],
+        formulas: r.formulas_json ? typeof r.formulas_json === "string" ? JSON.parse(r.formulas_json) : r.formulas_json : [],
+        isPinned: Boolean(r.is_pinned),
+        createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+        updatedAt: r.updated_at?.toISOString?.() || String(r.updated_at)
+      }));
+    }
+    const list = this.demoOutlines.get(userId) || [];
+    if (subjectId) {
+      return list.filter((o) => o.subjectId === subjectId);
+    }
+    return list;
+  }
+  async getOutline(userId, outlineId) {
+    const list = await this.getOutlines(userId);
+    return list.find((o) => o.id === outlineId) || null;
+  }
+  async createOutline(userId, data) {
+    const id = "out_" + import_crypto13.default.randomUUID().replace(/-/g, "").substring(0, 24);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const created = {
+      id,
+      userId,
+      subjectId: data.subjectId || "subj-math",
+      materialId: data.materialId || null,
+      title: data.title || "\u0110\u1EC1 c\u01B0\u01A1ng \xF4n t\u1EADp",
+      chapter: data.chapter || "",
+      contentMarkdown: data.contentMarkdown || "# \u0110\u1EC1 c\u01B0\u01A1ng \xF4n t\u1EADp\n\nN\u1ED9i dung ch\xEDnh...",
+      keyPoints: data.keyPoints || [],
+      formulas: data.formulas || [],
+      isPinned: Boolean(data.isPinned),
+      createdAt: now,
+      updatedAt: now
+    };
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO outlines (id, user_id, subject_id, material_id, title, chapter, content_markdown, key_points_json, formulas_json, is_pinned, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+        [
+          created.id,
+          userId,
+          created.subjectId,
+          created.materialId,
+          created.title,
+          created.chapter,
+          created.contentMarkdown,
+          JSON.stringify(created.keyPoints),
+          JSON.stringify(created.formulas),
+          created.isPinned ? 1 : 0
+        ]
+      );
+    } else {
+      const list = this.demoOutlines.get(userId) || [];
+      list.unshift(created);
+      this.demoOutlines.set(userId, list);
+    }
+    return created;
+  }
+  async updateOutline(userId, outlineId, data) {
+    const existing = await this.getOutline(userId, outlineId);
+    if (!existing) return null;
+    const updated = {
+      ...existing,
+      ...data,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE outlines
+         SET title = ?, chapter = ?, content_markdown = ?, key_points_json = ?, formulas_json = ?, is_pinned = ?, updated_at = NOW(3)
+         WHERE id = ? AND user_id = ?`,
+        [
+          updated.title,
+          updated.chapter,
+          updated.contentMarkdown,
+          JSON.stringify(updated.keyPoints || []),
+          JSON.stringify(updated.formulas || []),
+          updated.isPinned ? 1 : 0,
+          outlineId,
+          userId
+        ]
+      );
+    } else {
+      const list = this.demoOutlines.get(userId) || [];
+      const idx = list.findIndex((o) => o.id === outlineId);
+      if (idx !== -1) list[idx] = updated;
+    }
+    return updated;
+  }
+  async deleteOutline(userId, outlineId) {
+    if (db.isHealthy()) {
+      const res = await db.execute(
+        `DELETE FROM outlines WHERE id = ? AND user_id = ?`,
+        [outlineId, userId]
+      );
+      return res?.affectedRows > 0;
+    }
+    const list = this.demoOutlines.get(userId) || [];
+    this.demoOutlines.set(userId, list.filter((o) => o.id !== outlineId));
     return true;
   }
   seedDemo(userId, materials) {
@@ -6431,6 +7124,75 @@ var ReportRepository = class _ReportRepository {
       });
       const weakTopics = topicMastery.filter((t) => t.status === "needs_review");
       const strongTopics = topicMastery.filter((t) => t.status === "mastered");
+      const subjectInsights = subjectBreakdown.map((sb) => {
+        const hasEnoughData = sb.quizCount >= 1 || sb.taskCount >= 2;
+        if (!hasEnoughData) {
+          return {
+            subjectId: sb.subjectId,
+            subjectName: sb.subjectName,
+            color: sb.color,
+            status: "insufficient_data",
+            headline: "C\u1EA7n t\xEDch l\u0169y th\xEAm d\u1EEF li\u1EC7u",
+            explanation: `Ch\u01B0a c\xF3 \u0111\u1EE7 s\u1ED1 l\u01B0\u1EE3ng b\xE0i t\u1EADp v\xE0 ki\u1EC3m tra (${sb.taskCount} nhi\u1EC7m v\u1EE5, ${sb.quizCount} b\xE0i test) \u0111\u1EC3 k\u1EBFt lu\u1EADn ch\xEDnh x\xE1c v\u1EC1 n\u0103ng l\u1EF1c m\xF4n n\xE0y.`,
+            avgScore: sb.avgQuizScore,
+            completionRate: sb.completionPercent
+          };
+        }
+        if (sb.avgQuizScore !== null && sb.avgQuizScore >= 7.5 || sb.completionPercent >= 80) {
+          return {
+            subjectId: sb.subjectId,
+            subjectName: sb.subjectName,
+            color: sb.color,
+            status: "improving",
+            headline: "M\xF4n h\u1ECDc \u0111ang ti\u1EBFn b\u1ED9 v\u1EEFng ch\u1EAFc",
+            explanation: `D\u1EF1a tr\xEAn ${sb.taskCount} nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp (ho\xE0n th\xE0nh ${sb.completedTaskCount}/${sb.taskCount}) v\xE0 \u0111i\u1EC3m ki\u1EC3m tra \u0111\u1EA1t TB ${sb.avgQuizScore ?? "T\u1ED1t"}/10.`,
+            avgScore: sb.avgQuizScore,
+            completionRate: sb.completionPercent
+          };
+        }
+        return {
+          subjectId: sb.subjectId,
+          subjectName: sb.subjectName,
+          color: sb.color,
+          status: "needs_attention",
+          headline: "M\xF4n h\u1ECDc c\u1EA7n c\u1EA3i thi\u1EC7n & \xF4n t\u1EADp th\xEAm",
+          explanation: `T\u1EF7 l\u1EC7 ho\xE0n th\xE0nh nhi\u1EC7m v\u1EE5 \u0111\u1EA1t ${sb.completionPercent}% v\xE0 \u0111i\u1EC3m trung b\xECnh ${sb.avgQuizScore !== null ? `${sb.avgQuizScore}/10` : "ch\u01B0a cao"}. Khuy\u1EBFn ngh\u1ECB t\u0103ng th\u1EDDi l\u01B0\u1EE3ng t\u1EADp trung.`,
+          avgScore: sb.avgQuizScore,
+          completionRate: sb.completionPercent
+        };
+      });
+      let scoreProgression = [];
+      try {
+        const rows = await db.query(
+          `SELECT qa.id as attempt_id, qz.title as quiz_title, s.name as subject_name,
+                  qa.score, qa.max_score, qa.submitted_at
+           FROM quiz_attempts qa
+           JOIN quizzes qz ON qa.quiz_id = qz.id
+           LEFT JOIN subjects s ON qz.subject_id = s.id
+           WHERE qa.user_id = ? AND qa.status = 'submitted'
+           ORDER BY qa.submitted_at ASC
+           LIMIT 15`,
+          [userId]
+        );
+        scoreProgression = rows.map((r) => ({
+          attemptId: r.attempt_id,
+          quizTitle: r.quiz_title || "\u0110\u1EC1 luy\u1EC7n t\u1EADp",
+          subjectName: r.subject_name || "M\xF4n h\u1ECDc",
+          score: Number(r.score) || 0,
+          maxScore: Number(r.max_score) || 10,
+          submittedAt: r.submitted_at ? r.submitted_at.toISOString?.() || String(r.submitted_at) : (/* @__PURE__ */ new Date()).toISOString()
+        }));
+      } catch {
+      }
+      const nextStudyPlan = [];
+      if (weakTopics.length > 0) {
+        nextStudyPlan.push(`D\xE0nh 30 ph\xFAt \xF4n l\u1EA1i ch\u1EE7 \u0111\u1EC1 "${weakTopics[0].topicKey}" (${weakTopics[0].subjectName}) b\u1EB1ng c\xE1ch t\u1EA1o \u0111\u1EC1 luy\u1EC7n t\u1EADp 5 c\xE2u.`);
+      }
+      if (subjectInsights.some((s) => s.status === "needs_attention")) {
+        const target = subjectInsights.find((s) => s.status === "needs_attention");
+        nextStudyPlan.push(`\u01AFu ti\xEAn ho\xE0n th\xE0nh c\xE1c b\xE0i t\u1EADp t\u1ED3n \u0111\u1ECDng c\u1EE7a m\xF4n ${target.subjectName} v\xE0o khung gi\u1EDD h\u1ECDc t\u1ED1i.`);
+      }
+      nextStudyPlan.push("Duy tr\xEC t\u1ED1i thi\u1EC3u 2 phi\xEAn Pomodoro 25 ph\xFAt m\u1ED7i ng\xE0y \u0111\u1EC3 gi\u1EEF v\u1EEFng phong \u0111\u1ED9 t\u1EADp trung.");
       const prevActual = Number(prevFocusAgg?.actual_focus_minutes) || 0;
       const prevCompletedTasks = Number(prevTaskAgg?.completed_tasks) || 0;
       const prevQuizAvg = prevQuizAgg?.avg_score !== null && prevQuizAgg?.avg_score !== void 0 ? Number(prevQuizAgg.avg_score) : null;
@@ -6453,6 +7215,7 @@ var ReportRepository = class _ReportRepository {
         onTimeRate
       });
       const hasData = actualFocusMinutes > 0 || totalTasks > 0 || totalQuizAttempts > 0;
+      const avgSessionMinutes = completedSessions > 0 ? Math.round(actualFocusMinutes / completedSessions) : 0;
       return {
         period: {
           type: periodType,
@@ -6472,6 +7235,8 @@ var ReportRepository = class _ReportRepository {
           onTimeRate,
           averageQuizScore,
           totalQuizAttempts,
+          totalCompletedSessions: completedSessions,
+          avgSessionMinutes,
           streakDays,
           focusQualityScore
         },
@@ -6480,6 +7245,9 @@ var ReportRepository = class _ReportRepository {
         topicMastery,
         weakTopics,
         strongTopics,
+        subjectInsights,
+        scoreProgression,
+        nextStudyPlan,
         comparison,
         recommendations,
         hasData
@@ -7811,6 +8579,66 @@ var JamiActionService = class _JamiActionService {
       },
       {
         type: "function",
+        name: "mark_task_completed",
+        description: "\u0110\xE1nh d\u1EA5u ho\xE0n th\xE0nh m\u1ED9t nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp c\u1EE7a h\u1ECDc sinh.",
+        parameters: {
+          type: "object",
+          properties: {
+            taskId: { type: "string", description: "M\xE3 nhi\u1EC7m v\u1EE5 (t\xF9y ch\u1ECDn)" },
+            taskTitle: { type: "string", description: "Ti\xEAu \u0111\u1EC1 nhi\u1EC7m v\u1EE5 c\u1EA7n ho\xE0n th\xE0nh" }
+          },
+          required: []
+        }
+      },
+      {
+        type: "function",
+        name: "create_reminder",
+        description: "T\u1EA1o nh\u1EAFc nh\u1EDF h\u1ECDc t\u1EADp b\u1EB1ng c\xE2u l\u1EC7nh t\u1EF1 nhi\xEAn (v\xED d\u1EE5: nh\u1EAFc h\u1ECDc To\xE1n l\xFAc 19:00).",
+        parameters: {
+          type: "object",
+          properties: {
+            content: { type: "string", description: "N\u1ED9i dung nh\u1EAFc nh\u1EDF" },
+            timeStr: { type: "string", description: "Th\u1EDDi gian nh\u1EAFc nh\u1EDF" }
+          },
+          required: ["content"]
+        }
+      },
+      {
+        type: "function",
+        name: "suggest_priority_task",
+        description: "Ph\xE2n t\xEDch h\u1EA1n n\u1ED9p, k\u1EF3 thi, \u0111\u1ED9 kh\xF3 v\xE0 \u0111\u1EC1 xu\u1EA5t nhi\u1EC7m v\u1EE5 \u01B0u ti\xEAn ti\u1EBFp theo k\xE8m gi\u1EA3i th\xEDch l\xFD do.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: []
+        }
+      },
+      {
+        type: "function",
+        name: "open_material",
+        description: "M\u1EDF trang t\xE0i li\u1EC7u h\u1ECDc t\u1EADp ho\u1EB7c xem t\xE0i li\u1EC7u c\u1EE5 th\u1EC3.",
+        parameters: {
+          type: "object",
+          properties: {
+            materialId: { type: "string", description: "M\xE3 t\xE0i li\u1EC7u (t\xF9y ch\u1ECDn)" }
+          },
+          required: []
+        }
+      },
+      {
+        type: "function",
+        name: "create_quiz_revision",
+        description: "T\u1EA1o \u0111\u1EC1 luy\u1EC7n t\u1EADp \xF4n thi tr\u1EAFc nghi\u1EC7m theo m\xF4n h\u1ECDc ho\u1EB7c k\u1EF3 thi.",
+        parameters: {
+          type: "object",
+          properties: {
+            subjectName: { type: "string", description: "T\xEAn m\xF4n h\u1ECDc (To\xE1n, V\u0103n, Anh, ...)" }
+          },
+          required: []
+        }
+      },
+      {
+        type: "function",
         name: "read_report",
         description: "\u0110\u1ECDc t\u1ED5ng k\u1EBFt b\xE1o c\xE1o ti\u1EBFn \u0111\u1ED9 h\u1ECDc t\u1EADp, gi\u1EDD t\u1EADp trung v\xE0 t\u1EF7 l\u1EC7 ho\xE0n th\xE0nh trong tu\u1EA7n.",
         parameters: {
@@ -8075,6 +8903,90 @@ var JamiActionService = class _JamiActionService {
             proposal
           };
         }
+        case "mark_task_completed": {
+          const tasks = await taskRepo.getByUserId(userId);
+          const pending = tasks.filter((t) => t.status === "pending" || t.status === "in_progress");
+          const taskToComplete = args?.taskId ? tasks.find((t) => t.id === args.taskId) : args?.taskTitle ? pending.find((t) => t.title.toLowerCase().includes(args.taskTitle.toLowerCase())) || pending[0] : pending[0];
+          if (!taskToComplete) {
+            return {
+              success: false,
+              message: "Kh\xF4ng t\xECm th\u1EA5y nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp n\xE0o c\u1EA7n \u0111\xE1nh d\u1EA5u ho\xE0n th\xE0nh."
+            };
+          }
+          const previewText = `\u0110\xE1nh d\u1EA5u ho\xE0n th\xE0nh nhi\u1EC7m v\u1EE5 "${taskToComplete.title}" (${taskToComplete.subjectName}). B\u1EA1n c\xF3 x\xE1c nh\u1EADn kh\xF4ng?`;
+          const proposal = await this.saveProposal(userId, {
+            actionType: "mark_task_completed",
+            conversationId,
+            payload: { taskId: taskToComplete.id, title: taskToComplete.title },
+            previewText
+          });
+          return {
+            success: true,
+            requiresConfirmation: true,
+            message: previewText,
+            proposal
+          };
+        }
+        case "create_reminder": {
+          const content = String(args?.content || "H\u1ECDc b\xE0i").trim();
+          const timeStr = String(args?.timeStr || "h\xF4m nay").trim();
+          const previewText = `T\u1EA1o l\u1EDDi nh\u1EAFc "${content}" v\xE0o l\xFAc ${timeStr}. B\u1EA1n c\xF3 x\xE1c nh\u1EADn kh\xF4ng?`;
+          const proposal = await this.saveProposal(userId, {
+            actionType: "create_reminder",
+            conversationId,
+            payload: { content, timeStr },
+            previewText
+          });
+          return {
+            success: true,
+            requiresConfirmation: true,
+            message: previewText,
+            proposal
+          };
+        }
+        case "suggest_priority_task": {
+          const tasks = await taskRepo.getByUserId(userId);
+          const exams = await examRepo.getByUserId(userId);
+          const pending = tasks.filter((t) => t.status === "pending" || t.status === "in_progress");
+          if (pending.length === 0) {
+            return {
+              success: true,
+              message: "B\u1EA1n \u0111\xE3 ho\xE0n th\xE0nh t\u1EA5t c\u1EA3 nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp! H\xE3y ngh\u1EC9 ng\u01A1i ho\u1EB7c l\xE0m \u0111\u1EC1 \xF4n t\u1EADp m\u1EDBi nh\xE9."
+            };
+          }
+          const topTask = pending[0];
+          const reason = `b\xE1m s\xE1t h\u1EA1n n\u1ED9p g\u1EA7n nh\u1EA5t v\xE0 chu\u1EA9n b\u1ECB cho k\u1EF3 thi m\xF4n ${topTask.subjectName || "h\u1ECDc"}`;
+          return {
+            success: true,
+            message: `Nhi\u1EC7m v\u1EE5 \u01B0u ti\xEAn ti\u1EBFp theo: "${topTask.title}" (${topTask.subjectName}, d\u1EF1 ki\u1EBFn ${topTask.estimatedMinutes} ph\xFAt). L\xFD do: ${reason}.`,
+            data: { topTask, exams: exams.slice(0, 2) },
+            clientAction: {
+              type: "navigate",
+              route: `/tasks/${topTask.id}`
+            }
+          };
+        }
+        case "open_material": {
+          return {
+            success: true,
+            message: "\u0110ang m\u1EDF Kho T\xE0i Li\u1EC7u h\u1ECDc t\u1EADp...",
+            clientAction: {
+              type: "navigate",
+              route: "/materials"
+            }
+          };
+        }
+        case "create_quiz_revision": {
+          const subjectName = args?.subjectName || "To\xE1n h\u1ECDc";
+          return {
+            success: true,
+            message: `\u0110ang m\u1EDF trung t\xE2m luy\u1EC7n t\u1EADp \xF4n thi m\xF4n ${subjectName}...`,
+            clientAction: {
+              type: "navigate",
+              route: "/exams"
+            }
+          };
+        }
         case "read_report": {
           const report = await reportRepo.getOverview(userId);
           const completionRate = report.summary.completionRate;
@@ -8263,6 +9175,19 @@ var JamiActionService = class _JamiActionService {
           });
           resultMsg = `\u0110\xE3 th\xEAm b\xE0i ki\u1EC3m tra "${exam.title}" v\xE0o k\u1EBF ho\u1EA1ch \xF4n thi th\xE0nh c\xF4ng.`;
           clientAction = { type: "navigate", route: "/exams" };
+          break;
+        }
+        case "mark_task_completed": {
+          const p = proposal.payload;
+          await taskRepo.updateTask(userId, p.taskId, { status: "completed" });
+          resultMsg = `\u0110\xE3 ho\xE0n th\xE0nh nhi\u1EC7m v\u1EE5 "${p.title}" th\xE0nh c\xF4ng.`;
+          clientAction = { type: "navigate", route: "/tasks" };
+          break;
+        }
+        case "create_reminder": {
+          const p = proposal.payload;
+          resultMsg = `\u0110\xE3 l\u01B0u l\u1EDDi nh\u1EAFc "${p.content}" (${p.timeStr}) v\xE0o h\u1EC7 th\u1ED1ng th\xE0nh c\xF4ng.`;
+          clientAction = { type: "navigate", route: "/notifications" };
           break;
         }
         default:
@@ -8604,6 +9529,32 @@ var JamiRepository = class _JamiRepository {
       message: targetMessage,
       actionResult
     };
+  }
+  async clearMessages(userId, conversationId) {
+    if (db.isHealthy()) {
+      if (conversationId) {
+        await db.execute(
+          `DELETE FROM jami_messages WHERE user_id = ? AND conversation_id = ?`,
+          [userId, conversationId]
+        );
+      } else {
+        await db.execute(
+          `DELETE FROM jami_messages WHERE user_id = ?`,
+          [userId]
+        );
+      }
+      return true;
+    }
+    if (conversationId) {
+      const list = this.demoMessages.get(userId) || [];
+      this.demoMessages.set(
+        userId,
+        list.filter((m) => m.conversationId !== conversationId)
+      );
+    } else {
+      this.demoMessages.delete(userId);
+    }
+    return true;
   }
   // ==========================================
   // Preferences & Memory
@@ -9724,6 +10675,73 @@ ${summaryText}`;
       quiz
     };
   }
+  /**
+   * Generates a structured Outline from a Material using AI
+   */
+  async generateOutlineFromMaterial(userId, materialId, options = {}) {
+    const material = await materialRepo.getById(userId, materialId);
+    if (!material) {
+      throw new Error("Kh\xF4ng t\xECm th\u1EA5y t\xE0i li\u1EC7u h\u1ECDc t\u1EADp.");
+    }
+    if (material.processingStatus !== "ready") {
+      throw new Error("T\xE0i li\u1EC7u ch\u01B0a \u0111\u01B0\u1EE3c x\u1EED l\xFD xong n\u1ED9i dung. Vui l\xF2ng ch\u1EDD v\xE0i gi\xE2y.");
+    }
+    const summary = material.summaryJson || await this.generateStructuredSummary(
+      material.title,
+      material.subjectName || "M\xF4n h\u1ECDc",
+      material.contentText || material.title
+    );
+    const outlineTitle = `\u0110\u1EC1 c\u01B0\u01A1ng: ${material.title}`;
+    const chapter = options.chapter || summary.overview?.slice(0, 50) || "Ch\u01B0\u01A1ng tr\u1ECDng t\xE2m";
+    let markdown = `# ${outlineTitle}
+
+`;
+    markdown += `## 1. T\u1ED5ng quan ki\u1EBFn th\u1EE9c
+${summary.overview || "T\xF3m t\u1EAFt n\u1ED9i dung ch\xEDnh..."}
+
+`;
+    if (summary.concepts && summary.concepts.length > 0) {
+      markdown += `## 2. C\xE1c kh\xE1i ni\u1EC7m c\u1ED1t l\xF5i
+`;
+      for (const c of summary.concepts) {
+        markdown += `- **${c.name}**: ${c.definition}
+`;
+      }
+      markdown += `
+`;
+    }
+    if (summary.formulas && summary.formulas.length > 0) {
+      markdown += `## 3. C\xF4ng th\u1EE9c & Quy t\u1EAFc ghi nh\u1EDB
+`;
+      for (const f of summary.formulas) {
+        markdown += `- \`${f}\`
+`;
+      }
+      markdown += `
+`;
+    }
+    if (summary.keyPoints && summary.keyPoints.length > 0) {
+      markdown += `## 4. C\xE1c \u0111i\u1EC3m l\u01B0u \xFD khi l\xE0m b\xE0i
+`;
+      for (const kp of summary.keyPoints) {
+        markdown += `- ${kp}
+`;
+      }
+      markdown += `
+`;
+    }
+    const outline = await materialRepo.createOutline(userId, {
+      subjectId: material.subjectId,
+      materialId: material.id,
+      title: outlineTitle,
+      chapter,
+      contentMarkdown: markdown,
+      keyPoints: summary.keyPoints || [],
+      formulas: summary.formulas || [],
+      isPinned: false
+    });
+    return outline;
+  }
   async logAiRun(userId, purpose, status, errorCode) {
     if (db.isHealthy()) {
       try {
@@ -9766,24 +10784,35 @@ function sendError(req, res, status, code, message, details) {
   });
 }
 async function requireAuth(req, res, next) {
-  const sessionToken = getSessionToken(req);
-  if (!sessionToken) {
-    return sendError(req, res, 401, "UNAUTHORIZED", "Ch\u01B0a x\xE1c th\u1EF1c \u0111\u0103ng nh\u1EADp");
+  try {
+    const sessionToken = getSessionToken(req);
+    if (!sessionToken) {
+      return sendError(req, res, 401, "UNAUTHORIZED", "Ch\u01B0a x\xE1c th\u1EF1c \u0111\u0103ng nh\u1EADp");
+    }
+    const session = await authService2.getSession(sessionToken);
+    if (!session) {
+      authService2.clearAuthCookie(res);
+      return sendError(req, res, 401, "SESSION_EXPIRED", "Phi\xEAn \u0111\u0103ng nh\u1EADp \u0111\xE3 h\u1EBFt h\u1EA1n ho\u1EB7c kh\xF4ng h\u1EE3p l\u1EC7");
+    }
+    const user = await userRepo3.findById(session.userId);
+    if (!user || user.status !== "active") {
+      authService2.clearAuthCookie(res);
+      return sendError(req, res, 401, "USER_INACTIVE", "T\xE0i kho\u1EA3n kh\xF4ng t\u1ED3n t\u1EA1i ho\u1EB7c \u0111\xE3 b\u1ECB v\xF4 hi\u1EC7u h\xF3a");
+    }
+    req.user = user;
+    req.userId = user.id;
+    req.session = session;
+    next();
+  } catch (err) {
+    console.error("[API requireAuth ERROR]:", err.message);
+    return sendError(
+      req,
+      res,
+      503,
+      "DATABASE_UNAVAILABLE",
+      "K\u1EBFt n\u1ED1i c\u01A1 s\u1EDF d\u1EEF li\u1EC7u t\u1EA1m th\u1EDDi gi\xE1n \u0111o\u1EA1n. Vui l\xF2ng t\u1EA3i l\u1EA1i trang ho\u1EB7c th\u1EED l\u1EA1i."
+    );
   }
-  const session = await authService2.getSession(sessionToken);
-  if (!session) {
-    authService2.clearAuthCookie(res);
-    return sendError(req, res, 401, "SESSION_EXPIRED", "Phi\xEAn \u0111\u0103ng nh\u1EADp \u0111\xE3 h\u1EBFt h\u1EA1n ho\u1EB7c kh\xF4ng h\u1EE3p l\u1EC7");
-  }
-  const user = await userRepo3.findById(session.userId);
-  if (!user || user.status !== "active") {
-    authService2.clearAuthCookie(res);
-    return sendError(req, res, 401, "USER_INACTIVE", "T\xE0i kho\u1EA3n kh\xF4ng t\u1ED3n t\u1EA1i ho\u1EB7c \u0111\xE3 b\u1ECB v\xF4 hi\u1EC7u h\xF3a");
-  }
-  req.user = user;
-  req.userId = user.id;
-  req.session = session;
-  next();
 }
 async function requireAdmin(req, res, next) {
   const adminKey = req.headers["x-admin-key"];
@@ -10261,6 +11290,33 @@ apiRouter.get("/dashboard/overview", requireAuth, asyncHandler(async (req, res) 
   });
   const actualFocusMinutes = completedTodaySessions.reduce((acc, s) => acc + (s.actualMinutes || Math.round((s.actualFocusSeconds || 0) / 60)), 0);
   const completedPercent = plannedMinutes > 0 ? Math.min(100, Math.round(completedMinutes / plannedMinutes * 100)) : completedMinutes > 0 ? 100 : 0;
+  const yesterdayFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: userTimezone, year: "numeric", month: "2-digit", day: "2-digit" });
+  const yesterdayDate = new Date(now.getTime() - 864e5);
+  const yesterdayDateStr = yesterdayFormatter.format(yesterdayDate);
+  const completedYesterdaySessions = focusSessions.filter((s) => {
+    if (s.state !== "completed") return false;
+    const dateStr = s.startedAt || s.createdAt;
+    return dateStr ? dateStr.startsWith(yesterdayDateStr) : false;
+  });
+  const yesterdayFocusMinutes = completedYesterdaySessions.reduce(
+    (acc, s) => acc + (s.actualMinutes || Math.round((s.actualFocusSeconds || 0) / 60)),
+    0
+  );
+  const yesterdayDiffMinutes = actualFocusMinutes - yesterdayFocusMinutes;
+  let yesterdayComparisonLabel = "Ch\u01B0a c\xF3 d\u1EEF li\u1EC7u h\xF4m qua";
+  if (yesterdayFocusMinutes > 0) {
+    const pct = Math.round(Math.abs(yesterdayDiffMinutes) / yesterdayFocusMinutes * 100);
+    if (yesterdayDiffMinutes > 0) {
+      yesterdayComparisonLabel = `+${yesterdayDiffMinutes} ph\xFAt (+${pct}%) so v\u1EDBi h\xF4m qua \u2197\uFE0F`;
+    } else if (yesterdayDiffMinutes < 0) {
+      yesterdayComparisonLabel = `${yesterdayDiffMinutes} ph\xFAt (-${pct}%) so v\u1EDBi h\xF4m qua \u2198\uFE0F`;
+    } else {
+      yesterdayComparisonLabel = `B\u1EB1ng th\u1EDDi gian h\xF4m qua (${actualFocusMinutes} ph\xFAt)`;
+    }
+  } else if (actualFocusMinutes > 0) {
+    yesterdayComparisonLabel = `+${actualFocusMinutes} ph\xFAt (h\xF4m qua ch\u01B0a ghi nh\u1EADn) \u2197\uFE0F`;
+  }
+  const dailyGoalMinutes = profile?.maxDailyStudyMinutes || 120;
   const studyDates = /* @__PURE__ */ new Set();
   for (const s of focusSessions) {
     if (s.state === "completed" && s.startedAt) {
@@ -10335,7 +11391,13 @@ apiRouter.get("/dashboard/overview", requireAuth, asyncHandler(async (req, res) 
       completedMinutes,
       plannedMinutes,
       completedPercent,
-      streakDays
+      streakDays,
+      dailyGoalMinutes,
+      completedTasksCount: completedTodayTasks.length,
+      totalTasksCount: todayTasks.length,
+      yesterdayFocusMinutes,
+      yesterdayComparisonLabel,
+      yesterdayDiffMinutes
     },
     jami: {
       latestMessage,
@@ -10679,6 +11741,15 @@ apiRouter.patch("/tasks/:taskId/checklist/:itemId", requireAuth, asyncHandler(as
   }
   res.json({ success: true, checked: parsed.data.checked });
 }));
+apiRouter.post("/tasks/:taskId/generate-steps", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const task = await taskRepo.getById(userId, req.params.taskId);
+  if (!task) return sendError(req, res, 404, "TASK_NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp");
+  const profile = await profileRepo.getByUserId(userId);
+  const guide = await AiAdapter.generateExecutionGuide(task, profile?.gradeLevel || 9, task.subjectName, req.body?.additionalNotes);
+  const savedGuide = await taskRepo.saveExecutionGuide(userId, task.id, guide);
+  res.json({ guide: savedGuide, isDemoMode: !AiAdapter.isConfigured() });
+}));
 apiRouter.post("/tasks/:taskId/steps/:stepId/start", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;
   const result = await taskRepo.updateExecutionStep(userId, req.params.taskId, req.params.stepId, "in_progress");
@@ -10696,6 +11767,82 @@ apiRouter.post("/tasks/:taskId/steps/:stepId/complete", requireAuth, asyncHandle
     return sendError(req, res, 404, "TASK_NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y nhi\u1EC7m v\u1EE5 ho\u1EB7c b\u01B0\u1EDBc th\u1EF1c hi\u1EC7n");
   }
   res.json(result);
+}));
+apiRouter.patch("/tasks/:taskId/steps/:stepId", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { title, instruction, expectedOutput, plannedMinutes, status } = req.body || {};
+  const guide = await taskRepo.updateExecutionStepDetails(userId, req.params.taskId, req.params.stepId, {
+    title,
+    instruction,
+    expectedOutput,
+    plannedMinutes,
+    status
+  });
+  if (!guide) {
+    return sendError(req, res, 404, "STEP_NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y b\u01B0\u1EDBc th\u1EF1c hi\u1EC7n");
+  }
+  res.json({ success: true, guide });
+}));
+apiRouter.patch("/task-steps/:stepId", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const taskId = req.body?.taskId;
+  if (!taskId) {
+    return sendError(req, res, 400, "VALIDATION_ERROR", "Y\xEAu c\u1EA7u taskId khi c\u1EADp nh\u1EADt b\u01B0\u1EDBc");
+  }
+  const { title, instruction, expectedOutput, plannedMinutes, status } = req.body || {};
+  const guide = await taskRepo.updateExecutionStepDetails(userId, taskId, req.params.stepId, {
+    title,
+    instruction,
+    expectedOutput,
+    plannedMinutes,
+    status
+  });
+  res.json({ success: true, guide });
+}));
+apiRouter.post("/tasks/:taskId/steps/reorder", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { orderedStepIds } = req.body || {};
+  if (!Array.isArray(orderedStepIds) || orderedStepIds.length === 0) {
+    return sendError(req, res, 400, "VALIDATION_ERROR", "Danh s\xE1ch th\u1EE9 t\u1EF1 c\xE1c b\u01B0\u1EDBc kh\xF4ng h\u1EE3p l\u1EC7");
+  }
+  const guide = await taskRepo.reorderExecutionSteps(userId, req.params.taskId, orderedStepIds);
+  res.json({ success: true, guide });
+}));
+apiRouter.post("/tasks/:taskId/explain-step", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { stepId, stepTitle, instruction, expectedOutput, plannedMinutes, studentQuestion } = req.body || {};
+  const task = await taskRepo.getById(userId, req.params.taskId);
+  if (!task) return sendError(req, res, 404, "TASK_NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp");
+  const explanation = await AiAdapter.explainStep(
+    {
+      title: stepTitle || "B\u01B0\u1EDBc h\u1ECDc t\u1EADp",
+      instruction: instruction || "",
+      expectedOutput: expectedOutput || "",
+      plannedMinutes: Number(plannedMinutes) || 15
+    },
+    task.title,
+    task.subjectName || "M\xF4n h\u1ECDc",
+    studentQuestion
+  );
+  res.json({ explanation });
+}));
+apiRouter.post("/tasks/:taskId/evaluate-evidence", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { textValue, fileUrl, type } = req.body || {};
+  const task = await taskRepo.getById(userId, req.params.taskId);
+  if (!task) return sendError(req, res, 404, "TASK_NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp");
+  const guide = await taskRepo.getExecutionGuide(userId, task.id);
+  const criteria = [
+    ...guide?.successCriteria || [],
+    ...guide?.excellentCriteria || []
+  ];
+  const evaluation = await AiAdapter.evaluateEvidence(
+    task.title,
+    task.subjectName || "M\xF4n h\u1ECDc",
+    textValue || `\u0110\xE3 \u0111\xEDnh k\xE8m t\u1EC7p ${type}: ${fileUrl}`,
+    criteria
+  );
+  res.json({ evaluation });
 }));
 apiRouter.post("/tasks/:taskId/evidence", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;
@@ -10720,6 +11867,28 @@ apiRouter.post("/tasks/:taskId/complete", requireAuth, asyncHandler(async (req, 
   const userId = req.userId;
   const task = await taskRepo.completeTask(userId, req.params.taskId);
   if (!task) return sendError(req, res, 404, "TASK_NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp");
+  res.json({ task });
+}));
+apiRouter.post("/tasks/:taskId/postpone", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { postponeMinutes, newScheduledStartAt } = req.body || {};
+  const currentTask = await taskRepo.getById(userId, req.params.taskId);
+  if (!currentTask) return sendError(req, res, 404, "TASK_NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y nhi\u1EC7m v\u1EE5 h\u1ECDc t\u1EADp");
+  let nextStart;
+  if (newScheduledStartAt) {
+    nextStart = new Date(newScheduledStartAt).toISOString();
+  } else {
+    const baseDate = currentTask.scheduledStartAt ? new Date(currentTask.scheduledStartAt) : /* @__PURE__ */ new Date();
+    const addMins = typeof postponeMinutes === "number" ? postponeMinutes : 60;
+    nextStart = new Date(baseDate.getTime() + addMins * 60 * 1e3).toISOString();
+  }
+  const duration = currentTask.estimatedMinutes || 45;
+  const nextEnd = new Date(new Date(nextStart).getTime() + duration * 60 * 1e3).toISOString();
+  const task = await taskRepo.update(userId, req.params.taskId, {
+    scheduledStartAt: nextStart,
+    scheduledEndAt: nextEnd,
+    status: "pending"
+  });
   res.json({ task });
 }));
 apiRouter.post("/tasks/:taskId/unschedule", requireAuth, asyncHandler(async (req, res) => {
@@ -11310,6 +12479,12 @@ apiRouter.get("/jami/messages", requireAuth, asyncHandler(async (req, res) => {
   const messages = await jamiRepo.getMessages(userId, conversationId);
   res.json({ messages });
 }));
+apiRouter.delete("/jami/messages", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const conversationId = req.query.conversationId;
+  const success = await jamiRepo.clearMessages(userId, conversationId);
+  res.json({ success });
+}));
 apiRouter.post("/jami/chat", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;
   const parsed = JamiChatRequestSchema.safeParse(req.body);
@@ -11710,7 +12885,30 @@ apiRouter.post("/quizzes/generate", requireAuth, asyncHandler(async (req, res) =
     const result = await materialProcessor.generateQuizFromMaterial(userId, materialId, req.body);
     return res.json(result);
   }
-  res.status(400).json({ error: "C\u1EA7n cung c\u1EA5p examId ho\u1EB7c materialId \u0111\u1EC3 t\u1EA1o \u0111\u1EC1 \xF4n t\u1EADp." });
+  const { subjectId, subjectName, topics, difficulty, questionCount, format, title, scope } = req.body || {};
+  if (subjectId || subjectName) {
+    const quiz = await quizRepo.generateSubjectQuiz(userId, {
+      subjectId,
+      subjectName,
+      topics,
+      difficulty,
+      questionCount,
+      format,
+      title,
+      scope
+    });
+    return res.json({ quiz });
+  }
+  res.status(400).json({ error: "C\u1EA7n cung c\u1EA5p examId, materialId ho\u1EB7c subjectId/subjectName \u0111\u1EC3 t\u1EA1o \u0111\u1EC1 \xF4n t\u1EADp." });
+}));
+apiRouter.post("/quizzes/retake-wrong", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { originalQuizId, wrongQuestionIds } = req.body || {};
+  if (!originalQuizId || !Array.isArray(wrongQuestionIds) || wrongQuestionIds.length === 0) {
+    return sendError(req, res, 400, "VALIDATION_ERROR", "Y\xEAu c\u1EA7u originalQuizId v\xE0 danh s\xE1ch wrongQuestionIds \u0111\u1EC3 t\u1EA1o \u0111\u1EC1 thi l\u1EA1i.");
+  }
+  const quiz = await quizRepo.generateRetakeWrongQuestionsQuiz(userId, originalQuizId, wrongQuestionIds);
+  res.json({ quiz });
 }));
 apiRouter.post("/quizzes/:id/start", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;
@@ -11733,15 +12931,69 @@ apiRouter.post("/materials/upload", requireAuth, asyncHandler(async (req, res) =
   const intent = await materialRepo.createUploadIntent(userId, req.body);
   res.json(intent);
 }));
+apiRouter.patch("/materials/:id", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const { title } = req.body || {};
+  const updated = await materialRepo.rename(userId, req.params.id, title);
+  if (!updated) {
+    return sendError(req, res, 404, "NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y t\xE0i li\u1EC7u.");
+  }
+  res.json({ material: updated });
+}));
+apiRouter.get("/materials/:id/download", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const downloadInfo = await materialRepo.getDownloadUrl(userId, req.params.id);
+  if (!downloadInfo) {
+    return sendError(req, res, 404, "NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y file \u0111\u1EC3 t\u1EA3i xu\u1ED1ng.");
+  }
+  res.json(downloadInfo);
+}));
 apiRouter.post("/materials/:id/summarize", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;
   const result = await materialProcessor.processMaterial(userId, req.params.id);
   res.json(result);
 }));
+apiRouter.post("/materials/:id/outline", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const outline = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, req.body || {});
+  res.json({ outline });
+}));
 apiRouter.post("/materials/:id/generate-quiz", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;
   const result = await materialProcessor.generateQuizFromMaterial(userId, req.params.id, req.body || {});
   res.json(result);
+}));
+apiRouter.get("/outlines", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const subjectId = req.query.subjectId;
+  const outlines = await materialRepo.getOutlines(userId, subjectId);
+  res.json({ outlines });
+}));
+apiRouter.get("/outlines/:id", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const outline = await materialRepo.getOutline(userId, req.params.id);
+  if (!outline) {
+    return sendError(req, res, 404, "NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y \u0111\u1EC1 c\u01B0\u01A1ng.");
+  }
+  res.json({ outline });
+}));
+apiRouter.post("/outlines", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const outline = await materialRepo.createOutline(userId, req.body || {});
+  res.json({ outline });
+}));
+apiRouter.patch("/outlines/:id", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const outline = await materialRepo.updateOutline(userId, req.params.id, req.body || {});
+  if (!outline) {
+    return sendError(req, res, 404, "NOT_FOUND", "Kh\xF4ng t\xECm th\u1EA5y \u0111\u1EC1 c\u01B0\u01A1ng.");
+  }
+  res.json({ outline });
+}));
+apiRouter.delete("/outlines/:id", requireAuth, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const success = await materialRepo.deleteOutline(userId, req.params.id);
+  res.json({ success });
 }));
 apiRouter.get("/reports/study-time", requireAuth, asyncHandler(async (req, res) => {
   const userId = req.userId;

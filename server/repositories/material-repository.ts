@@ -1,6 +1,7 @@
 import { db } from '../db/mysql';
 import { Material, StructuredMaterialSummary } from '../../shared/types';
 import { storageService, generateMaterialObjectKey, sanitizeFileName } from '../services/storage-service';
+import { SubjectRepository } from './subject-repository';
 import crypto from 'crypto';
 
 export class MaterialRepository {
@@ -85,10 +86,27 @@ export class MaterialRepository {
 
     const type: 'pdf' | 'image' | 'notes' = data.mimeType.startsWith('image/') ? 'image' : 'pdf';
 
+    let resolvedSubjectId = data.subjectId;
+    if (db.isHealthy()) {
+      let subjectExists = false;
+      if (resolvedSubjectId) {
+        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ?', [resolvedSubjectId]);
+        if (rows.length > 0) {
+          subjectExists = true;
+        }
+      }
+      if (!subjectExists) {
+        const userSubjects = await SubjectRepository.getInstance().getByUserId(userId);
+        if (userSubjects && userSubjects.length > 0) {
+          resolvedSubjectId = userSubjects[0].id;
+        }
+      }
+    }
+
     const material: Material = {
       id,
       userId,
-      subjectId: data.subjectId,
+      subjectId: resolvedSubjectId,
       title: data.title.trim(),
       type,
       fileName: sanitizedName,
@@ -143,10 +161,27 @@ export class MaterialRepository {
     const id = 'mat_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const sizeBytes = Buffer.byteLength(data.contentText, 'utf-8');
 
+    let resolvedSubjectId = data.subjectId;
+    if (db.isHealthy()) {
+      let subjectExists = false;
+      if (resolvedSubjectId) {
+        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ?', [resolvedSubjectId]);
+        if (rows.length > 0) {
+          subjectExists = true;
+        }
+      }
+      if (!subjectExists) {
+        const userSubjects = await SubjectRepository.getInstance().getByUserId(userId);
+        if (userSubjects && userSubjects.length > 0) {
+          resolvedSubjectId = userSubjects[0].id;
+        }
+      }
+    }
+
     const material: Material = {
       id,
       userId,
-      subjectId: data.subjectId,
+      subjectId: resolvedSubjectId,
       title: data.title.trim(),
       type: 'notes',
       sizeBytes,
@@ -302,6 +337,181 @@ export class MaterialRepository {
     const list = this.demoMaterials.get(userId) || [];
     const filtered = list.filter((m) => m.id !== materialId);
     this.demoMaterials.set(userId, filtered);
+    return true;
+  }
+
+  public async rename(userId: string, materialId: string, newTitle: string): Promise<Material | null> {
+    const existing = await this.getById(userId, materialId);
+    if (!existing) return null;
+
+    const title = newTitle.trim();
+    if (!title) return existing;
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE learning_materials SET title = ?, updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
+        [title, materialId, userId]
+      );
+    } else {
+      existing.title = title;
+      existing.updatedAt = new Date().toISOString();
+    }
+
+    return { ...existing, title, updatedAt: new Date().toISOString() };
+  }
+
+  public async getDownloadUrl(userId: string, materialId: string): Promise<{ downloadUrl: string; expiresAt: string } | null> {
+    const material = await this.getById(userId, materialId);
+    if (!material || !material.r2ObjectKey) return null;
+
+    return await storageService.getSignedDownloadUrl(material.r2ObjectKey, 3600);
+  }
+
+  // ==========================================
+  // Outlines Subsystem (6.2)
+  // ==========================================
+
+  private demoOutlines: Map<string, any[]> = new Map();
+
+  public async getOutlines(userId: string, subjectId?: string): Promise<any[]> {
+    if (db.isHealthy()) {
+      let sql = `
+        SELECT o.id, o.user_id, o.subject_id, o.material_id, o.title, o.chapter,
+               o.content_markdown, o.key_points_json, o.formulas_json, o.is_pinned,
+               o.created_at, o.updated_at,
+               s.name as subject_name
+        FROM outlines o
+        LEFT JOIN subjects s ON o.subject_id = s.id
+        WHERE o.user_id = ?
+      `;
+      const params: any[] = [userId];
+      if (subjectId) {
+        sql += ` AND o.subject_id = ?`;
+        params.push(subjectId);
+      }
+      sql += ` ORDER BY o.is_pinned DESC, o.updated_at DESC`;
+
+      const rows = await db.query<any>(sql, params);
+      return rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        subjectId: r.subject_id,
+        subjectName: r.subject_name || 'Môn học',
+        materialId: r.material_id || undefined,
+        title: r.title,
+        chapter: r.chapter || undefined,
+        contentMarkdown: r.content_markdown,
+        keyPoints: r.key_points_json ? (typeof r.key_points_json === 'string' ? JSON.parse(r.key_points_json) : r.key_points_json) : [],
+        formulas: r.formulas_json ? (typeof r.formulas_json === 'string' ? JSON.parse(r.formulas_json) : r.formulas_json) : [],
+        isPinned: Boolean(r.is_pinned),
+        createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+        updatedAt: r.updated_at?.toISOString?.() || String(r.updated_at),
+      }));
+    }
+
+    const list = this.demoOutlines.get(userId) || [];
+    if (subjectId) {
+      return list.filter((o) => o.subjectId === subjectId);
+    }
+    return list;
+  }
+
+  public async getOutline(userId: string, outlineId: string): Promise<any | null> {
+    const list = await this.getOutlines(userId);
+    return list.find((o) => o.id === outlineId) || null;
+  }
+
+  public async createOutline(userId: string, data: any): Promise<any> {
+    const id = 'out_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const now = new Date().toISOString();
+
+    const created = {
+      id,
+      userId,
+      subjectId: data.subjectId || 'subj-math',
+      materialId: data.materialId || null,
+      title: data.title || 'Đề cương ôn tập',
+      chapter: data.chapter || '',
+      contentMarkdown: data.contentMarkdown || '# Đề cương ôn tập\n\nNội dung chính...',
+      keyPoints: data.keyPoints || [],
+      formulas: data.formulas || [],
+      isPinned: Boolean(data.isPinned),
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO outlines (id, user_id, subject_id, material_id, title, chapter, content_markdown, key_points_json, formulas_json, is_pinned, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+        [
+          created.id,
+          userId,
+          created.subjectId,
+          created.materialId,
+          created.title,
+          created.chapter,
+          created.contentMarkdown,
+          JSON.stringify(created.keyPoints),
+          JSON.stringify(created.formulas),
+          created.isPinned ? 1 : 0,
+        ]
+      );
+    } else {
+      const list = this.demoOutlines.get(userId) || [];
+      list.unshift(created);
+      this.demoOutlines.set(userId, list);
+    }
+
+    return created;
+  }
+
+  public async updateOutline(userId: string, outlineId: string, data: any): Promise<any | null> {
+    const existing = await this.getOutline(userId, outlineId);
+    if (!existing) return null;
+
+    const updated = {
+      ...existing,
+      ...data,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE outlines
+         SET title = ?, chapter = ?, content_markdown = ?, key_points_json = ?, formulas_json = ?, is_pinned = ?, updated_at = NOW(3)
+         WHERE id = ? AND user_id = ?`,
+        [
+          updated.title,
+          updated.chapter,
+          updated.contentMarkdown,
+          JSON.stringify(updated.keyPoints || []),
+          JSON.stringify(updated.formulas || []),
+          updated.isPinned ? 1 : 0,
+          outlineId,
+          userId,
+        ]
+      );
+    } else {
+      const list = this.demoOutlines.get(userId) || [];
+      const idx = list.findIndex((o) => o.id === outlineId);
+      if (idx !== -1) list[idx] = updated;
+    }
+
+    return updated;
+  }
+
+  public async deleteOutline(userId: string, outlineId: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      const res = await db.execute(
+        `DELETE FROM outlines WHERE id = ? AND user_id = ?`,
+        [outlineId, userId]
+      );
+      return res?.affectedRows > 0;
+    }
+
+    const list = this.demoOutlines.get(userId) || [];
+    this.demoOutlines.set(userId, list.filter((o) => o.id !== outlineId));
     return true;
   }
 

@@ -190,6 +190,66 @@ export class JamiActionService {
       },
       {
         type: 'function',
+        name: 'mark_task_completed',
+        description: 'Đánh dấu hoàn thành một nhiệm vụ học tập của học sinh.',
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string', description: 'Mã nhiệm vụ (tùy chọn)' },
+            taskTitle: { type: 'string', description: 'Tiêu đề nhiệm vụ cần hoàn thành' },
+          },
+          required: [],
+        },
+      },
+      {
+        type: 'function',
+        name: 'create_reminder',
+        description: 'Tạo nhắc nhở học tập bằng câu lệnh tự nhiên (ví dụ: nhắc học Toán lúc 19:00).',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: 'Nội dung nhắc nhở' },
+            timeStr: { type: 'string', description: 'Thời gian nhắc nhở' },
+          },
+          required: ['content'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'suggest_priority_task',
+        description: 'Phân tích hạn nộp, kỳ thi, độ khó và đề xuất nhiệm vụ ưu tiên tiếp theo kèm giải thích lý do.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        type: 'function',
+        name: 'open_material',
+        description: 'Mở trang tài liệu học tập hoặc xem tài liệu cụ thể.',
+        parameters: {
+          type: 'object',
+          properties: {
+            materialId: { type: 'string', description: 'Mã tài liệu (tùy chọn)' },
+          },
+          required: [],
+        },
+      },
+      {
+        type: 'function',
+        name: 'create_quiz_revision',
+        description: 'Tạo đề luyện tập ôn thi trắc nghiệm theo môn học hoặc kỳ thi.',
+        parameters: {
+          type: 'object',
+          properties: {
+            subjectName: { type: 'string', description: 'Tên môn học (Toán, Văn, Anh, ...)' },
+          },
+          required: [],
+        },
+      },
+      {
+        type: 'function',
         name: 'read_report',
         description: 'Đọc tổng kết báo cáo tiến độ học tập, giờ tập trung và tỷ lệ hoàn thành trong tuần.',
         parameters: {
@@ -498,6 +558,107 @@ export class JamiActionService {
           };
         }
 
+        case 'mark_task_completed': {
+          const tasks = await taskRepo.getByUserId(userId);
+          const pending = tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress');
+          const taskToComplete = args?.taskId
+            ? tasks.find((t) => t.id === args.taskId)
+            : args?.taskTitle
+            ? pending.find((t) => t.title.toLowerCase().includes(args.taskTitle.toLowerCase())) || pending[0]
+            : pending[0];
+
+          if (!taskToComplete) {
+            return {
+              success: false,
+              message: 'Không tìm thấy nhiệm vụ học tập nào cần đánh dấu hoàn thành.',
+            };
+          }
+
+          const previewText = `Đánh dấu hoàn thành nhiệm vụ "${taskToComplete.title}" (${taskToComplete.subjectName}). Bạn có xác nhận không?`;
+          const proposal = await this.saveProposal(userId, {
+            actionType: 'mark_task_completed',
+            conversationId,
+            payload: { taskId: taskToComplete.id, title: taskToComplete.title },
+            previewText,
+          });
+
+          return {
+            success: true,
+            requiresConfirmation: true,
+            message: previewText,
+            proposal,
+          };
+        }
+
+        case 'create_reminder': {
+          const content = String(args?.content || 'Học bài').trim();
+          const timeStr = String(args?.timeStr || 'hôm nay').trim();
+          const previewText = `Tạo lời nhắc "${content}" vào lúc ${timeStr}. Bạn có xác nhận không?`;
+
+          const proposal = await this.saveProposal(userId, {
+            actionType: 'create_reminder',
+            conversationId,
+            payload: { content, timeStr },
+            previewText,
+          });
+
+          return {
+            success: true,
+            requiresConfirmation: true,
+            message: previewText,
+            proposal,
+          };
+        }
+
+        case 'suggest_priority_task': {
+          const tasks = await taskRepo.getByUserId(userId);
+          const exams = await examRepo.getByUserId(userId);
+          const pending = tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress');
+
+          if (pending.length === 0) {
+            return {
+              success: true,
+              message: 'Bạn đã hoàn thành tất cả nhiệm vụ học tập! Hãy nghỉ ngơi hoặc làm đề ôn tập mới nhé.',
+            };
+          }
+
+          const topTask = pending[0];
+          const reason = `bám sát hạn nộp gần nhất và chuẩn bị cho kỳ thi môn ${topTask.subjectName || 'học'}`;
+
+          return {
+            success: true,
+            message: `Nhiệm vụ ưu tiên tiếp theo: "${topTask.title}" (${topTask.subjectName}, dự kiến ${topTask.estimatedMinutes} phút). Lý do: ${reason}.`,
+            data: { topTask, exams: exams.slice(0, 2) },
+            clientAction: {
+              type: 'navigate',
+              route: `/tasks/${topTask.id}`,
+            },
+          };
+        }
+
+        case 'open_material': {
+          return {
+            success: true,
+            message: 'Đang mở Kho Tài Liệu học tập...',
+            clientAction: {
+              type: 'navigate',
+              route: '/materials',
+            },
+          };
+        }
+
+        case 'create_quiz_revision': {
+          const subjectName = args?.subjectName || 'Toán học';
+          return {
+            success: true,
+            message: `Đang mở trung tâm luyện tập ôn thi môn ${subjectName}...`,
+            clientAction: {
+              type: 'navigate',
+              route: '/exams',
+            },
+          };
+        }
+
         case 'read_report': {
           const report = await reportRepo.getOverview(userId);
           const completionRate = report.summary.completionRate;
@@ -717,6 +878,21 @@ export class JamiActionService {
           });
           resultMsg = `Đã thêm bài kiểm tra "${exam.title}" vào kế hoạch ôn thi thành công.`;
           clientAction = { type: 'navigate', route: '/exams' };
+          break;
+        }
+
+        case 'mark_task_completed': {
+          const p = proposal.payload;
+          await taskRepo.updateTask(userId, p.taskId, { status: 'completed' });
+          resultMsg = `Đã hoàn thành nhiệm vụ "${p.title}" thành công.`;
+          clientAction = { type: 'navigate', route: '/tasks' };
+          break;
+        }
+
+        case 'create_reminder': {
+          const p = proposal.payload;
+          resultMsg = `Đã lưu lời nhắc "${p.content}" (${p.timeStr}) vào hệ thống thành công.`;
+          clientAction = { type: 'navigate', route: '/notifications' };
           break;
         }
 

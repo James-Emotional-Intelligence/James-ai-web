@@ -2,6 +2,28 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { NotificationItem, NotificationPreferences } from '../../shared/types';
 import { api } from '../lib/api-client';
 
+export function playJamiNotificationSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    const now = ctx.currentTime;
+    osc.frequency.setValueAtTime(587.33, now); // D5
+    osc.frequency.setValueAtTime(880, now + 0.1); // A5
+    osc.frequency.setValueAtTime(1174.66, now + 0.2); // D6
+
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.45);
+  } catch {}
+}
+
 interface NotificationContextType {
   notifications: NotificationItem[];
   unreadCount: number;
@@ -17,6 +39,7 @@ interface NotificationContextType {
   markAllAsRead: () => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
   updatePreferences: (updates: Partial<NotificationPreferences>) => Promise<boolean>;
+  playNotificationSound: () => void;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -214,6 +237,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         markAllAsRead,
         deleteNotification,
         updatePreferences,
+        playNotificationSound: playJamiNotificationSound,
       }}
     >
       {children}
@@ -240,6 +264,7 @@ export const useNotifications = () => {
       markAllAsRead: async () => {},
       deleteNotification: async () => {},
       updatePreferences: async () => false,
+      playNotificationSound: () => {},
     };
   }
   return context;

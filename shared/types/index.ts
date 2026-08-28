@@ -63,6 +63,7 @@ export interface TimetableEntry {
   subjectName?: string;
   subjectColor?: string;
   title: string;
+  teacher?: string;
   dayOfWeek: number; // 1 = Monday, ..., 7 = Sunday
   period?: number;
   startLocalTime: string; // "07:30"
@@ -76,13 +77,16 @@ export interface TimetableEntry {
 export interface BusyEvent {
   id: string;
   userId: string;
-  type: 'extra_class' | 'meal' | 'sleep' | 'commute' | 'personal';
+  type: 'extra_class' | 'club' | 'personal' | 'meal' | 'sleep' | 'commute';
   title: string;
   startsAt: string; // ISO String
   endsAt: string;   // ISO String
   recurrenceRule?: string;
   timezone: string;
   isFixed: boolean;
+  location?: string;
+  commuteBeforeMinutes?: number;
+  commuteAfterMinutes?: number;
   subjectId?: string;
   subjectName?: string;
   source?: string;
@@ -127,6 +131,8 @@ export interface Exam {
   title: string;
   examAt: string; // ISO String
   importance: 'low' | 'medium' | 'high' | 'critical';
+  targetScore?: number;
+  examFormat?: 'multiple_choice' | 'essay' | 'combined';
   scopeText: string;
   topics: ExamTopic[];
   milestones?: ExamMilestone[];
@@ -270,6 +276,12 @@ export interface TodayDashboardOverview {
     plannedMinutes: number;
     completedPercent: number;
     streakDays: number;
+    dailyGoalMinutes?: number;
+    completedTasksCount?: number;
+    totalTasksCount?: number;
+    yesterdayFocusMinutes?: number;
+    yesterdayComparisonLabel?: string;
+    yesterdayDiffMinutes?: number;
   };
   jami: {
     latestMessage: string;
@@ -370,6 +382,33 @@ export interface Material {
   summaryJson?: StructuredMaterialSummary;
   contentText?: string;
   errorMessage?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface OutlineVersion {
+  id: string;
+  outlineId: string;
+  versionNumber: number;
+  title: string;
+  contentMarkdown: string;
+  changelog?: string;
+  createdAt: string;
+}
+
+export interface Outline {
+  id: string;
+  userId: string;
+  subjectId: string;
+  subjectName?: string;
+  materialId?: string;
+  title: string;
+  chapter?: string;
+  contentMarkdown: string;
+  keyPoints?: string[];
+  formulas?: string[];
+  isPinned?: boolean;
+  versions?: OutlineVersion[];
   createdAt: string;
   updatedAt?: string;
 }
@@ -596,6 +635,35 @@ export interface ReportRecommendation {
   generatedByAi?: boolean;
 }
 
+export interface SubjectPerformanceInsight {
+  subjectId: string;
+  subjectName: string;
+  color?: string;
+  status: 'improving' | 'needs_attention' | 'insufficient_data';
+  headline: string;
+  explanation: string;
+  avgScore: number | null;
+  completionRate: number;
+}
+
+export interface QuizScoreProgressionPoint {
+  attemptId: string;
+  quizTitle: string;
+  subjectName: string;
+  score: number;
+  maxScore: number;
+  submittedAt: string;
+}
+
+export interface CommonMistakeItem {
+  questionId?: string;
+  topic: string;
+  prompt: string;
+  wrongCount: number;
+  accuracyRate: number;
+  explanation: string;
+}
+
 export interface ReportOverviewResponse {
   period: {
     type: 'week' | 'month' | 'custom';
@@ -615,6 +683,8 @@ export interface ReportOverviewResponse {
     onTimeRate: number | null;
     averageQuizScore: number | null;
     totalQuizAttempts: number;
+    totalCompletedSessions?: number;
+    avgSessionMinutes?: number;
     streakDays: number;
     focusQualityScore: number;
   };
@@ -623,6 +693,10 @@ export interface ReportOverviewResponse {
   topicMastery: TopicMasteryStat[];
   weakTopics: TopicMasteryStat[];
   strongTopics: TopicMasteryStat[];
+  subjectInsights?: SubjectPerformanceInsight[];
+  scoreProgression?: QuizScoreProgressionPoint[];
+  commonMistakes?: CommonMistakeItem[];
+  nextStudyPlan?: string[];
   comparison: PeriodComparison;
   recommendations: ReportRecommendation[];
   hasData: boolean;

@@ -18,6 +18,16 @@ import {
   Paperclip,
   FileText,
   X,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Award,
+  ListTodo,
+  BookOpen,
+  HelpCircle,
+  Target,
+  GraduationCap,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
@@ -36,6 +46,13 @@ export const JamiAssistantPage: React.FC = () => {
   const [isSending, setIsSending] = useState(false);
   const [confirmingMsgId, setConfirmingMsgId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Voice recognition & Wake-word states
+  const [isListening, setIsListening] = useState(false);
+  const [voiceStatusText, setVoiceStatusText] = useState<string | null>(null);
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const speechRecognitionRef = useRef<any>(null);
+  const silenceTimerRef = useRef<any>(null);
 
   // File / Material attachment state
   const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
@@ -60,6 +77,127 @@ export const JamiAssistantPage: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isSending]);
+
+  // 4.4 Voice Recognition Setup (Speech to Text & Wake Word "Jami ơi")
+  const stopListening = useCallback(() => {
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch (e) {}
+      speechRecognitionRef.current = null;
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    setIsListening(false);
+    setVoiceStatusText(null);
+  }, []);
+
+  const speakText = (text: string, msgId?: string) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+
+    if (msgId && speakingMsgId === msgId) {
+      setSpeakingMsgId(null);
+      return;
+    }
+
+    const cleanText = text.replace(/[*_#`[\]()]/g, '');
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = 'vi-VN';
+    utterance.rate = 1.0;
+
+    utterance.onstart = () => {
+      if (msgId) setSpeakingMsgId(msgId);
+    };
+    utterance.onend = () => {
+      setSpeakingMsgId(null);
+    };
+    utterance.onerror = () => {
+      setSpeakingMsgId(null);
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const handleToggleListening = () => {
+    if (isListening) {
+      stopListening();
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Trình duyệt của bạn chưa hỗ trợ nhận diện giọng nói (Web Speech API). Vui lòng thử trên Chrome hoặc Edge.');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'vi-VN';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      speechRecognitionRef.current = recognition;
+
+      setIsListening(true);
+      setVoiceStatusText('Đang lắng nghe câu lệnh hoặc gọi "Jami ơi"...');
+
+      const resetSilenceTimer = () => {
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          setVoiceStatusText('Tự động dừng sau một khoảng thời gian không có giọng nói.');
+          stopListening();
+        }, 12000);
+      };
+
+      resetSilenceTimer();
+
+      recognition.onresult = (event: any) => {
+        resetSilenceTimer();
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+        }
+
+        const clean = transcript.trim();
+        if (clean) {
+          setVoiceStatusText(`Jami nghe được: "${clean}"`);
+
+          // Detect wake word
+          if (clean.toLowerCase().includes('jami ơi') || clean.toLowerCase().includes('jami oi')) {
+            speakText('Jami đang nghe đây!');
+            setVoiceStatusText('Jami đang nghe đây! Hãy nói câu lệnh tiếp theo...');
+          }
+
+          // If final result, send as chat command
+          const isFinal = event.results[event.results.length - 1].isFinal;
+          if (isFinal && clean.length > 2) {
+            setInputMessage(clean);
+            stopListening();
+            handleSendMessage(clean);
+          }
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition error:', event.error);
+        if (event.error === 'not-allowed') {
+          alert('Vui lòng cấp quyền truy cập micro cho trình duyệt để sử dụng điều khiển giọng nói.');
+        }
+        stopListening();
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.start();
+    } catch (err: any) {
+      alert(err.message || 'Không thể khởi động nhận dạng giọng nói.');
+      stopListening();
+    }
+  };
 
   // Load conversations on mount
   const fetchConversations = useCallback(async () => {
@@ -113,6 +251,17 @@ export const JamiAssistantPage: React.FC = () => {
       setMessages([]);
     } catch (err: any) {
       alert(err.message || 'Không thể tạo cuộc trò chuyện mới.');
+    }
+  };
+
+  const handleClearHistory = async () => {
+    if (!activeConvId) return;
+    if (!window.confirm('Em có chắc chắn muốn xóa toàn bộ lịch sử tin nhắn trong cuộc trò chuyện này?')) return;
+    try {
+      await api.clearJamiMessages(activeConvId);
+      setMessages([]);
+    } catch (err: any) {
+      alert(err.message || 'Không thể xóa lịch sử tin nhắn.');
     }
   };
 
@@ -181,6 +330,11 @@ export const JamiAssistantPage: React.FC = () => {
         return [...filtered, res.userMessage, res.replyMessage];
       });
 
+      // Optional TTS speak back
+      if (res.replyMessage?.text) {
+        speakText(res.replyMessage.text, res.replyMessage.id);
+      }
+
       if (res.clientAction?.route) {
         // If Jami suggested client navigation
         setTimeout(() => {
@@ -207,6 +361,9 @@ export const JamiAssistantPage: React.FC = () => {
 
       if (decision === 'confirm') {
         confetti({ particleCount: 70, spread: 60 });
+        speakText('Đã thực hiện và cập nhật thành công vào hệ thống!');
+      } else {
+        speakText('Đã hủy thao tác theo yêu cầu của bạn.');
       }
 
       // If action had follow-up messages, refetch
@@ -246,13 +403,24 @@ export const JamiAssistantPage: React.FC = () => {
               <Bot className="w-5 h-5 text-[#22C55E]" />
               <h2 className="text-sm font-black text-[#F3FAF5]">Trợ Lý Jami AI</h2>
             </div>
-            <button
-              onClick={handleCreateConversation}
-              className="p-1.5 rounded-xl bg-[#14532D] text-[#86EFAC] hover:bg-[#16A34A] hover:text-[#050806] transition-all cursor-pointer"
-              title="Cuộc trò chuyện mới"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleClearHistory}
+                className="p-1.5 rounded-xl bg-[#101A13] text-[#A9B8AE] hover:text-rose-400 border border-[rgba(34,197,94,0.2)] transition-all cursor-pointer"
+                title="Xóa lịch sử tin nhắn trong cuộc trò chuyện này"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateConversation}
+                className="p-1.5 rounded-xl bg-[#14532D] text-[#86EFAC] hover:bg-[#16A34A] hover:text-[#050806] transition-all cursor-pointer"
+                title="Cuộc trò chuyện mới"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div className="text-[11px] font-bold text-[#A9B8AE] uppercase tracking-wider">
@@ -327,8 +495,28 @@ export const JamiAssistantPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Quick feature shortcuts */}
+        {/* Quick feature shortcuts (4.4 Supported Actions) */}
         <div className="pt-3 border-t border-[rgba(34,197,94,0.18)] space-y-1.5">
+          <button
+            onClick={() => handleSendMessage('Hôm nay em có những lịch học và nhiệm vụ nào?')}
+            className="w-full text-left p-2 rounded-xl text-xs text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#101A13] transition-all flex items-center justify-between cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Calendar className="w-3.5 h-3.5 text-[#22C55E]" />
+              <span>Xem lịch học hôm nay</span>
+            </span>
+            <ArrowRight className="w-3 h-3" />
+          </button>
+          <button
+            onClick={() => handleSendMessage('Đề xuất việc nên làm tiếp theo (Gợi ý ưu tiên)?')}
+            className="w-full text-left p-2 rounded-xl text-xs text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#101A13] transition-all flex items-center justify-between cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Target className="w-3.5 h-3.5 text-amber-400" />
+              <span>Gợi ý việc ưu tiên</span>
+            </span>
+            <ArrowRight className="w-3 h-3" />
+          </button>
           <button
             onClick={() => navigate('/focus')}
             className="w-full text-left p-2 rounded-xl text-xs text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#101A13] transition-all flex items-center justify-between cursor-pointer"
@@ -340,12 +528,12 @@ export const JamiAssistantPage: React.FC = () => {
             <ArrowRight className="w-3 h-3" />
           </button>
           <button
-            onClick={() => navigate('/timetable')}
+            onClick={() => navigate('/materials')}
             className="w-full text-left p-2 rounded-xl text-xs text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#101A13] transition-all flex items-center justify-between cursor-pointer"
           >
             <span className="flex items-center gap-2">
-              <Calendar className="w-3.5 h-3.5 text-[#22C55E]" />
-              <span>Thời khóa biểu</span>
+              <BookOpen className="w-3.5 h-3.5 text-[#22C55E]" />
+              <span>Mở Kho Tài Liệu</span>
             </span>
             <ArrowRight className="w-3 h-3" />
           </button>
@@ -354,7 +542,7 @@ export const JamiAssistantPage: React.FC = () => {
 
       {/* Main Chat Area */}
       <div className="flex-1 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex flex-col justify-between overflow-hidden">
-        {/* Chat Messages Stream */}
+        {/* Messages Scroll Area */}
         <div className="flex-1 overflow-y-auto space-y-4 pr-2">
           {isLoading ? (
             <div className="h-full flex items-center justify-center text-xs text-[#A9B8AE] gap-2">
@@ -362,16 +550,19 @@ export const JamiAssistantPage: React.FC = () => {
               <span>Đang kết nối với Jami...</span>
             </div>
           ) : messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
+            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
               <div className="w-14 h-14 rounded-3xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center shadow-lg shadow-[#16A34A]/25 border border-[#22C55E]/30">
                 <Bot className="w-8 h-8" />
               </div>
-              <h3 className="text-base font-bold text-[#F3FAF5]">Chào em! Jami có thể giúp gì cho việc học hôm nay?</h3>
+              <h3 className="text-base font-bold text-[#F3FAF5]">
+                Chào em! Jami có thể giúp gì cho việc học hôm nay?
+              </h3>
               <p className="text-xs text-[#A9B8AE] max-w-md">
-                Em có thể hỏi lịch học hôm nay, yêu cầu dời bài tập bận, giải thích công thức toán hoặc tạo đề kiểm tra ôn thi bất cứ lúc nào.
+                Em có thể hỏi lịch học hôm nay, nhờ nhắc lịch, yêu cầu gợi ý việc ưu tiên, giải thích bài tập từng bước hoặc điều khiển bằng giọng nói ("Jami ơi").
               </p>
 
-              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              {/* Categorized Prompt Chips */}
+              <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg pt-2">
                 <button
                   onClick={() => handleSendMessage('Hôm nay em có những lịch học và nhiệm vụ nào?')}
                   className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
@@ -379,22 +570,35 @@ export const JamiAssistantPage: React.FC = () => {
                   📅 Hôm nay học gì?
                 </button>
                 <button
-                  onClick={() => handleSendMessage('Tối nay em bận đột xuất, hãy dời bài tập sang giờ trống khác giúp em.')}
-                  className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
+                  onClick={() => handleSendMessage('Đề xuất việc nên làm tiếp theo (Gợi ý ưu tiên)?')}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-amber-800/40 text-amber-300 hover:bg-amber-950/40 transition-all cursor-pointer"
                 >
-                  ⚡ Dời lịch bài tập bận
+                  ⚡ Gợi ý việc ưu tiên
                 </button>
                 <button
-                  onClick={() => handleSendMessage('Gợi ý cách ôn tập cho bài kiểm tra sắp tới.')}
+                  onClick={() => handleSendMessage('Jami ơi, nhắc mình học Toán lúc 7 giờ tối')}
                   className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
                 >
-                  🎯 Lập kế hoạch ôn thi
+                  ⏰ Nhắc học Toán lúc 19:00
+                </button>
+                <button
+                  onClick={() => handleSendMessage('Tóm tắt bài học và tạo một ví dụ tương tự')}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
+                >
+                  📝 Tóm tắt & Ví dụ tương tự
+                </button>
+                <button
+                  onClick={() => handleSendMessage('Bắt đầu hẹn giờ tập trung 25 phút')}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold bg-[#101A13] border border-[rgba(34,197,94,0.2)] text-[#86EFAC] hover:bg-[#14532D] transition-all cursor-pointer"
+                >
+                  ⏱️ Hẹn giờ 25 phút
                 </button>
               </div>
             </div>
           ) : (
             messages.map((m) => {
               const isUser = m.sender === 'user';
+              const isSpeakingThis = speakingMsgId === m.id;
 
               return (
                 <div
@@ -417,19 +621,23 @@ export const JamiAssistantPage: React.FC = () => {
                     >
                       <div className="whitespace-pre-line">{m.text}</div>
 
-                      {/* Safe Mutation Preview & Confirmation Card */}
+                      {/* Action Proposal Confirmation Box (4.2 & 4.4) */}
                       {m.requiresConfirmation && (
                         <div className="mt-3 p-3.5 rounded-xl bg-[#050806] border border-[#22C55E]/40 space-y-2.5">
                           <div className="flex items-center gap-2 text-xs font-extrabold text-[#86EFAC]">
                             <Sparkles className="w-4 h-4 text-[#22C55E]" />
                             <span>Đề xuất hành động cần xác nhận:</span>
                           </div>
-
                           <div className="text-xs text-[#A9B8AE] bg-[#101A13] p-2.5 rounded-lg border border-[rgba(34,197,94,0.15)]">
                             {m.confirmationSummary || 'Thực hiện cập nhật dữ liệu học tập theo yêu cầu.'}
                           </div>
 
-                          {!m.isConfirmed ? (
+                          {m.isConfirmed ? (
+                            <div className="flex items-center gap-1.5 text-xs text-[#86EFAC] font-bold pt-1">
+                              <CheckCircle2 className="w-4 h-4 text-[#22C55E]" />
+                              <span>Đã thực hiện và cập nhật vào hệ thống.</span>
+                            </div>
+                          ) : (
                             <div className="flex items-center justify-end gap-2 pt-1">
                               <button
                                 onClick={() => handleConfirmAction(m, 'reject')}
@@ -445,28 +653,25 @@ export const JamiAssistantPage: React.FC = () => {
                                 className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer disabled:opacity-50"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>{confirmingMsgId === m.id ? 'Đang thực hiện...' : 'Xác nhận thực hiện'}</span>
+                                <span>
+                                  {confirmingMsgId === m.id ? 'Đang thực hiện...' : 'Xác nhận thực hiện'}
+                                </span>
                               </button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 text-xs text-[#86EFAC] font-bold pt-1">
-                              <CheckCircle2 className="w-4 h-4 text-[#22C55E]" />
-                              <span>Đã thực hiện và cập nhật vào hệ thống.</span>
                             </div>
                           )}
                         </div>
                       )}
                     </div>
 
-                    {/* Suggested Action Pills */}
+                    {/* Suggested follow-up prompt chips */}
                     {!isUser && m.suggestedActions && Array.isArray(m.suggestedActions) && m.suggestedActions.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                        {m.suggestedActions.map((action: any, actIdx: number) => {
-                          const label = typeof action === 'string' ? action : action.label;
+                        {m.suggestedActions.map((act, aIdx) => {
+                          const label = typeof act === 'string' ? act : act.label;
                           return (
                             <button
-                              key={actIdx}
-                              onClick={() => handleActionClick(action)}
+                              key={aIdx}
+                              onClick={() => handleActionClick(act)}
                               className="px-3 py-1 rounded-full text-[11px] font-bold bg-[#050806] hover:bg-[#14532D] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] transition-all cursor-pointer"
                             >
                               {label}
@@ -476,8 +681,20 @@ export const JamiAssistantPage: React.FC = () => {
                       </div>
                     )}
 
-                    <div className="text-[10px] text-[#A9B8AE]/60 px-1">
-                      {new Date(m.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+                    {/* Message footer: Time & TTS Speak button */}
+                    <div className="flex items-center justify-between text-[10px] text-[#A9B8AE]/60 px-1">
+                      <span>{new Date(m.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+                      {!isUser && (
+                        <button
+                          type="button"
+                          onClick={() => speakText(m.text, m.id)}
+                          className="flex items-center gap-1 hover:text-[#86EFAC] cursor-pointer"
+                          title={isSpeakingThis ? 'Dừng đọc' : 'Đọc bằng giọng nói'}
+                        >
+                          {isSpeakingThis ? <VolumeX className="w-3.5 h-3.5 text-[#22C55E]" /> : <Volume2 className="w-3.5 h-3.5" />}
+                          <span>{isSpeakingThis ? 'Đang đọc...' : 'Nghe đọc'}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -485,20 +702,27 @@ export const JamiAssistantPage: React.FC = () => {
             })
           )}
 
-          {isSending && (
-            <div className="flex items-start gap-3 justify-start">
-              <div className="w-8 h-8 rounded-xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center text-xs font-black shrink-0 border border-[#22C55E]/30 mt-1">
-                <Bot className="w-4 h-4" />
-              </div>
-              <div className="p-3.5 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-xs text-[#A9B8AE] flex items-center gap-2">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#22C55E]" />
-                <span>Jami đang suy nghĩ và tra cứu dữ liệu...</span>
-              </div>
-            </div>
-          )}
-
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Live Voice Status Indicator (4.4) */}
+        {voiceStatusText && (
+          <div className="p-2.5 my-1.5 bg-[#14532D]/40 border border-[#22C55E]/40 rounded-xl text-xs text-[#86EFAC] flex items-center justify-between animate-pulse">
+            <div className="flex items-center gap-2">
+              <Mic className="w-4 h-4 text-[#22C55E]" />
+              <span>{voiceStatusText}</span>
+            </div>
+            {isListening && (
+              <button
+                type="button"
+                onClick={stopListening}
+                className="text-[11px] font-bold underline text-rose-300 hover:text-rose-200 cursor-pointer"
+              >
+                Dừng nghe
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Error banner */}
         {error && (
@@ -539,7 +763,7 @@ export const JamiAssistantPage: React.FC = () => {
           </div>
         )}
 
-        {/* Input Bar */}
+        {/* Input Bar with Mic Control */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -556,12 +780,26 @@ export const JamiAssistantPage: React.FC = () => {
             <Paperclip className="w-4 h-4 text-[#22C55E]" />
           </button>
 
+          {/* Microphone button (4.4) */}
+          <button
+            type="button"
+            onClick={handleToggleListening}
+            className={`p-3 sm:p-3.5 rounded-2xl transition-all cursor-pointer shrink-0 font-bold border ${
+              isListening
+                ? 'bg-rose-600 text-[#F3FAF5] border-rose-500 animate-bounce'
+                : 'bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border-[rgba(34,197,94,0.25)]'
+            }`}
+            title={isListening ? 'Bấm để dừng ghi âm' : 'Bật micro nói lệnh ("Jami ơi")'}
+          >
+            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-[#22C55E]" />}
+          </button>
+
           <input
             type="text"
             placeholder={
               attachedMaterial
                 ? `Nhập câu hỏi về "${attachedMaterial.title}"...`
-                : "Nhắn tin với Jami (ví dụ: 'Hôm nay học gì?', 'Giải bài tập Toán'...)"
+                : "Nhắn tin hoặc bật micro nói 'Jami ơi'..."
             }
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}

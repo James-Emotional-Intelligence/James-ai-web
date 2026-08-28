@@ -158,6 +158,7 @@ export const TimetableEntryInputSchema = z
     timetableId: z.string().optional(),
     subjectId: z.string().nullable().optional(),
     title: z.string().trim().min(1, { message: 'Tiêu đề tiết học không được để trống' }).max(150),
+    teacher: z.string().trim().max(100).optional().or(z.literal('')),
     dayOfWeek: z.coerce.number().int().min(1, { message: 'Thứ trong tuần từ 1 (Thứ 2) đến 7 (Chủ Nhật)' }).max(7),
     startLocalTime: z.string().regex(TimeStringRegex, { message: 'Giờ bắt đầu phải có định dạng HH:mm (00:00 - 23:59)' }),
     endLocalTime: z.string().regex(TimeStringRegex, { message: 'Giờ kết thúc phải có định dạng HH:mm (00:00 - 23:59)' }),
@@ -182,12 +183,15 @@ export const SchoolTimetableInputSchema = z.object({
 export const BusyEventInputSchema = z
   .object({
     title: z.string().trim().min(1, { message: 'Tiêu đề sự kiện/lịch bận không được để trống' }).max(150),
-    type: z.enum(['extra_class', 'meal', 'sleep', 'commute', 'personal']).default('personal'),
+    type: z.enum(['extra_class', 'club', 'personal', 'meal', 'sleep', 'commute']).default('personal'),
     startsAt: z.string().datetime({ message: 'Thời gian bắt đầu phải là chuẩn ISO 8601 hợp lệ' }),
     endsAt: z.string().datetime({ message: 'Thời gian kết thúc phải là chuẩn ISO 8601 hợp lệ' }),
     recurrenceRule: z.string().max(100).optional().nullable(),
     timezone: z.string().default('Asia/Ho_Chi_Minh'),
     isFixed: z.boolean().default(true),
+    location: z.string().trim().max(150).optional().nullable().or(z.literal('')),
+    commuteBeforeMinutes: z.coerce.number().int().min(0).max(180).default(0),
+    commuteAfterMinutes: z.coerce.number().int().min(0).max(180).default(0),
     subjectId: z.string().optional().nullable(),
     source: z.string().default('user'),
   })

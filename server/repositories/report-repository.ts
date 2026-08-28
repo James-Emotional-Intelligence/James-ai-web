@@ -451,6 +451,82 @@ export class ReportRepository {
       const weakTopics = topicMastery.filter((t) => t.status === 'needs_review');
       const strongTopics = topicMastery.filter((t) => t.status === 'mastered');
 
+      // 8. Subject Insights (Môn mạnh & yếu - 7.2)
+      const subjectInsights = subjectBreakdown.map((sb) => {
+        const hasEnoughData = sb.quizCount >= 1 || sb.taskCount >= 2;
+        if (!hasEnoughData) {
+          return {
+            subjectId: sb.subjectId,
+            subjectName: sb.subjectName,
+            color: sb.color,
+            status: 'insufficient_data' as const,
+            headline: 'Cần tích lũy thêm dữ liệu',
+            explanation: `Chưa có đủ số lượng bài tập và kiểm tra (${sb.taskCount} nhiệm vụ, ${sb.quizCount} bài test) để kết luận chính xác về năng lực môn này.`,
+            avgScore: sb.avgQuizScore,
+            completionRate: sb.completionPercent,
+          };
+        }
+
+        if ((sb.avgQuizScore !== null && sb.avgQuizScore >= 7.5) || sb.completionPercent >= 80) {
+          return {
+            subjectId: sb.subjectId,
+            subjectName: sb.subjectName,
+            color: sb.color,
+            status: 'improving' as const,
+            headline: 'Môn học đang tiến bộ vững chắc',
+            explanation: `Dựa trên ${sb.taskCount} nhiệm vụ học tập (hoàn thành ${sb.completedTaskCount}/${sb.taskCount}) và điểm kiểm tra đạt TB ${sb.avgQuizScore ?? 'Tốt'}/10.`,
+            avgScore: sb.avgQuizScore,
+            completionRate: sb.completionPercent,
+          };
+        }
+
+        return {
+          subjectId: sb.subjectId,
+          subjectName: sb.subjectName,
+          color: sb.color,
+          status: 'needs_attention' as const,
+          headline: 'Môn học cần cải thiện & ôn tập thêm',
+          explanation: `Tỷ lệ hoàn thành nhiệm vụ đạt ${sb.completionPercent}% và điểm trung bình ${sb.avgQuizScore !== null ? `${sb.avgQuizScore}/10` : 'chưa cao'}. Khuyến nghị tăng thời lượng tập trung.`,
+          avgScore: sb.avgQuizScore,
+          completionRate: sb.completionPercent,
+        };
+      });
+
+      // 9. Score Progression Query (7.3)
+      let scoreProgression: any[] = [];
+      try {
+        const rows = await db.query<any>(
+          `SELECT qa.id as attempt_id, qz.title as quiz_title, s.name as subject_name,
+                  qa.score, qa.max_score, qa.submitted_at
+           FROM quiz_attempts qa
+           JOIN quizzes qz ON qa.quiz_id = qz.id
+           LEFT JOIN subjects s ON qz.subject_id = s.id
+           WHERE qa.user_id = ? AND qa.status = 'submitted'
+           ORDER BY qa.submitted_at ASC
+           LIMIT 15`,
+          [userId]
+        );
+        scoreProgression = rows.map((r) => ({
+          attemptId: r.attempt_id,
+          quizTitle: r.quiz_title || 'Đề luyện tập',
+          subjectName: r.subject_name || 'Môn học',
+          score: Number(r.score) || 0,
+          maxScore: Number(r.max_score) || 10,
+          submittedAt: r.submitted_at ? (r.submitted_at.toISOString?.() || String(r.submitted_at)) : new Date().toISOString(),
+        }));
+      } catch {}
+
+      // 10. Next Study Action Plan (7.3)
+      const nextStudyPlan: string[] = [];
+      if (weakTopics.length > 0) {
+        nextStudyPlan.push(`Dành 30 phút ôn lại chủ đề "${weakTopics[0].topicKey}" (${weakTopics[0].subjectName}) bằng cách tạo đề luyện tập 5 câu.`);
+      }
+      if (subjectInsights.some((s) => s.status === 'needs_attention')) {
+        const target = subjectInsights.find((s) => s.status === 'needs_attention')!;
+        nextStudyPlan.push(`Ưu tiên hoàn thành các bài tập tồn đọng của môn ${target.subjectName} vào khung giờ học tối.`);
+      }
+      nextStudyPlan.push('Duy trì tối thiểu 2 phiên Pomodoro 25 phút mỗi ngày để giữ vững phong độ tập trung.');
+
       // Comparison to previous period
       const prevActual = Number(prevFocusAgg?.actual_focus_minutes) || 0;
       const prevCompletedTasks = Number(prevTaskAgg?.completed_tasks) || 0;
@@ -483,6 +559,7 @@ export class ReportRepository {
       });
 
       const hasData = actualFocusMinutes > 0 || totalTasks > 0 || totalQuizAttempts > 0;
+      const avgSessionMinutes = completedSessions > 0 ? Math.round(actualFocusMinutes / completedSessions) : 0;
 
       return {
         period: {
@@ -503,6 +580,8 @@ export class ReportRepository {
           onTimeRate,
           averageQuizScore,
           totalQuizAttempts,
+          totalCompletedSessions: completedSessions,
+          avgSessionMinutes,
           streakDays,
           focusQualityScore,
         },
@@ -511,6 +590,9 @@ export class ReportRepository {
         topicMastery,
         weakTopics,
         strongTopics,
+        subjectInsights,
+        scoreProgression,
+        nextStudyPlan,
         comparison,
         recommendations,
         hasData,

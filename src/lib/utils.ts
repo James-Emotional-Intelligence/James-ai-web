@@ -14,7 +14,27 @@ export function formatTimeVN(dateStr?: string | Date): string {
 export function formatDateVN(dateStr?: string | Date): string {
   if (!dateStr) return '';
   const d = new Date(dateStr);
-  return d.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+export function formatDateShortVN(dateStr?: string | Date): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${day}/${month}`;
+}
+
+export function formatDateFullVN(dateStr?: string | Date): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
 }
 
 export function formatBytes(bytes: number, decimals = 1): string {

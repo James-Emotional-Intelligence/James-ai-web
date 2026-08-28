@@ -286,6 +286,21 @@ export class StorageService {
       expiresAt,
     };
   }
+
+  /**
+   * Generates a timed download URL for private files
+   */
+  public async getSignedDownloadUrl(
+    key: string,
+    expiresInSeconds = 3600
+  ): Promise<{ downloadUrl: string; expiresAt: string }> {
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
+    const downloadUrl = `/api/v1/materials/download-direct?key=${encodeURIComponent(key)}&expiresAt=${encodeURIComponent(expiresAt)}`;
+    return {
+      downloadUrl,
+      expiresAt,
+    };
+  }
 }
 
 export const storageService = StorageService.getInstance();

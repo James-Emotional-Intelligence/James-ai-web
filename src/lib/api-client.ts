@@ -375,7 +375,12 @@ export const api = {
     window.URL.revokeObjectURL(url);
   },
   generateExecutionGuide: (taskId: string, additionalNotes?: string) =>
-    fetchJson<{ guide: ExecutionGuide; isDemoMode: boolean }>(`/tasks/${taskId}/execution-guide/generate`, {
+    fetchJson<{ guide: ExecutionGuide; isDemoMode: boolean }>(`/tasks/${taskId}/generate-steps`, {
+      method: 'POST',
+      body: JSON.stringify({ additionalNotes }),
+    }),
+  generateSteps: (taskId: string, additionalNotes?: string) =>
+    fetchJson<{ guide: ExecutionGuide; isDemoMode: boolean }>(`/tasks/${taskId}/generate-steps`, {
       method: 'POST',
       body: JSON.stringify({ additionalNotes }),
     }),
@@ -391,9 +396,53 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ actualMinutes }),
     }),
+  updateTaskStepDetails: (taskId: string, stepId: string, updates: Partial<ExecutionStep>) =>
+    fetchJson<{ success: boolean; guide: ExecutionGuide }>(`/tasks/${taskId}/steps/${stepId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    }),
+  reorderTaskSteps: (taskId: string, orderedStepIds: string[]) =>
+    fetchJson<{ success: boolean; guide: ExecutionGuide }>(`/tasks/${taskId}/steps/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ orderedStepIds }),
+    }),
+  explainTaskStep: (
+    taskId: string,
+    data: { stepId?: string; stepTitle: string; instruction: string; expectedOutput: string; plannedMinutes: number; studentQuestion?: string }
+  ) =>
+    fetchJson<{
+      explanation: {
+        explanation: string;
+        actionableSteps: string[];
+        example: string;
+        keyTips: string[];
+      };
+    }>(`/tasks/${taskId}/explain-step`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  evaluateTaskEvidence: (taskId: string, data: { textValue?: string; fileUrl?: string; type?: string }) =>
+    fetchJson<{
+      evaluation: {
+        score: number;
+        rating: number;
+        isPassed: boolean;
+        feedback: string;
+        strengths: string[];
+        missingPoints: string[];
+      };
+    }>(`/tasks/${taskId}/evaluate-evidence`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   submitTaskEvidence: (taskId: string, data: { rating: number; evidenceNote: string; type?: string; fileUrl?: string }) =>
     fetchJson<{ evidence: TaskEvidence }>(`/tasks/${taskId}/evidence`, { method: 'POST', body: JSON.stringify(data) }),
   completeTask: (taskId: string) => fetchJson<{ task: StudyTask }>(`/tasks/${taskId}/complete`, { method: 'POST' }),
+  postponeTask: (taskId: string, postponeMinutes?: number, newScheduledStartAt?: string) =>
+    fetchJson<{ task: StudyTask }>(`/tasks/${taskId}/postpone`, {
+      method: 'POST',
+      body: JSON.stringify({ postponeMinutes, newScheduledStartAt }),
+    }),
 
   // Focus
   getCurrentFocusSession: () => fetchJson<{ session: FocusSession | null }>('/focus-sessions/current'),
@@ -454,6 +503,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(options || {}),
     }),
+  generateSubjectQuiz: (options: {
+    subjectId?: string;
+    subjectName?: string;
+    topics?: string[];
+    scope?: string;
+    difficulty?: 'easy' | 'medium' | 'hard';
+    questionCount?: number;
+    format?: 'multiple_choice' | 'essay' | 'combined';
+    title?: string;
+  }) =>
+    fetchJson<{ quiz: Quiz }>('/quizzes/generate', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    }),
+  retakeWrongQuestions: (originalQuizId: string, wrongQuestionIds: string[]) =>
+    fetchJson<{ quiz: Quiz }>('/quizzes/retake-wrong', {
+      method: 'POST',
+      body: JSON.stringify({ originalQuizId, wrongQuestionIds }),
+    }),
   getQuizzes: (examId?: string) =>
     fetchJson<{ quizzes: Quiz[] }>(`/quizzes${examId ? `?examId=${encodeURIComponent(examId)}` : ''}`),
   getQuiz: (id: string) => fetchJson<{ quiz: Quiz }>(`/quizzes/${id}`),
@@ -513,7 +581,29 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(options || {}),
     }),
+  renameMaterial: (id: string, title: string) =>
+    fetchJson<{ material: LearningMaterial }>(`/materials/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  getMaterialDownloadUrl: (id: string) =>
+    fetchJson<{ downloadUrl: string; expiresAt: string }>(`/materials/${id}/download`),
+  generateMaterialOutline: (id: string, options?: { chapter?: string }) =>
+    fetchJson<{ outline: Outline }>(`/materials/${id}/outline`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    }),
   deleteMaterial: (id: string) => fetchJson<{ success: boolean }>(`/materials/${id}`, { method: 'DELETE' }),
+
+  // Outlines (6.2)
+  getOutlines: (subjectId?: string) =>
+    fetchJson<{ outlines: Outline[] }>(`/outlines${subjectId ? `?subjectId=${encodeURIComponent(subjectId)}` : ''}`),
+  getOutline: (id: string) => fetchJson<{ outline: Outline }>(`/outlines/${id}`),
+  createOutline: (data: Partial<Outline>) =>
+    fetchJson<{ outline: Outline }>('/outlines', { method: 'POST', body: JSON.stringify(data) }),
+  updateOutline: (id: string, data: Partial<Outline>) =>
+    fetchJson<{ outline: Outline }>(`/outlines/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteOutline: (id: string) => fetchJson<{ success: boolean }>(`/outlines/${id}`, { method: 'DELETE' }),
 
   // Reports
   getReportsOverview: (params?: { period?: 'week' | 'month' | 'custom'; from?: string; to?: string; timezone?: string }) => {
@@ -631,6 +721,11 @@ export const api = {
   getJamiMessages: (conversationId?: string) =>
     fetchJson<{ messages: JamiMessageItem[] }>(
       `/jami/messages${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`
+    ),
+  clearJamiMessages: (conversationId?: string) =>
+    fetchJson<{ success: boolean }>(
+      `/jami/messages${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`,
+      { method: 'DELETE' }
     ),
   sendJamiChat: (message: string, conversationId?: string, clientMessageId?: string) =>
     fetchJson<{

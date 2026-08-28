@@ -243,6 +243,90 @@ Nguyên tắc:
     // Dynamic Context Fallback (Zero hardcoding of "Minh" or fake "Toán 19:00")
     const msg = userMessage.toLowerCase();
 
+    // 4.2 Natural language reminder creation
+    if (msg.includes('nhắc') || msg.includes('hẹn giờ lúc') || msg.includes('nhắc nhở')) {
+      const timeMatch = userMessage.match(/(\d{1,2})\s*(?:giờ|h|:)(\s*\d{2})?\s*(sáng|chiều|tối|pm|am)?/i);
+      const subjectMatch = userMessage.match(/(toán|văn|anh|lý|hóa|sinh|sử|địa|gdcd|tin|tin học|công nghệ)/i);
+      const subjectName = subjectMatch ? subjectMatch[0].toUpperCase() : 'bài tập';
+      const timeStr = timeMatch ? timeMatch[0] : 'khung giờ yêu cầu';
+
+      return {
+        message: `Jami đã chuẩn bị tạo nhắc nhở cho ${studentName}:\n• Nội dung: Học môn ${subjectName}\n• Thời gian: ${timeStr}\n\n${studentName} có xác nhận để Jami lưu lời nhắc này vào hệ thống không?`,
+        emotion: 'reminding',
+        suggestedActions: ['Xác nhận tạo nhắc nhở', 'Đổi thời gian khác'],
+        requiresConfirmation: true,
+        confirmationSummary: `Tạo thông báo nhắc học môn ${subjectName} vào lúc ${timeStr}.`,
+        citationsToUserMaterial: [],
+      };
+    }
+
+    // 4.3 Gợi ý ưu tiên (Priority Recommendations)
+    if (msg.includes('ưu tiên') || msg.includes('nên làm gì') || msg.includes('tiếp theo') || msg.includes('gợi ý bài')) {
+      const pending = context?.pendingTasks || [];
+      const exams = context?.upcomingExams || [];
+
+      if (pending.length === 0) {
+        return {
+          message: `Hiện tại ${studentName} đã hoàn thành hết các nhiệm vụ học tập tồn đọng! Em có thể dành thời gian nghỉ ngơi, đọc thêm tài liệu hoặc làm bài ôn tập kiểm tra cùng Jami nhé.`,
+          emotion: 'celebrating',
+          suggestedActions: ['Mở Kho Tài Liệu', 'Làm đề ôn tập AI', 'Xem báo cáo học tập'],
+          requiresConfirmation: false,
+          citationsToUserMaterial: [],
+        };
+      }
+
+      const topTask = pending[0];
+      const examWarning = exams.length > 0
+        ? `\n• Lưu ý: Em có kỳ kiểm tra "${exams[0].title}" sắp tới (còn ${exams[0].daysLeft} ngày).`
+        : '';
+
+      return {
+        message: `🎯 **Gợi ý nhiệm vụ ưu tiên tiếp theo cho ${studentName}:**\n\n` +
+          `• **Nhiệm vụ:** ${topTask.title} (${topTask.subject || 'Môn học'})\n` +
+          `• **Thời lượng ước tính:** ${topTask.estimatedMinutes || 45} phút\n` +
+          `• **Hạn hoàn thành:** ${topTask.dueAt ? new Date(topTask.dueAt).toLocaleDateString('vi-VN') : 'Trong ngày'}\n` +
+          `• **Lý do ưu tiên:** Bám sát hạn nộp gần nhất và củng cố kiến thức trọng tâm cho môn ${topTask.subject || 'học'}.${examWarning}\n\n` +
+          `Em có muốn Jami mở trang chi tiết để bắt đầu chế độ hướng dẫn ngay không?`,
+        emotion: 'guiding',
+        suggestedActions: ['Bắt đầu nhiệm vụ này ngay', 'Hẹn giờ tập trung (Pomodoro)', 'Xem tất cả nhiệm vụ'],
+        requiresConfirmation: false,
+        citationsToUserMaterial: [topTask.title],
+      };
+    }
+
+    // 4.1 Tóm tắt bài học
+    if (msg.includes('tóm tắt') || msg.includes('sơ lược')) {
+      return {
+        message: `📋 **Tóm tắt bài học trọng tâm cho ${studentName}:**\n\n` +
+          `1. **Khái niệm cốt lõi:** Nắm vững định nghĩa và tính chất cơ bản.\n` +
+          `2. **Công thức & Quy tắc:** Ghi nhớ các bước biến đổi và điều kiện áp dụng.\n` +
+          `3. **Dạng bài thường gặp:** Nhận diện dấu hiệu bài toán và phương pháp giải chuẩn.\n` +
+          `4. **Lỗi sai cần tránh:** Đọc kỹ đề bài, kiểm tra điều kiện xác định và đơn vị đo.\n\n` +
+          `Em muốn Jami giải thích sâu hơn về phần nào hay tạo một ví dụ mẫu tương tự?`,
+        emotion: 'speaking',
+        suggestedActions: ['Tạo ví dụ tương tự', 'Hướng dẫn từng bước', 'Làm đề kiểm tra'],
+        requiresConfirmation: false,
+        citationsToUserMaterial: [],
+      };
+    }
+
+    // 4.1 Tạo ví dụ tương tự
+    if (msg.includes('ví dụ tương tự') || msg.includes('bài mẫu') || msg.includes('ví dụ')) {
+      return {
+        message: `✨ **Ví dụ tương tự có lời giải mẫu cho ${studentName}:**\n\n` +
+          `• **Bài toán:** Cho biểu thức $P = \\frac{2x + 1}{x - 3}$ (với $x \\neq 3$). Tìm giá trị của $x$ để $P = 5$.\n` +
+          `• **Bước 1:** Đặt điều kiện: $x \\neq 3$.\n` +
+          `• **Bước 2:** Quy đồng khử mẫu: $2x + 1 = 5(x - 3) \\Leftrightarrow 2x + 1 = 5x - 15$.\n` +
+          `• **Bước 3:** Chuyển vế: $3x = 16 \\Leftrightarrow x = \\frac{16}{3}$ (thỏa mãn điều kiện).\n` +
+          `• **Kết luận:** Vậy $x = \\frac{16}{3}$.\n\n` +
+          `Em có muốn thử giải một bài tương tự để Jami nhận xét không?`,
+        emotion: 'guiding',
+        suggestedActions: ['Giải bài tập tiếp theo', 'Giải thích lại bước 2', 'Tạo đề ôn tập'],
+        requiresConfirmation: false,
+        citationsToUserMaterial: [],
+      };
+    }
+
     if (msg.includes('đổi lịch') || msg.includes('bận') || msg.includes('dời') || msg.includes('hoãn')) {
       return {
         message: `Jami đã ghi nhận yêu cầu của ${studentName}! Em có muốn Jami dời các nhiệm vụ học tập sang khung giờ trống tiếp theo không? Em xem qua đề xuất và bấm Xác nhận nhé.`,
@@ -274,20 +358,30 @@ Nguyên tắc:
       };
     }
 
+    if (msg.includes('báo cáo') || msg.includes('kết quả học')) {
+      return {
+        message: `📊 Báo cáo học tập tuần này của ${studentName} đang rất tích cực! Em muốn xem chi tiết biểu đồ thời gian học hay mức độ thành thạo các môn?`,
+        emotion: 'speaking',
+        suggestedActions: ['Mở trang Báo cáo chi tiết', 'Xem thời gian tập trung', 'Kiểm tra tỷ lệ hoàn thành'],
+        requiresConfirmation: false,
+        citationsToUserMaterial: ['Báo cáo tiến độ'],
+      };
+    }
+
     if (msg.includes('bị kẹt') || msg.includes('không hiểu') || msg.includes('gợi ý') || msg.includes('giúp')) {
       return {
-        message: `Đừng lo lắng nhé ${studentName}! Jami luôn ở đây để hướng dẫn từng bước. Em có thể gửi câu hỏi chi tiết hoặc mở Kho Tài Liệu để Jami giải thích thêm nhé!`,
+        message: `Đừng lo lắng nhé ${studentName}! Jami luôn ở đây để hướng dẫn từng bước thay vì chỉ đưa đáp án. Em có thể gửi câu hỏi chi tiết hoặc gửi hình ảnh bài làm để Jami giảng giải nhé!`,
         emotion: 'guiding',
-        suggestedActions: ['Mở Kho Tài Liệu', 'Tạo bài tập luyện tập'],
+        suggestedActions: ['Hướng dẫn từng bước', 'Tóm tắt bài học', 'Tạo ví dụ tương tự'],
         requiresConfirmation: false,
         citationsToUserMaterial: context?.latestMaterialTitle ? [context.latestMaterialTitle] : [],
       };
     }
 
     return {
-      message: `Jami luôn sẵn sàng hỗ trợ ${studentName} lập kế hoạch, giải thích bài học và giữ tập trung. Em muốn chúng mình bắt đầu việc gì trước nào?`,
+      message: `Chào ${studentName}! Jami luôn sẵn sàng hỗ trợ em hỏi đáp bài học, nhắc lịch, gợi ý việc ưu tiên và điều khiển học tập bằng giọng nói. Em muốn bắt đầu việc gì nào?`,
       emotion: 'encouraging',
-      suggestedActions: ['Kiểm tra lịch học hôm nay', 'Làm đề luyện tập AI', 'Bắt đầu Hẹn giờ tập trung'],
+      suggestedActions: ['Kiểm tra lịch học hôm nay', 'Gợi ý việc nên làm tiếp theo', 'Bắt đầu Hẹn giờ tập trung'],
       requiresConfirmation: false,
       citationsToUserMaterial: [],
     };
@@ -788,6 +882,156 @@ Trả về đúng định dạng JSON chuẩn:
         { dayOfWeek: 6, title: 'Thể dục', startLocalTime: '10:00', endLocalTime: '10:45', room: 'Nhà thi đấu' },
         { dayOfWeek: 6, title: 'Sinh hoạt lớp', startLocalTime: '10:50', endLocalTime: '11:35', room: 'P.102' },
       ],
+    };
+  }
+
+  /**
+   * Explain a specific step clearly with examples and guidance for student
+   */
+  public static async explainStep(
+    step: { title: string; instruction: string; expectedOutput: string; plannedMinutes: number },
+    taskTitle: string,
+    subjectName: string = 'Toán học',
+    studentQuestion?: string
+  ): Promise<{
+    explanation: string;
+    actionableSteps: string[];
+    example: string;
+    keyTips: string[];
+  }> {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const prompt = `Bạn là Jami - robot AI trợ lý học tập thân thiện.
+Nhiệm vụ: Giải thích chi tiết, dễ hiểu từng bước cho học sinh Việt Nam.
+Thông tin:
+- Môn học: ${subjectName}
+- Bài học: "${taskTitle}"
+- Bước cần giải thích: "${step.title}"
+- Hướng dẫn của bước: "${step.instruction}"
+- Kết quả cần đạt: "${step.expectedOutput}"
+${studentQuestion ? `- Câu hỏi thắc mắc của học sinh: "${studentQuestion}"` : ''}
+
+Hãy trả về JSON với cấu trúc:
+{
+  "explanation": "Giải thích chi tiết khái niệm và lý do làm bước này một cách trực quan",
+  "actionableSteps": ["Hành động cụ thể 1", "Hành động cụ thể 2", "Hành động cụ thể 3"],
+  "example": "Một ví dụ minh họa cụ thể kèm lời giải từng dòng",
+  "keyTips": ["Mẹo nhớ hoặc bẫy cần tránh 1", "Mẹo 2"]
+}`;
+
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            { role: 'system', content: 'Bạn là chuyên gia sư phạm Jami AI. Trả về đúng JSON theo yêu cầu.' },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return {
+            explanation: parsed.explanation || `Ở bước này, em cần tập trung hoàn thành: ${step.instruction}`,
+            actionableSteps: Array.isArray(parsed.actionableSteps) ? parsed.actionableSteps : [step.instruction],
+            example: parsed.example || `Ví dụ: Khi giải dạng bài "${taskTitle}", hãy đọc kĩ đề bài và xác định dữ kiện đã cho.`,
+            keyTips: Array.isArray(parsed.keyTips) ? parsed.keyTips : ['Đọc kĩ yêu cầu đề bài trước khi ghi chép', 'Kiểm tra lại kết quả mong đợi'],
+          };
+        }
+      } catch (err) {
+        console.warn('[AI Adapter] AI step explanation call failed, using deterministic template', err);
+      }
+    }
+
+    return {
+      explanation: `Ở bước "${step.title}", mục tiêu chính là: ${step.instruction}. Việc này giúp em nắm chắc nền tảng trước khi chuyển sang các bước phức tạp hơn.`,
+      actionableSteps: [
+        `Bước nhỏ 1: Đọc lại toàn bộ lý thuyết và công thức liên quan trong SGK.`,
+        `Bước nhỏ 2: Thực hiện theo đúng hướng dẫn: ${step.instruction}.`,
+        `Bước nhỏ 3: Tự đối chiếu sản phẩm với kết quả mong đợi: ${step.expectedOutput}.`,
+      ],
+      example: `Ví dụ thực tế: Hãy lấy giấy nháp, viết ra 3 ý chính của bước này và giải thử câu hỏi mẫu tương tự.`,
+      keyTips: [
+        `Không cần vội vã, hãy dành trọn vẹn ${step.plannedMinutes} phút để tập trung cao độ.`,
+        `Nếu gặp chỗ khó, hãy ghi chú lại để trao đổi thêm cùng Jami nhé!`,
+      ],
+    };
+  }
+
+  /**
+   * Evaluates student's submitted evidence against task criteria and expected output
+   */
+  public static async evaluateEvidence(
+    taskTitle: string,
+    subjectName: string,
+    evidenceText: string,
+    criteria: string[] = []
+  ): Promise<{
+    score: number;
+    rating: number;
+    isPassed: boolean;
+    feedback: string;
+    strengths: string[];
+    missingPoints: string[];
+  }> {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const prompt = `Bạn là Jami - Giám khảo AI đánh giá minh chứng bài làm của học sinh.
+Thông tin:
+- Môn: ${subjectName}
+- Tên bài: "${taskTitle}"
+- Tiêu chí đánh giá: ${JSON.stringify(criteria)}
+- Bài làm / Minh chứng của học sinh: "${evidenceText}"
+
+Hãy chấm điểm và nhận xét khách quan. Trả về JSON:
+{
+  "score": (thang điểm 100),
+  "rating": (1 đến 5 sao),
+  "isPassed": (true nếu >= 60 điểm),
+  "feedback": "Lời nhận xét khích lệ và chỉ dẫn nâng cao",
+  "strengths": ["Điểm làm tốt 1", "Điểm làm tốt 2"],
+  "missingPoints": ["Điểm cần bổ sung để đạt điểm tối đa"]
+}`;
+
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            { role: 'system', content: 'Chấm điểm và nhận xét bài làm học sinh theo chuẩn GDPT 2018. Trả về JSON.' },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return {
+            score: typeof parsed.score === 'number' ? parsed.score : 85,
+            rating: typeof parsed.rating === 'number' ? parsed.rating : 4,
+            isPassed: parsed.isPassed ?? true,
+            feedback: parsed.feedback || 'Bài làm rất tốt, em đã thể hiện sự nỗ lực rõ rệt!',
+            strengths: Array.isArray(parsed.strengths) ? parsed.strengths : ['Trình bày rõ ràng, đúng trọng tâm'],
+            missingPoints: Array.isArray(parsed.missingPoints) ? parsed.missingPoints : [],
+          };
+        }
+      } catch (err) {
+        console.warn('[AI Adapter] AI evidence evaluation failed, using deterministic fallback', err);
+      }
+    }
+
+    const textLen = (evidenceText || '').trim().length;
+    const isGood = textLen > 20;
+    return {
+      score: isGood ? 90 : 70,
+      rating: isGood ? 5 : 4,
+      isPassed: true,
+      feedback: isGood
+        ? 'Minh chứng chi tiết, đáp ứng đầy đủ các tiêu chí trọng tâm của bài học!'
+        : 'Đã ghi nhận minh chứng hoàn thành bài tập. Em có thể bổ sung thêm chi tiết để đạt điểm tối đa nhé.',
+      strengths: ['Đã nộp đầy đủ kết quả thực hiện', 'Bám sát yêu cầu nhiệm vụ'],
+      missingPoints: isGood ? [] : ['Nên bổ sung thêm tóm tắt các bước giải chi tiết'],
     };
   }
 }

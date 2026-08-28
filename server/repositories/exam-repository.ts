@@ -157,6 +157,8 @@ export class ExamRepository {
       title: (data.title || 'Bài kiểm tra').trim(),
       examAt,
       importance: data.importance || 'high',
+      targetScore: data.targetScore !== undefined ? Number(data.targetScore) : 8.5,
+      examFormat: data.examFormat || 'combined',
       scopeText: data.scopeText || '',
       topics: data.topics && data.topics.length > 0 ? data.topics : [{ id: 'topic_1', name: subjectName, weight: 1 }],
       milestones,

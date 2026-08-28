@@ -297,6 +297,73 @@ QUY TẮC AN NINH:
     };
   }
 
+  /**
+   * Generates a structured Outline from a Material using AI
+   */
+  public async generateOutlineFromMaterial(
+    userId: string,
+    materialId: string,
+    options: { chapter?: string; customPrompt?: string } = {}
+  ): Promise<any> {
+    const material = await materialRepo.getById(userId, materialId);
+    if (!material) {
+      throw new Error('Không tìm thấy tài liệu học tập.');
+    }
+
+    if (material.processingStatus !== 'ready') {
+      throw new Error('Tài liệu chưa được xử lý xong nội dung. Vui lòng chờ vài giây.');
+    }
+
+    const summary = material.summaryJson || await this.generateStructuredSummary(
+      material.title,
+      material.subjectName || 'Môn học',
+      material.contentText || material.title
+    );
+
+    const outlineTitle = `Đề cương: ${material.title}`;
+    const chapter = options.chapter || summary.overview?.slice(0, 50) || 'Chương trọng tâm';
+
+    let markdown = `# ${outlineTitle}\n\n`;
+    markdown += `## 1. Tổng quan kiến thức\n${summary.overview || 'Tóm tắt nội dung chính...'}\n\n`;
+
+    if (summary.concepts && summary.concepts.length > 0) {
+      markdown += `## 2. Các khái niệm cốt lõi\n`;
+      for (const c of summary.concepts) {
+        markdown += `- **${c.name}**: ${c.definition}\n`;
+      }
+      markdown += `\n`;
+    }
+
+    if (summary.formulas && summary.formulas.length > 0) {
+      markdown += `## 3. Công thức & Quy tắc ghi nhớ\n`;
+      for (const f of summary.formulas) {
+        markdown += `- \`${f}\`\n`;
+      }
+      markdown += `\n`;
+    }
+
+    if (summary.keyPoints && summary.keyPoints.length > 0) {
+      markdown += `## 4. Các điểm lưu ý khi làm bài\n`;
+      for (const kp of summary.keyPoints) {
+        markdown += `- ${kp}\n`;
+      }
+      markdown += `\n`;
+    }
+
+    const outline = await materialRepo.createOutline(userId, {
+      subjectId: material.subjectId,
+      materialId: material.id,
+      title: outlineTitle,
+      chapter,
+      contentMarkdown: markdown,
+      keyPoints: summary.keyPoints || [],
+      formulas: summary.formulas || [],
+      isPinned: false,
+    });
+
+    return outline;
+  }
+
   private async logAiRun(
     userId: string,
     purpose: string,

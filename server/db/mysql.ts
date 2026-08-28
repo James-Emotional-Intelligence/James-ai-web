@@ -119,13 +119,13 @@ class MySQLClient {
         database: env.AIVEN_MYSQL_DATABASE,
         ssl: sslConfig,
         waitForConnections: true,
-        connectionLimit: 10,
-        maxIdle: 5,
-        idleTimeout: 60000,
-        connectTimeout: 10000,
+        connectionLimit: 20,
+        maxIdle: 10,
+        idleTimeout: 120000,
+        connectTimeout: 30000,
         queueLimit: 0,
         enableKeepAlive: true,
-        keepAliveInitialDelay: 10000,
+        keepAliveInitialDelay: 5000,
         timezone: '+00:00',
       });
 
@@ -149,34 +149,75 @@ class MySQLClient {
     }
   }
 
-  public async query<T = any>(sql: string, params?: any[]): Promise<T[]> {
+  public async query<T = any>(sql: string, params?: any[], retryCount = 1): Promise<T[]> {
     if (!this.pool || !this.isConnected) {
-      if (isProduction) {
-        throw new DatabaseError('Database pool is not ready or connection was lost');
+      // Attempt auto-reconnect if pool is not ready
+      if (!this.isInitializing && env.AIVEN_MYSQL_HOST) {
+        try {
+          await this.init();
+        } catch (_) {}
       }
-      return [];
+      if (!this.pool || !this.isConnected) {
+        if (isProduction) {
+          throw new DatabaseError('Database pool is not ready or connection was lost');
+        }
+        return [];
+      }
     }
 
     try {
       const [rows] = await this.pool.query(sql, params);
       return rows as T[];
     } catch (err: any) {
+      const isTransient =
+        err.code === 'ETIMEDOUT' ||
+        err.code === 'ECONNRESET' ||
+        err.code === 'PROTOCOL_CONNECTION_LOST' ||
+        err.code === 'EPIPE' ||
+        err.message?.includes('ETIMEDOUT') ||
+        err.message?.includes('Connection lost');
+
+      if (isTransient && retryCount > 0) {
+        console.warn(`[JAMI MySQL] Transient error (${err.code || err.message}), retrying query in 500ms...`);
+        await new Promise((r) => setTimeout(r, 500));
+        return this.query<T>(sql, params, retryCount - 1);
+      }
       throw new DatabaseError(`MySQL Query Error: ${err.message}`, err);
     }
   }
 
-  public async execute(sql: string, params?: any[]): Promise<any> {
+  public async execute(sql: string, params?: any[], retryCount = 1): Promise<any> {
     if (!this.pool || !this.isConnected) {
-      if (isProduction) {
-        throw new DatabaseError('Database pool is not ready or connection was lost');
+      if (!this.isInitializing && env.AIVEN_MYSQL_HOST) {
+        try {
+          await this.init();
+        } catch (_) {}
       }
-      return null;
+      if (!this.pool || !this.isConnected) {
+        if (isProduction) {
+          throw new DatabaseError('Database pool is not ready or connection was lost');
+        }
+        return null;
+      }
     }
 
     try {
       const [result] = await this.pool.execute(sql, params);
       return result;
     } catch (err: any) {
+      const isTransient =
+        err.code === 'ETIMEDOUT' ||
+        err.code === 'ECONNRESET' ||
+        err.code === 'PROTOCOL_CONNECTION_LOST' ||
+        err.code === 'EPIPE' ||
+        err.message?.includes('ETIMEDOUT') ||
+        err.message?.includes('Connection lost');
+
+      if (isTransient && retryCount > 0) {
+        console.warn(`[JAMI MySQL] Transient error (${err.code || err.message}), retrying execute in 500ms...`);
+        await new Promise((r) => setTimeout(r, 500));
+        return this.execute(sql, params, retryCount - 1);
+      }
       throw new DatabaseError(`MySQL Execute Error: ${err.message}`, err);
     }
   }

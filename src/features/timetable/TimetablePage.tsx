@@ -24,6 +24,10 @@ import {
   Check,
   Layers,
   FileText,
+  RotateCcw,
+  Undo2,
+  UserCheck,
+  Car,
 } from 'lucide-react';
 import { api, ApiError } from '../../lib/api-client';
 import {
@@ -35,8 +39,118 @@ import {
   SchoolTimetable,
   LearningMaterial,
 } from '../../../shared/types';
-import { formatTimeVN, formatDateVN } from '../../lib/utils';
+import { formatTimeVN, formatDateVN, formatDateShortVN, formatDateFullVN } from '../../lib/utils';
 import confetti from 'canvas-confetti';
+
+export const getSubjectColorTheme = (title: string, subjectName?: string) => {
+  const text = `${title} ${subjectName || ''}`.toLowerCase();
+  if (text.includes('toán') || text.includes('đại số') || text.includes('hình học') || text.includes('math')) {
+    return {
+      bg: 'bg-emerald-950/70 hover:bg-emerald-900/80',
+      border: 'border-emerald-700/60 hover:border-emerald-500',
+      text: 'text-emerald-200',
+      badge: 'bg-emerald-800/80 text-emerald-200 border-emerald-500/50',
+      accent: '#10B981',
+    };
+  }
+  if (text.includes('văn') || text.includes('tiếng việt') || text.includes('ngữ văn') || text.includes('literature')) {
+    return {
+      bg: 'bg-amber-950/70 hover:bg-amber-900/80',
+      border: 'border-amber-700/60 hover:border-amber-500',
+      text: 'text-amber-200',
+      badge: 'bg-amber-800/80 text-amber-200 border-amber-500/50',
+      accent: '#F59E0B',
+    };
+  }
+  if (text.includes('anh') || text.includes('ngoại ngữ') || text.includes('english')) {
+    return {
+      bg: 'bg-violet-950/70 hover:bg-violet-900/80',
+      border: 'border-violet-700/60 hover:border-violet-500',
+      text: 'text-violet-200',
+      badge: 'bg-violet-800/80 text-violet-200 border-violet-500/50',
+      accent: '#8B5CF6',
+    };
+  }
+  if (text.includes('lý') || text.includes('vật lý') || text.includes('physics')) {
+    return {
+      bg: 'bg-cyan-950/70 hover:bg-cyan-900/80',
+      border: 'border-cyan-700/60 hover:border-cyan-500',
+      text: 'text-cyan-200',
+      badge: 'bg-cyan-800/80 text-cyan-200 border-cyan-500/50',
+      accent: '#06B6D4',
+    };
+  }
+  if (text.includes('hóa') || text.includes('chemistry')) {
+    return {
+      bg: 'bg-rose-950/70 hover:bg-rose-900/80',
+      border: 'border-rose-700/60 hover:border-rose-500',
+      text: 'text-rose-200',
+      badge: 'bg-rose-800/80 text-rose-200 border-rose-500/50',
+      accent: '#F43F5E',
+    };
+  }
+  if (text.includes('sinh') || text.includes('biology')) {
+    return {
+      bg: 'bg-lime-950/70 hover:bg-lime-900/80',
+      border: 'border-lime-700/60 hover:border-lime-500',
+      text: 'text-lime-200',
+      badge: 'bg-lime-800/80 text-lime-200 border-lime-500/50',
+      accent: '#84CC16',
+    };
+  }
+  if (text.includes('sử') || text.includes('lịch sử') || text.includes('history')) {
+    return {
+      bg: 'bg-orange-950/70 hover:bg-orange-900/80',
+      border: 'border-orange-700/60 hover:border-orange-500',
+      text: 'text-orange-200',
+      badge: 'bg-orange-800/80 text-orange-200 border-orange-500/50',
+      accent: '#F97316',
+    };
+  }
+  if (text.includes('địa') || text.includes('địa lý') || text.includes('geography')) {
+    return {
+      bg: 'bg-teal-950/70 hover:bg-teal-900/80',
+      border: 'border-teal-700/60 hover:border-teal-500',
+      text: 'text-teal-200',
+      badge: 'bg-teal-800/80 text-teal-200 border-teal-500/50',
+      accent: '#14B8A6',
+    };
+  }
+  if (text.includes('tin') || text.includes('tin học') || text.includes('công nghệ')) {
+    return {
+      bg: 'bg-sky-950/70 hover:bg-sky-900/80',
+      border: 'border-sky-700/60 hover:border-sky-500',
+      text: 'text-sky-200',
+      badge: 'bg-sky-800/80 text-sky-200 border-sky-500/50',
+      accent: '#0EA5E9',
+    };
+  }
+  if (text.includes('thể dục') || text.includes('gdtc') || text.includes('thể thao')) {
+    return {
+      bg: 'bg-emerald-950/70 hover:bg-emerald-900/80',
+      border: 'border-emerald-600/60 hover:border-emerald-400',
+      text: 'text-emerald-200',
+      badge: 'bg-emerald-800/80 text-emerald-200 border-emerald-500/50',
+      accent: '#10B981',
+    };
+  }
+  if (text.includes('nhạc') || text.includes('mỹ thuật') || text.includes('họa')) {
+    return {
+      bg: 'bg-fuchsia-950/70 hover:bg-fuchsia-900/80',
+      border: 'border-fuchsia-700/60 hover:border-fuchsia-500',
+      text: 'text-fuchsia-200',
+      badge: 'bg-fuchsia-800/80 text-fuchsia-200 border-fuchsia-500/50',
+      accent: '#D946EF',
+    };
+  }
+  return {
+    bg: 'bg-[#101A13] hover:bg-[#142319]',
+    border: 'border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/50',
+    text: 'text-[#F3FAF5]',
+    badge: 'bg-[#14532D] text-[#86EFAC] border-[#22C55E]/30',
+    accent: '#22C55E',
+  };
+};
 
 export const TimetablePage: React.FC = () => {
   // Navigation & View State
@@ -67,8 +181,13 @@ export const TimetablePage: React.FC = () => {
   const [isAddEventOpen, setIsAddEventOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<BusyEvent | null>(null);
 
-  // Form States - Timetable Entry
+  // Undo Replan State
+  const [lastTaskSnapshot, setLastTaskSnapshot] = useState<StudyTask[] | null>(null);
+  const [isUndoing, setIsUndoing] = useState(false);
+
+  // Form States - Timetable Entry (Thời khóa biểu trường)
   const [entryTitle, setEntryTitle] = useState('');
+  const [entryTeacher, setEntryTeacher] = useState('');
   const [entrySubjectId, setEntrySubjectId] = useState('');
   const [entryDayOfWeek, setEntryDayOfWeek] = useState(1);
   const [entryStartTime, setEntryStartTime] = useState('07:30');
@@ -77,9 +196,13 @@ export const TimetablePage: React.FC = () => {
   const [entryCommuteBefore, setEntryCommuteBefore] = useState(15);
   const [entryCommuteAfter, setEntryCommuteAfter] = useState(15);
 
-  // Form States - Busy Event with Extended Recurrence
+  // Form States - Busy Event & Extra Classes (Lịch học thêm, CLB, Việc bận)
   const [eventTitle, setEventTitle] = useState('');
-  const [eventType, setEventType] = useState<'extra_class' | 'meal' | 'sleep' | 'commute' | 'personal'>('extra_class');
+  const [eventType, setEventType] = useState<'extra_class' | 'club' | 'personal' | 'commute' | 'meal' | 'sleep'>('extra_class');
+  const [eventLocation, setEventLocation] = useState('');
+  const [eventCommuteBefore, setEventCommuteBefore] = useState(0);
+  const [eventCommuteAfter, setEventCommuteAfter] = useState(0);
+  const [eventIsFixed, setEventIsFixed] = useState(true);
   const [eventDate, setEventDate] = useState('');
   const [eventStartTime, setEventStartTime] = useState('17:30');
   const [eventEndTime, setEventEndTime] = useState('19:00');
@@ -153,6 +276,92 @@ export const TimetablePage: React.FC = () => {
     return weekDays.find((d) => d.dayOfWeek === selectedDayOfWeek) || weekDays[0];
   }, [weekDays, selectedDayOfWeek]);
 
+  // Week switch modal for School Timetable (Bảng 1)
+  const [isWeekSwitchModalOpen, setIsWeekSwitchModalOpen] = useState(false);
+  const [targetWeekOffset, setTargetWeekOffset] = useState<number | null>(null);
+
+  // List of weeks for dropdown selector
+  const weekOptions = useMemo(() => {
+    const options = [];
+    const today = new Date();
+    const currentJsDay = today.getDay();
+    const mondayOffset = currentJsDay === 0 ? -6 : 1 - currentJsDay;
+
+    for (let offset = -4; offset <= 16; offset++) {
+      const monday = new Date(today);
+      monday.setDate(today.getDate() + mondayOffset + offset * 7);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+
+      let label = '';
+      if (offset === 0) {
+        label = `Tuần hiện tại (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
+      } else if (offset === 1) {
+        label = `Tuần tiếp theo (+1) (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
+      } else if (offset === -1) {
+        label = `Tuần trước (-1) (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
+      } else if (offset > 1) {
+        label = `Tuần sau +${offset} (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
+      } else {
+        label = `Tuần trước ${offset} (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
+      }
+
+      options.push({ offset, label, monday, sunday });
+    }
+    return options;
+  }, []);
+
+  const targetWeekDays = useMemo(() => {
+    if (targetWeekOffset === null) return null;
+    const today = new Date();
+    const currentJsDay = today.getDay();
+    const mondayOffset = currentJsDay === 0 ? -6 : 1 - currentJsDay;
+    const baseMonday = new Date(today);
+    baseMonday.setDate(today.getDate() + mondayOffset + targetWeekOffset * 7);
+    baseMonday.setHours(0, 0, 0, 0);
+    const endSunday = new Date(baseMonday);
+    endSunday.setDate(baseMonday.getDate() + 6);
+    return { start: baseMonday, end: endSunday };
+  }, [targetWeekOffset]);
+
+  const handleRequestChangeWeek = (newOffset: number) => {
+    if (newOffset === currentWeekOffset) return;
+    if (timetableEntries.length > 0) {
+      setTargetWeekOffset(newOffset);
+      setIsWeekSwitchModalOpen(true);
+    } else {
+      setCurrentWeekOffset(newOffset);
+    }
+  };
+
+  const handleConfirmKeepOldTimetable = () => {
+    if (targetWeekOffset !== null) {
+      setCurrentWeekOffset(targetWeekOffset);
+    }
+    setIsWeekSwitchModalOpen(false);
+    setTargetWeekOffset(null);
+  };
+
+  const handleConfirmResetAndInputNew = async () => {
+    const nextOffset = targetWeekOffset !== null ? targetWeekOffset : currentWeekOffset + 1;
+    setIsWeekSwitchModalOpen(false);
+    setTargetWeekOffset(null);
+    try {
+      await api.deleteAllTimetableEntries(activeTimetable?.id);
+      setCurrentWeekOffset(nextOffset);
+      await fetchData();
+      setIsOcrModalOpen(true);
+      setOcrStep('upload');
+      setOcrFile(null);
+      setOcrPreviewUrl(null);
+      setOcrBase64(null);
+      setOcrExtractedEntries([]);
+      setOcrErrorMessage(null);
+    } catch (err: any) {
+      alert(err.message || 'Lỗi khi xóa thời khóa biểu cũ');
+    }
+  };
+
   // Fetch all timetable, task, and subject data
   const fetchData = async () => {
     setIsLoading(true);
@@ -224,6 +433,7 @@ export const TimetablePage: React.FC = () => {
     if (!proposalDiff) return;
     setIsConfirmingProposal(true);
     try {
+      setLastTaskSnapshot([...tasks]);
       const res = await api.confirmProposal(proposalDiff.id);
       setTasks(res.tasks);
       setProposalDiff(null);
@@ -236,15 +446,67 @@ export const TimetablePage: React.FC = () => {
     }
   };
 
+  const handleUndoReplan = async () => {
+    if (!lastTaskSnapshot) return;
+    if (!confirm('Bạn có muốn hoàn tác lịch tự học về trạng thái trước khi tự động xếp?')) return;
+    setIsUndoing(true);
+    try {
+      for (const t of lastTaskSnapshot) {
+        await api.updateTask(t.id, {
+          scheduledStartAt: t.scheduledStartAt || null,
+          scheduledEndAt: t.scheduledEndAt || null,
+          locked: t.locked,
+        });
+      }
+      setLastTaskSnapshot(null);
+      await fetchData();
+      alert('Đã hoàn tác thành công về lịch trước đó!');
+    } catch (err: any) {
+      alert(err.message || 'Không thể hoàn tác lịch');
+    } finally {
+      setIsUndoing(false);
+    }
+  };
+
+  // Missed / Overdue tasks detector
+  const missedTasks = useMemo(() => {
+    const now = new Date();
+    return tasks.filter((t) => {
+      if (!t.scheduledStartAt || t.status === 'completed') return false;
+      const end = t.scheduledEndAt
+        ? new Date(t.scheduledEndAt)
+        : new Date(new Date(t.scheduledStartAt).getTime() + (t.estimatedMinutes || 45) * 60000);
+      return end < now;
+    });
+  }, [tasks]);
+
   // Timetable Entry CRUD Submit
   const handleSaveEntry = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!entryTitle.trim()) return;
+
+    // Check period overlap conflict on the same day
+    const conflictingEntry = timetableEntries.find((item) => {
+      if (editingEntry && item.id === editingEntry.id) return false;
+      if (item.dayOfWeek !== entryDayOfWeek) return false;
+      return (
+        (entryStartTime >= item.startLocalTime && entryStartTime < item.endLocalTime) ||
+        (entryEndTime > item.startLocalTime && entryEndTime <= item.endLocalTime) ||
+        (entryStartTime <= item.startLocalTime && entryEndTime >= item.endLocalTime)
+      );
+    });
+
+    if (conflictingEntry) {
+      alert(`⚠️ Trùng giờ tiết học: Đã có tiết "${conflictingEntry.title}" (${conflictingEntry.startLocalTime} – ${conflictingEntry.endLocalTime}) vào ngày này. Vui lòng điều chỉnh lại giờ học!`);
+      return;
+    }
+
     setIsFormSubmitting(true);
     try {
       if (editingEntry) {
         await api.updateTimetableEntry(editingEntry.id, {
           title: entryTitle.trim(),
+          teacher: entryTeacher.trim() || undefined,
           subjectId: entrySubjectId || null,
           dayOfWeek: entryDayOfWeek,
           startLocalTime: entryStartTime,
@@ -257,6 +519,7 @@ export const TimetablePage: React.FC = () => {
         await api.createTimetableEntry({
           timetableId: activeTimetable?.id,
           title: entryTitle.trim(),
+          teacher: entryTeacher.trim() || undefined,
           subjectId: entrySubjectId || undefined,
           dayOfWeek: entryDayOfWeek,
           startLocalTime: entryStartTime,
@@ -305,6 +568,26 @@ export const TimetablePage: React.FC = () => {
       return;
     }
 
+    // Check conflict between busy event and school periods on this day
+    const eventDayOfWeek = start.getDay() === 0 ? 7 : start.getDay();
+    const timeStrStart = `${String(sH).padStart(2, '0')}:${String(sM).padStart(2, '0')}`;
+    const timeStrEnd = `${String(eH).padStart(2, '0')}:${String(eM).padStart(2, '0')}`;
+
+    const schoolConflict = timetableEntries.find((tt) => {
+      if (tt.dayOfWeek !== eventDayOfWeek) return false;
+      return (
+        (timeStrStart >= tt.startLocalTime && timeStrStart < tt.endLocalTime) ||
+        (timeStrEnd > tt.startLocalTime && timeStrEnd <= tt.endLocalTime) ||
+        (timeStrStart <= tt.startLocalTime && timeStrEnd >= tt.endLocalTime)
+      );
+    });
+
+    if (schoolConflict) {
+      if (!confirm(`⚠️ Cảnh báo xung đột: Khung giờ này (${timeStrStart} – ${timeStrEnd}) trùng với tiết học chính khóa "${schoolConflict.title}" (${schoolConflict.startLocalTime} – ${schoolConflict.endLocalTime}) trên trường. Bạn vẫn muốn lưu sự kiện này?`)) {
+        return;
+      }
+    }
+
     const dayMap = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
     const jsDayMap: Record<number, string> = { 1: 'MO', 2: 'TU', 3: 'WE', 4: 'TH', 5: 'FR', 6: 'SA', 7: 'SU' };
 
@@ -341,6 +624,10 @@ export const TimetablePage: React.FC = () => {
           startsAt: start.toISOString(),
           endsAt: end.toISOString(),
           recurrenceRule,
+          isFixed: eventIsFixed,
+          location: eventLocation.trim() || undefined,
+          commuteBeforeMinutes: eventCommuteBefore,
+          commuteAfterMinutes: eventCommuteAfter,
           subjectId: eventSubjectId || undefined,
         });
       } else {
@@ -350,7 +637,10 @@ export const TimetablePage: React.FC = () => {
           startsAt: start.toISOString(),
           endsAt: end.toISOString(),
           recurrenceRule,
-          isFixed: true,
+          isFixed: eventIsFixed,
+          location: eventLocation.trim() || undefined,
+          commuteBeforeMinutes: eventCommuteBefore,
+          commuteAfterMinutes: eventCommuteAfter,
           timezone: 'Asia/Ho_Chi_Minh',
           subjectId: eventSubjectId || undefined,
         });
@@ -358,6 +648,7 @@ export const TimetablePage: React.FC = () => {
       setIsAddEventOpen(false);
       setEditingEvent(null);
       setEventTitle('');
+      setEventLocation('');
       await fetchData();
     } catch (err: any) {
       alert(err.message || 'Không thể lưu lịch bận');
@@ -451,7 +742,7 @@ export const TimetablePage: React.FC = () => {
       if (ocrSourceTab === 'upload' && ocrSaveToLibrary && ocrFile) {
         try {
           const title = ocrMaterialTitle.trim() || ocrFile.name.replace(/\.[^/.]+$/, '');
-          const subjId = subjects[0]?.id || 'subj_toan';
+          const subjId = subjects[0]?.id || '';
           const intent = await api.createMaterialUploadIntent({
             title,
             subjectId: subjId,
@@ -519,6 +810,7 @@ export const TimetablePage: React.FC = () => {
   const openEditEntry = (entry: TimetableEntry) => {
     setEditingEntry(entry);
     setEntryTitle(entry.title);
+    setEntryTeacher(entry.teacher || '');
     setEntrySubjectId(entry.subjectId || '');
     setEntryDayOfWeek(entry.dayOfWeek);
     setEntryStartTime(entry.startLocalTime);
@@ -532,7 +824,11 @@ export const TimetablePage: React.FC = () => {
   const openEditEvent = (evt: BusyEvent) => {
     setEditingEvent(evt);
     setEventTitle(evt.title);
-    setEventType(evt.type);
+    setEventType((evt.type as any) || 'extra_class');
+    setEventLocation(evt.location || '');
+    setEventCommuteBefore(evt.commuteBeforeMinutes ?? 0);
+    setEventCommuteAfter(evt.commuteAfterMinutes ?? 0);
+    setEventIsFixed(evt.isFixed ?? true);
     const start = new Date(evt.startsAt);
     setEventDate(`${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`);
     setEventStartTime(`${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`);
@@ -790,6 +1086,49 @@ export const TimetablePage: React.FC = () => {
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
+              {/* Week Navigator for School Timetable */}
+              <div className="flex items-center bg-[#101A13] p-1 rounded-xl border border-[rgba(34,197,94,0.22)] text-xs text-[#F3FAF5]">
+                <button
+                  type="button"
+                  onClick={() => handleRequestChangeWeek(currentWeekOffset - 1)}
+                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#142319] rounded cursor-pointer transition-colors"
+                  title="Tuần trước"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <div className="relative flex items-center px-1">
+                  <Calendar className="w-3.5 h-3.5 text-[#22C55E] mr-1.5 shrink-0 pointer-events-none" />
+                  <select
+                    value={currentWeekOffset}
+                    onChange={(e) => handleRequestChangeWeek(Number(e.target.value))}
+                    className="bg-transparent text-xs font-bold text-[#86EFAC] focus:outline-none cursor-pointer pr-1 [&>option]:bg-[#0B120D] [&>option]:text-[#F3FAF5]"
+                  >
+                    {weekOptions.map((opt) => (
+                      <option key={opt.offset} value={opt.offset}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRequestChangeWeek(currentWeekOffset + 1)}
+                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#142319] rounded cursor-pointer transition-colors"
+                  title="Tuần tiếp theo"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                {currentWeekOffset !== 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestChangeWeek(0)}
+                    className="ml-1 px-2 py-0.5 bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] text-[10px] font-bold rounded cursor-pointer border border-[#22C55E]/30 transition-all"
+                  >
+                    Tuần hiện tại
+                  </button>
+                )}
+              </div>
+
               {/* View Toggle */}
               <div className="flex items-center bg-[#101A13] p-1 rounded-xl border border-[rgba(34,197,94,0.18)]">
                 <button
@@ -939,59 +1278,69 @@ export const TimetablePage: React.FC = () => {
                   {timetableEntries
                     .filter((e) => e.dayOfWeek === selectedDayOfWeek)
                     .sort((a, b) => a.startLocalTime.localeCompare(b.startLocalTime))
-                    .map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] space-y-2 relative group hover:border-[#22C55E]/50 transition-all shadow-sm"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <span className="text-xs font-bold text-[#F3FAF5] block">{entry.title}</span>
-                            {entry.subjectName && (
-                              <span className="text-[10px] font-bold text-[#86EFAC] bg-[#14532D] px-2 py-0.5 rounded mt-1 inline-block">
-                                {entry.subjectName}
-                              </span>
-                            )}
+                    .map((entry) => {
+                      const theme = getSubjectColorTheme(entry.title, entry.subjectName);
+                      return (
+                        <div
+                          key={entry.id}
+                          className={`p-4 rounded-2xl ${theme.bg} border ${theme.border} space-y-2 relative group transition-all shadow-sm`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="text-xs font-bold text-[#F3FAF5] block">{entry.title}</span>
+                              {entry.subjectName && (
+                                <span className={`text-[10px] font-bold ${theme.badge} px-2 py-0.5 rounded mt-1 inline-block border`}>
+                                  {entry.subjectName}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => openEditEntry(entry)}
+                                className="p-1.5 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-lg border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                                title="Sửa tiết học"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteEntry(entry.id, entry.title)}
+                                className="p-1.5 text-rose-400 hover:text-rose-200 bg-rose-950/70 rounded-lg border border-rose-800/60 cursor-pointer"
+                                title="Xóa tiết học này"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => openEditEntry(entry)}
-                              className="p-1.5 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-lg border border-[rgba(34,197,94,0.15)] cursor-pointer"
-                              title="Sửa tiết học"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteEntry(entry.id, entry.title)}
-                              className="p-1.5 text-rose-400 hover:text-rose-200 bg-rose-950/70 rounded-lg border border-rose-800/60 cursor-pointer"
-                              title="Xóa tiết học này"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+
+                          <div className="text-xs text-[#A9B8AE] flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-[#22C55E]" />
+                            <span>{entry.startLocalTime} – {entry.endLocalTime}</span>
                           </div>
+
+                          {entry.teacher && (
+                            <div className="text-xs text-[#86EFAC] flex items-center gap-1.5 font-medium">
+                              <UserCheck className="w-3.5 h-3.5 text-[#22C55E]" />
+                              <span>GV: {entry.teacher}</span>
+                            </div>
+                          )}
+
+                          {entry.location && (
+                            <div className="text-xs text-[#A9B8AE] flex items-center gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-[#22C55E]" />
+                              <span>{entry.location}</span>
+                            </div>
+                          )}
+
+                          {(entry.commuteBeforeMinutes || entry.commuteAfterMinutes) ? (
+                            <div className="text-[10px] text-[#A9B8AE] pt-1 border-t border-[rgba(34,197,94,0.1)]">
+                              Di chuyển: Trước {entry.commuteBeforeMinutes || 0}p • Sau {entry.commuteAfterMinutes || 0}p
+                            </div>
+                          ) : null}
                         </div>
-
-                        <div className="text-xs text-[#A9B8AE] flex items-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5 text-[#22C55E]" />
-                          <span>{entry.startLocalTime} – {entry.endLocalTime}</span>
-                        </div>
-
-                        {entry.location && (
-                          <div className="text-xs text-[#86EFAC] flex items-center gap-1.5">
-                            <MapPin className="w-3.5 h-3.5 text-[#22C55E]" />
-                            <span>{entry.location}</span>
-                          </div>
-                        )}
-
-                        {(entry.commuteBeforeMinutes || entry.commuteAfterMinutes) ? (
-                          <div className="text-[10px] text-[#A9B8AE] pt-1 border-t border-[rgba(34,197,94,0.1)]">
-                            Di chuyển: Trước {entry.commuteBeforeMinutes || 0}p • Sau {entry.commuteAfterMinutes || 0}p
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
+                      );
+                    })}
                 </div>
               ) : (
                 <div className="p-12 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl space-y-3">
@@ -1002,6 +1351,7 @@ export const TimetablePage: React.FC = () => {
                     onClick={() => {
                       setEditingEntry(null);
                       setEntryTitle('');
+                      setEntryTeacher('');
                       setEntrySubjectId(subjects[0]?.id || '');
                       setEntryDayOfWeek(selectedDayOfWeek);
                       setEntryLocation('');
@@ -1063,58 +1413,67 @@ export const TimetablePage: React.FC = () => {
 
                       {/* Day Entries List */}
                       <div className="space-y-2 flex-1">
-                        {dayEntries.map((e, idx) => (
-                          <div
-                            key={e.id}
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              openEditEntry(e);
-                            }}
-                            className="p-2.5 rounded-xl bg-[#101A13] hover:bg-[#142319] border border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/50 text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm"
-                            title="Bấm để chỉnh sửa tiết học này"
-                          >
-                            <div className="flex items-center justify-between gap-1">
-                              <div className="font-bold text-[#F3FAF5] truncate pr-1">
-                                <span className="text-[#86EFAC] mr-1 font-black">T{idx + 1}:</span>
-                                {e.title}
+                        {dayEntries.map((e, idx) => {
+                          const theme = getSubjectColorTheme(e.title, e.subjectName);
+                          return (
+                            <div
+                              key={e.id}
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                openEditEntry(e);
+                              }}
+                              className={`p-2.5 rounded-xl ${theme.bg} border ${theme.border} text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm`}
+                              title="Bấm để chỉnh sửa tiết học này"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="font-bold text-[#F3FAF5] truncate pr-1">
+                                  <span className="text-[#86EFAC] mr-1 font-black">T{idx + 1}:</span>
+                                  {e.title}
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      openEditEntry(e);
+                                    }}
+                                    className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] transition-colors cursor-pointer"
+                                    title="Chỉnh sửa tiết học"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      handleDeleteEntry(e.id, e.title);
+                                    }}
+                                    className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
+                                    title="Xóa tiết học này"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={(ev) => {
-                                    ev.stopPropagation();
-                                    openEditEntry(e);
-                                  }}
-                                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] transition-colors cursor-pointer"
-                                  title="Chỉnh sửa tiết học"
-                                >
-                                  <Edit2 className="w-3 h-3" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(ev) => {
-                                    ev.stopPropagation();
-                                    handleDeleteEntry(e.id, e.title);
-                                  }}
-                                  className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
-                                  title="Xóa tiết học này"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
+                              <div className="text-[#A9B8AE] text-[10px] flex items-center gap-1">
+                                <Clock className="w-3 h-3 text-[#22C55E]" />
+                                <span>{e.startLocalTime} – {e.endLocalTime}</span>
                               </div>
+                              {e.teacher && (
+                                <div className="text-[10px] text-[#86EFAC] truncate flex items-center gap-1 font-medium">
+                                  <UserCheck className="w-2.5 h-2.5 text-[#22C55E]" />
+                                  <span>GV: {e.teacher}</span>
+                                </div>
+                              )}
+                              {e.location && (
+                                <div className="text-[10px] text-[#A9B8AE] truncate flex items-center gap-1">
+                                  <MapPin className="w-2.5 h-2.5 text-[#22C55E]" />
+                                  <span>{e.location}</span>
+                                </div>
+                              )}
                             </div>
-                            <div className="text-[#A9B8AE] text-[10px] flex items-center gap-1">
-                              <Clock className="w-3 h-3 text-[#22C55E]" />
-                              <span>{e.startLocalTime} – {e.endLocalTime}</span>
-                            </div>
-                            {e.location && (
-                              <div className="text-[10px] text-[#86EFAC] truncate flex items-center gap-1">
-                                <MapPin className="w-2.5 h-2.5 text-[#22C55E]" />
-                                <span>{e.location}</span>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
 
                         {dayEntries.length === 0 && (
                           <div className="py-6 text-center text-[10px] text-[#A9B8AE]/60 italic border border-dashed border-[rgba(34,197,94,0.1)] rounded-xl">
@@ -1130,6 +1489,7 @@ export const TimetablePage: React.FC = () => {
                           ev.stopPropagation();
                           setEditingEntry(null);
                           setEntryTitle('');
+                          setEntryTeacher('');
                           setEntrySubjectId(subjects[0]?.id || '');
                           setEntryDayOfWeek(day.dayOfWeek);
                           setEntryLocation('');
@@ -1203,22 +1563,33 @@ export const TimetablePage: React.FC = () => {
 
             <div className="flex flex-wrap items-center gap-2.5">
               {/* Week Navigator */}
-              <div className="flex items-center bg-[#101A13] px-2 py-1 rounded-xl border border-[rgba(34,197,94,0.18)] text-xs text-[#F3FAF5]">
+              <div className="flex items-center bg-[#101A13] p-1 rounded-xl border border-[rgba(34,197,94,0.22)] text-xs text-[#F3FAF5]">
                 <button
                   type="button"
                   onClick={() => setCurrentWeekOffset((prev) => prev - 1)}
-                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] rounded cursor-pointer"
+                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#142319] rounded cursor-pointer transition-colors"
                   title="Tuần trước"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
-                <span className="px-2 font-bold text-xs text-[#86EFAC]">
-                  {formatDateVN(weekDays[0].date)} – {formatDateVN(weekDays[6].date)}
-                </span>
+                <div className="relative flex items-center px-1">
+                  <Calendar className="w-3.5 h-3.5 text-[#22C55E] mr-1.5 shrink-0 pointer-events-none" />
+                  <select
+                    value={currentWeekOffset}
+                    onChange={(e) => setCurrentWeekOffset(Number(e.target.value))}
+                    className="bg-transparent text-xs font-bold text-[#86EFAC] focus:outline-none cursor-pointer pr-1 [&>option]:bg-[#0B120D] [&>option]:text-[#F3FAF5]"
+                  >
+                    {weekOptions.map((opt) => (
+                      <option key={opt.offset} value={opt.offset}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <button
                   type="button"
                   onClick={() => setCurrentWeekOffset((prev) => prev + 1)}
-                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] rounded cursor-pointer"
+                  className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] hover:bg-[#142319] rounded cursor-pointer transition-colors"
                   title="Tuần kế tiếp"
                 >
                   <ChevronRight className="w-4 h-4" />
@@ -1227,9 +1598,9 @@ export const TimetablePage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setCurrentWeekOffset(0)}
-                    className="ml-1 px-2 py-0.5 bg-[#14532D] text-[#86EFAC] text-[10px] font-bold rounded cursor-pointer border border-[#22C55E]/30"
+                    className="ml-1 px-2 py-0.5 bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] text-[10px] font-bold rounded cursor-pointer border border-[#22C55E]/30 transition-all"
                   >
-                    Hôm nay
+                    Tuần hiện tại
                   </button>
                 )}
               </div>
@@ -1256,19 +1627,37 @@ export const TimetablePage: React.FC = () => {
                 </button>
               </div>
 
+              {/* Undo Replan Button */}
+              {lastTaskSnapshot && (
+                <button
+                  type="button"
+                  onClick={handleUndoReplan}
+                  disabled={isUndoing}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-950/70 hover:bg-amber-900/90 text-amber-200 border border-amber-600/50 text-xs font-bold transition-all cursor-pointer shadow-md shadow-amber-950/40 disabled:opacity-50"
+                  title="Khôi phục lại lịch trước lần AI tự động xếp gần nhất"
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${isUndoing ? 'animate-spin' : ''}`} />
+                  <span>{isUndoing ? 'Đang hoàn tác...' : 'Hoàn tác xếp lịch'}</span>
+                </button>
+              )}
+
               {/* Actions for Schedule */}
               <button
                 type="button"
                 onClick={() => {
                   setEditingEvent(null);
                   setEventTitle('');
+                  setEventLocation('');
+                  setEventCommuteBefore(0);
+                  setEventCommuteAfter(0);
+                  setEventIsFixed(true);
                   setEventDate(selectedDayInfo.dateStr);
                   setIsAddEventOpen(true);
                 }}
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#F3FAF5] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5 text-[#86EFAC]" />
-                <span>Thêm lịch bận</span>
+                <span>Thêm lịch học thêm / việc bận</span>
               </button>
 
               <button
@@ -1282,6 +1671,34 @@ export const TimetablePage: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Missed / Overdue Tasks Auto-Replan Alert Banner */}
+          {missedTasks.length > 0 && (
+            <div className="p-4 rounded-2xl bg-amber-950/50 border border-amber-500/50 text-amber-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-950/20">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-900/80 text-amber-300 shrink-0">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-amber-100">
+                    Phát hiện {missedTasks.length} nhiệm vụ đã qua giờ học nhưng chưa hoàn thành!
+                  </div>
+                  <div className="text-[11px] text-amber-300/80 mt-0.5">
+                    Các bài tập bị trễ: {missedTasks.slice(0, 3).map((t) => t.title).join(', ')}{missedTasks.length > 3 ? '...' : ''}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleTriggerReplan}
+                disabled={isReplanning}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-extrabold text-xs rounded-xl shadow cursor-pointer shrink-0 disabled:opacity-50 transition-all flex items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>AI Tự động xếp lại vào giờ trống mới</span>
+              </button>
+            </div>
+          )}
 
           {/* Day Selector Tabs for Schedule */}
           <div className="grid grid-cols-7 gap-2">
@@ -1331,7 +1748,7 @@ export const TimetablePage: React.FC = () => {
                         <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.15)]">
                           <h3 className="text-xs font-bold text-[#A9B8AE] uppercase tracking-wider flex items-center gap-1.5">
                             <Clock className="w-3.5 h-3.5 text-amber-400" />
-                            <span>1. Học Thêm & Lịch Bận Cá Nhân</span>
+                            <span>1. Học Thêm, CLB & Lịch Bận Cá Nhân</span>
                           </h3>
                           <span className="text-[10px] font-extrabold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-full border border-amber-800/40">
                             {dayEvents.length} sự kiện
@@ -1341,9 +1758,22 @@ export const TimetablePage: React.FC = () => {
                         {dayEvents.length > 0 ? (
                           <div className="space-y-2.5">
                             {dayEvents.map((evt) => (
-                              <div key={evt.id} className="p-3.5 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.2)] space-y-1 relative group">
+                              <div key={evt.id} className="p-3.5 rounded-2xl bg-[#101A13] border border-amber-900/30 hover:border-amber-700/50 space-y-1.5 relative group shadow-sm">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-xs font-bold text-[#F3FAF5]">{evt.title}</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-xs font-bold text-[#F3FAF5]">{evt.title}</span>
+                                    {evt.isFixed && (
+                                      <span className="text-[9px] font-black bg-amber-950/80 text-amber-300 border border-amber-700/50 px-1.5 py-0.5 rounded flex items-center gap-0.5" title="Sự kiện cố định không dời lịch">
+                                        <Lock className="w-2.5 h-2.5" />
+                                        <span>Cố định</span>
+                                      </span>
+                                    )}
+                                    {evt.type === 'club' && (
+                                      <span className="text-[9px] font-black bg-indigo-950/80 text-indigo-300 border border-indigo-700/50 px-1.5 py-0.5 rounded">
+                                        CLB
+                                      </span>
+                                    )}
+                                  </div>
                                   <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
                                     <button
                                       type="button"
@@ -1367,9 +1797,21 @@ export const TimetablePage: React.FC = () => {
                                   <Clock className="w-3 h-3 text-[#22C55E]" />
                                   <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
                                 </div>
+                                {evt.location && (
+                                  <div className="text-[11px] text-[#86EFAC] flex items-center gap-1">
+                                    <MapPin className="w-3 h-3 text-[#22C55E]" />
+                                    <span>{evt.location}</span>
+                                  </div>
+                                )}
+                                {(evt.commuteBeforeMinutes || evt.commuteAfterMinutes) ? (
+                                  <div className="text-[10px] text-[#A9B8AE] flex items-center gap-1">
+                                    <Car className="w-3 h-3 text-amber-400" />
+                                    <span>Di chuyển: Trước {evt.commuteBeforeMinutes || 0}p • Sau {evt.commuteAfterMinutes || 0}p</span>
+                                  </div>
+                                ) : null}
                                 {evt.recurrenceRule && (
-                                  <div className="text-[10px] text-[#86EFAC] font-semibold">
-                                    • Lặp: {evt.recurrenceRule.includes('WEEKLY') ? 'Hàng tuần' : 'Hàng ngày'}
+                                  <div className="text-[10px] text-amber-400/90 font-semibold">
+                                    • Lặp lại: {evt.recurrenceRule.includes('WEEKLY') ? 'Hàng tuần' : evt.recurrenceRule.includes('DAILY') ? 'Hàng ngày' : 'Định kỳ'}
                                   </div>
                                 )}
                               </div>
@@ -1492,7 +1934,10 @@ export const TimetablePage: React.FC = () => {
                           title="Bấm để chỉnh sửa lịch bận này"
                         >
                           <div className="flex items-center justify-between gap-1">
-                            <div className="font-bold text-amber-200 truncate pr-1">{evt.title}</div>
+                            <div className="font-bold text-amber-200 truncate pr-1 flex items-center gap-1">
+                              <span>{evt.title}</span>
+                              {evt.isFixed && <Lock className="w-2.5 h-2.5 text-amber-400 shrink-0" />}
+                            </div>
                             <div className="flex items-center gap-1 shrink-0">
                               <button
                                 type="button"
@@ -1522,6 +1967,18 @@ export const TimetablePage: React.FC = () => {
                             <Clock className="w-3 h-3 text-amber-400" />
                             <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
                           </div>
+                          {evt.location && (
+                            <div className="text-[10px] text-[#86EFAC] truncate flex items-center gap-1">
+                              <MapPin className="w-2.5 h-2.5 text-[#22C55E]" />
+                              <span>{evt.location}</span>
+                            </div>
+                          )}
+                          {(evt.commuteBeforeMinutes || evt.commuteAfterMinutes) ? (
+                            <div className="text-[9px] text-[#A9B8AE] flex items-center gap-1">
+                              <Car className="w-2.5 h-2.5 text-amber-400" />
+                              <span>{evt.commuteBeforeMinutes || 0}p trước • {evt.commuteAfterMinutes || 0}p sau</span>
+                            </div>
+                          ) : null}
                         </div>
                       ))}
 
@@ -1589,6 +2046,17 @@ export const TimetablePage: React.FC = () => {
                   placeholder="Ví dụ: Toán học - Đại số"
                   value={entryTitle}
                   onChange={(e) => setEntryTitle(e.target.value)}
+                  className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#F3FAF5] mb-1">Giáo viên phụ trách:</label>
+                <input
+                  type="text"
+                  placeholder="Ví dụ: Thầy Hùng / Cô Mai"
+                  value={entryTeacher}
+                  onChange={(e) => setEntryTeacher(e.target.value)}
                   className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
                 />
               </div>
@@ -1719,13 +2187,13 @@ export const TimetablePage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Thêm / Sửa Lịch Bận / Học Thêm */}
+      {/* Modal: Thêm / Sửa Lịch Bận / Học Thêm / CLB */}
       {isAddEventOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5]">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-[#F3FAF5]">
-                {editingEvent ? 'Sửa lịch học thêm / việc bận' : 'Thêm lịch học thêm hoặc việc bận'}
+                {editingEvent ? 'Sửa lịch học thêm / việc bận' : 'Thêm lịch học thêm, CLB hoặc việc bận'}
               </h3>
               <button onClick={() => setIsAddEventOpen(false)} className="text-[#A9B8AE] hover:text-white">
                 <X className="w-5 h-5" />
@@ -1738,7 +2206,7 @@ export const TimetablePage: React.FC = () => {
                 <input
                   type="text"
                   required
-                  placeholder="Ví dụ: Học thêm Toán Thầy Hùng"
+                  placeholder="Ví dụ: Học thêm Toán Thầy Hùng, CLB Bóng đá..."
                   value={eventTitle}
                   onChange={(e) => setEventTitle(e.target.value)}
                   className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
@@ -1747,17 +2215,18 @@ export const TimetablePage: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-bold text-[#F3FAF5] mb-1">Loại:</label>
+                  <label className="block font-bold text-[#F3FAF5] mb-1">Loại hoạt động:</label>
                   <select
                     value={eventType}
                     onChange={(e) => setEventType(e.target.value as any)}
                     className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none cursor-pointer [&>option]:bg-[#0B120D] [&>option]:text-[#F3FAF5]"
                   >
-                    <option value="extra_class">Học thêm</option>
-                    <option value="personal">Việc cá nhân</option>
-                    <option value="commute">Di chuyển</option>
-                    <option value="meal">Ăn uống</option>
-                    <option value="sleep">Nghỉ ngơi</option>
+                    <option value="extra_class">📚 Lớp học thêm</option>
+                    <option value="club">⚽ Câu lạc bộ / Năng khiếu</option>
+                    <option value="personal">👤 Việc cá nhân / Gia đình</option>
+                    <option value="commute">🚗 Di chuyển</option>
+                    <option value="meal">🍱 Ăn uống</option>
+                    <option value="sleep">🛌 Nghỉ ngơi / Giấc ngủ</option>
                   </select>
                 </div>
 
@@ -1775,6 +2244,42 @@ export const TimetablePage: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#F3FAF5] mb-1">Địa điểm diễn ra:</label>
+                <input
+                  type="text"
+                  placeholder="Ví dụ: Trung tâm BDVH, Nhà thi đấu..."
+                  value={eventLocation}
+                  onChange={(e) => setEventLocation(e.target.value)}
+                  className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-bold text-[#F3FAF5] mb-1">Di chuyển trước (phút):</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    value={eventCommuteBefore}
+                    onChange={(e) => setEventCommuteBefore(Number(e.target.value))}
+                    className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-[#F3FAF5] mb-1">Di chuyển sau (phút):</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    value={eventCommuteAfter}
+                    onChange={(e) => setEventCommuteAfter(Number(e.target.value))}
+                    className="w-full p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
+                  />
                 </div>
               </div>
 
@@ -1883,6 +2388,23 @@ export const TimetablePage: React.FC = () => {
                   />
                 </div>
               )}
+
+              <div className="p-3 bg-[#050806] rounded-xl border border-[rgba(34,197,94,0.2)] flex items-center justify-between">
+                <div>
+                  <label htmlFor="isFixedCheck" className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1 cursor-pointer">
+                    <Lock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Sự kiện cố định</span>
+                  </label>
+                  <p className="text-[10px] text-[#A9B8AE]">AI sẽ không bao giờ tự ý dời hay ghi đè lên lịch này</p>
+                </div>
+                <input
+                  id="isFixedCheck"
+                  type="checkbox"
+                  checked={eventIsFixed}
+                  onChange={(e) => setEventIsFixed(e.target.checked)}
+                  className="w-4 h-4 text-[#16A34A] accent-[#16A34A] rounded cursor-pointer"
+                />
+              </div>
 
               <div className="flex items-center justify-between pt-3 border-t border-[rgba(34,197,94,0.15)]">
                 {editingEvent ? (
@@ -2370,6 +2892,63 @@ export const TimetablePage: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Xác nhận chuyển tuần và xử lý Thời Khóa Biểu cũ */}
+      {isWeekSwitchModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.35)] p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-5 text-[#F3FAF5]">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-950/80 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
+                <Calendar className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-[#F3FAF5]">Chuyển sang tuần mới</h3>
+                <p className="text-xs text-[#86EFAC] font-bold">
+                  {targetWeekDays ? `${formatDateFullVN(targetWeekDays.start)} – ${formatDateFullVN(targetWeekDays.end)}` : ''}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.18)] space-y-2">
+              <p className="text-xs text-[#F3FAF5] leading-relaxed">
+                Bạn đang có <strong className="text-[#86EFAC]">{timetableEntries.length} tiết học</strong> trong thời khóa biểu hiện tại.
+              </p>
+              <p className="text-xs text-[#A9B8AE] leading-relaxed">
+                Bạn có muốn <strong className="text-[#F3FAF5]">tiếp tục áp dụng thời khóa biểu cũ</strong> cho tuần mới không, hay muốn <strong className="text-rose-300">xóa tất cả để nhập lại mới</strong>?
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsWeekSwitchModalOpen(false);
+                  setTargetWeekOffset(null);
+                }}
+                className="px-4 py-2.5 text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] rounded-xl cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetAndInputNew}
+                className="px-4 py-2.5 rounded-xl bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-800/60 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-rose-950/40"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa tất cả & Nhập TKB mới</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmKeepOldTimetable}
+                className="px-4 py-2.5 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-[#16A34A]/25"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Tiếp tục TKB cũ</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

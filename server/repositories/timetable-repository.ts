@@ -170,7 +170,7 @@ export class TimetableRepository {
   public async getTimetableEntries(userId: string, timetableId?: string): Promise<TimetableEntry[]> {
     if (db.isHealthy()) {
       let query = `
-        SELECT e.id, e.timetable_id, e.subject_id, e.title, e.day_of_week, e.start_local_time, e.end_local_time,
+        SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.day_of_week, e.start_local_time, e.end_local_time,
                e.location, e.commute_before_minutes, e.commute_after_minutes,
                s.name as subject_name, s.color as subject_color
         FROM school_timetable_entries e
@@ -199,6 +199,7 @@ export class TimetableRepository {
         subjectName: r.subject_name || r.title,
         subjectColor: r.subject_color || '#16A34A',
         title: r.title,
+        teacher: r.teacher || undefined,
         room: r.location || '',
         location: r.location || '',
         startLocalTime: r.start_local_time,
@@ -234,6 +235,7 @@ export class TimetableRepository {
       subjectId: data.subjectId || undefined,
       subjectName: data.subjectName || data.title || 'Tiết học',
       title: data.title || 'Tiết học',
+      teacher: data.teacher || undefined,
       dayOfWeek: Number(data.dayOfWeek) || 1,
       startLocalTime: data.startLocalTime || '07:30',
       endLocalTime: data.endLocalTime || '11:45',
@@ -256,13 +258,14 @@ export class TimetableRepository {
       }
 
       await db.execute(
-        `INSERT INTO school_timetable_entries (id, timetable_id, subject_id, title, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO school_timetable_entries (id, timetable_id, subject_id, title, teacher, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.id,
           entry.timetableId,
           entry.subjectId || null,
           entry.title,
+          entry.teacher || null,
           entry.dayOfWeek,
           entry.startLocalTime,
           entry.endLocalTime,
@@ -298,6 +301,7 @@ export class TimetableRepository {
       const params: any[] = [];
 
       if (data.title !== undefined) { sets.push('title = ?'); params.push(data.title); }
+      if (data.teacher !== undefined) { sets.push('teacher = ?'); params.push(data.teacher || null); }
       if (data.subjectId !== undefined) {
         if (data.subjectId) {
           const sub = await db.query<any>('SELECT id FROM subjects WHERE id = ? AND user_id = ?', [data.subjectId, userId]);
@@ -421,7 +425,7 @@ export class TimetableRepository {
     if (db.isHealthy()) {
       let query = `
         SELECT b.id, b.user_id, b.type, b.title, b.starts_at, b.ends_at, b.recurrence_rule, b.timezone,
-               b.is_fixed, b.source, s.name as subject_name
+               b.is_fixed, b.location, b.commute_before_minutes, b.commute_after_minutes, b.source, s.name as subject_name
         FROM busy_events b
         LEFT JOIN subjects s ON b.title = s.name
         WHERE b.user_id = ?
@@ -447,6 +451,9 @@ export class TimetableRepository {
         recurrenceRule: r.recurrence_rule || undefined,
         timezone: r.timezone || 'Asia/Ho_Chi_Minh',
         isFixed: Boolean(r.is_fixed),
+        location: r.location || undefined,
+        commuteBeforeMinutes: r.commute_before_minutes ?? 0,
+        commuteAfterMinutes: r.commute_after_minutes ?? 0,
         subjectName: r.subject_name || undefined,
         source: r.source || 'user',
       }));
@@ -475,14 +482,17 @@ export class TimetableRepository {
       recurrenceRule: event.recurrenceRule || undefined,
       timezone: event.timezone || 'Asia/Ho_Chi_Minh',
       isFixed: event.isFixed ?? true,
+      location: event.location || undefined,
+      commuteBeforeMinutes: event.commuteBeforeMinutes ?? 0,
+      commuteAfterMinutes: event.commuteAfterMinutes ?? 0,
       subjectId: event.subjectId || undefined,
       source: event.source || 'user',
     };
 
     if (db.isHealthy()) {
       await db.execute(
-        `INSERT INTO busy_events (id, user_id, type, title, starts_at, ends_at, recurrence_rule, timezone, is_fixed, source, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+        `INSERT INTO busy_events (id, user_id, type, title, starts_at, ends_at, recurrence_rule, timezone, is_fixed, location, commute_before_minutes, commute_after_minutes, source, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
         [
           created.id,
           userId,
@@ -493,6 +503,9 @@ export class TimetableRepository {
           created.recurrenceRule || null,
           created.timezone,
           created.isFixed ? 1 : 0,
+          created.location || null,
+          created.commuteBeforeMinutes || 0,
+          created.commuteAfterMinutes || 0,
           created.source,
         ]
       );
@@ -523,6 +536,9 @@ export class TimetableRepository {
       if (data.recurrenceRule !== undefined) { sets.push('recurrence_rule = ?'); params.push(data.recurrenceRule || null); }
       if (data.timezone !== undefined) { sets.push('timezone = ?'); params.push(data.timezone); }
       if (data.isFixed !== undefined) { sets.push('is_fixed = ?'); params.push(data.isFixed ? 1 : 0); }
+      if (data.location !== undefined) { sets.push('location = ?'); params.push(data.location || null); }
+      if (data.commuteBeforeMinutes !== undefined) { sets.push('commute_before_minutes = ?'); params.push(data.commuteBeforeMinutes); }
+      if (data.commuteAfterMinutes !== undefined) { sets.push('commute_after_minutes = ?'); params.push(data.commuteAfterMinutes); }
 
       if (sets.length > 0) {
         sets.push('updated_at = NOW(3)');
