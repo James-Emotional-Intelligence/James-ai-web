@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { MODULES_CONFIG } from '../../config/modules';
-import { Layers, Shield } from 'lucide-react';
+import { Layers, Shield, ChevronRight } from 'lucide-react';
 import { useAuth } from '../../features/auth/AuthProvider';
 
 export const TopModuleNav: React.FC = () => {
@@ -27,26 +27,31 @@ export const TopModuleNav: React.FC = () => {
     }
   }, [location.pathname]);
 
+  const toggleGroup = () => {
+    setSelectedGroup((prev) => (prev === '5-8' ? '1-4' : '5-8'));
+  };
+
+  const isGroup58 = selectedGroup === '5-8';
   const visibleModules = MODULES_CONFIG.filter((m) =>
-    selectedGroup === '1-4' ? m.order <= 4 : m.order >= 5
+    isGroup58 ? m.order >= 5 : m.order <= 4
   );
 
   return (
     <nav className="w-full bg-[#080D09] border-t border-b border-[rgba(34,197,94,0.18)] px-2 sm:px-4 lg:px-8 z-30 relative shadow-inner">
       <div className="max-w-[1750px] mx-auto flex items-center gap-2 sm:gap-3 py-1.5 overflow-x-auto no-scrollbar scroll-smooth">
-        {/* Combobox Chọn Nhóm Mục 1-4 / 5-8 */}
-        <div className="flex items-center gap-1.5 shrink-0 bg-[#101A13] border border-[rgba(34,197,94,0.28)] rounded-xl px-2.5 py-1 shadow-sm">
+        {/* Nút Mũi Tên Chuyển Đổi Nhóm Mục 1-4 <-> 5-8 (Mũi tên giữ nguyên hướng) */}
+        <button
+          type="button"
+          onClick={toggleGroup}
+          className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3 py-1.5 shadow-sm text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
+          title={isGroup58 ? 'Bấm để chuyển sang Mục 1 - 4' : 'Bấm để chuyển sang Mục 5 - 8'}
+        >
           <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
-          <select
-            value={selectedGroup === 'admin' ? '1-4' : selectedGroup}
-            onChange={(e) => setSelectedGroup(e.target.value as '1-4' | '5-8')}
-            className="bg-transparent text-xs font-black text-[#86EFAC] focus:outline-none cursor-pointer [&>option]:bg-[#0B120D] [&>option]:text-[#F3FAF5] [&>option]:font-bold"
-            title="Chọn nhóm hiển thị: Mục 1 - 4 hoặc Mục 5 - 8"
-          >
-            <option value="1-4">Mục 1 - 4</option>
-            <option value="5-8">Mục 5 - 8</option>
-          </select>
-        </div>
+          <span>{isGroup58 ? 'Mục 5 - 8' : 'Mục 1 - 4'}</span>
+          <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
+            <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+          </div>
+        </button>
 
         <div className="h-5 w-px bg-[rgba(34,197,94,0.2)] shrink-0 hidden sm:block" />
 
