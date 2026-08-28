@@ -16,22 +16,5 @@
     "BACKEND_API_ORIGIN": "https://your-backend-api.example.com",
     "OPENAI_TEXT_MODEL": "gpt-4o-mini",
     "OPENAI_TRANSCRIBE_MODEL": "gpt-transcribe",
-    "OPENAI_REALTIME_MODEL": "gpt-4o-realtime-preview"
-  }
-  "observability": {
-    "enabled": false,
-    "head_sampling_rate": 1,
-    "redact_query_string": false,
-    "logs": {
-      "enabled": true,
-      "head_sampling_rate": 1,
-      "persist": true,
-      "invocation_logs": true
-    },
-    "traces": {
-      "enabled": false,
-      "persist": true,
-      "head_sampling_rate": 1
-    }
-  }
+    "OPENAI_REALTIME_MODEL": "gpt-4o-realtime-preview"}
 }
