@@ -13470,6 +13470,7 @@ async function startServer() {
       appType: "spa"
     });
     app.use(vite.middlewares);
+  } else {
     const distPath = import_path2.default.join(process.cwd(), "dist");
     app.use("/assets", import_express3.default.static(import_path2.default.join(distPath, "assets"), {
       maxAge: "1y",

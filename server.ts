@@ -45,13 +45,14 @@ async function startServer() {
     }
   }
 
-  // Vite middleware for development
+  // Vite middleware for development vs static serve for production
   if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
+  } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use('/assets', express.static(path.join(distPath, 'assets'), {
       maxAge: '1y',

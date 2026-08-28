@@ -281,12 +281,12 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
 
         {/* ROW 2 - LEFT: 8 Strict Modules Horizontal Navigation */}
         <div className="py-1.5 flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar min-w-0 pr-4">
-          {visibleModules.map((item) => (
+          {visibleModules.map((item, index) => (
             <NavLink
               key={item.id}
               to={item.path}
               className={({ isActive }) =>
-                `flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap group shrink-0 ${
+                `flex items-center gap-1.5 sm:gap-2 ${index === 0 ? 'pl-0 pr-3' : 'px-2.5 sm:px-3'} py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap group shrink-0 ${
                   isActive
                     ? 'bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/40 shadow-sm shadow-[#16A34A]/20'
                     : 'text-[#A9B8AE] hover:text-[#F3FAF5] hover:bg-[#101A13] border border-transparent'
