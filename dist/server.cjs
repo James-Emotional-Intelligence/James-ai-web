@@ -2706,7 +2706,7 @@ Tr\u1EA3 v\u1EC1 \u0111\xFAng \u0111\u1ECBnh d\u1EA1ng JSON chu\u1EA9n:
       }
     }
     return {
-      timetableName: "Th\u1EDDi kh\xF3a bi\u1EC3u tr\u01B0\u1EDDng (M\u1EABu nh\u1EADn d\u1EA1ng AI)",
+      timetableName: "Th\u1EDDi kh\xF3a bi\u1EC3u tr\u01B0\u1EDDng",
       entries: [
         { dayOfWeek: 1, title: "Ch\xE0o c\u1EDD", startLocalTime: "07:15", endLocalTime: "08:00", room: "S\xE2n tr\u01B0\u1EDDng" },
         { dayOfWeek: 1, title: "To\xE1n h\u1ECDc", startLocalTime: "08:05", endLocalTime: "08:50", room: "P.102" },
@@ -3531,10 +3531,11 @@ var TimetableRepository = class _TimetableRepository {
       const timetables = [];
       for (const r of rows) {
         const entries = await this.getTimetableEntries(userId, r.id);
+        const cleanName = (r.name || "Th\u1EDDi kh\xF3a bi\u1EC3u tr\u01B0\u1EDDng").replace(/\s*\(Mẫu nhận dạng AI\)/gi, "").trim() || "Th\u1EDDi kh\xF3a bi\u1EC3u tr\u01B0\u1EDDng";
         timetables.push({
           id: r.id,
           userId: r.user_id,
-          name: r.name,
+          name: cleanName,
           validFrom: r.valid_from ? new Date(r.valid_from).toISOString().split("T")[0] : void 0,
           validTo: r.valid_to ? new Date(r.valid_to).toISOString().split("T")[0] : void 0,
           timezone: r.timezone || "Asia/Ho_Chi_Minh",

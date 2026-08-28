@@ -36,10 +36,11 @@ export class TimetableRepository {
       const timetables: SchoolTimetable[] = [];
       for (const r of rows) {
         const entries = await this.getTimetableEntries(userId, r.id);
+        const cleanName = (r.name || 'Thời khóa biểu trường').replace(/\s*\(Mẫu nhận dạng AI\)/gi, '').trim() || 'Thời khóa biểu trường';
         timetables.push({
           id: r.id,
           userId: r.user_id,
-          name: r.name,
+          name: cleanName,
           validFrom: r.valid_from ? new Date(r.valid_from).toISOString().split('T')[0] : undefined,
           validTo: r.valid_to ? new Date(r.valid_to).toISOString().split('T')[0] : undefined,
           timezone: r.timezone || 'Asia/Ho_Chi_Minh',

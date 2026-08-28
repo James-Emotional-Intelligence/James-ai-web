@@ -844,7 +844,7 @@ Trả về đúng định dạng JSON chuẩn:
 
     // High quality standard Vietnamese curriculum fallback
     return {
-      timetableName: 'Thời khóa biểu trường (Mẫu nhận dạng AI)',
+      timetableName: 'Thời khóa biểu trường',
       entries: [
         { dayOfWeek: 1, title: 'Chào cờ', startLocalTime: '07:15', endLocalTime: '08:00', room: 'Sân trường' },
         { dayOfWeek: 1, title: 'Toán học', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },
