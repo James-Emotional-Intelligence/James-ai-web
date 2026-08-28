@@ -1080,9 +1080,6 @@ export const TimetablePage: React.FC = () => {
               <h2 className="text-lg font-black text-[#F3FAF5]">
                 {activeTimetable ? activeTimetable.name : 'Thời khóa biểu trường học'}
               </h2>
-              <p className="text-xs text-[#A9B8AE] mt-0.5">
-                Các tiết học cố định theo tuần (Thứ 2 đến Chủ Nhật) làm cơ sở để AI tính toán giờ rảnh.
-              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
