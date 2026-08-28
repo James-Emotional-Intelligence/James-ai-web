@@ -37,26 +37,10 @@ export const TopModuleNav: React.FC = () => {
   );
 
   return (
-    <nav className="w-full bg-[#080D09] border-t border-b border-[rgba(34,197,94,0.18)] px-2 sm:px-4 lg:px-8 z-30 relative shadow-inner">
-      <div className="max-w-[1750px] mx-auto flex items-center gap-2 sm:gap-3 py-1.5 overflow-x-auto no-scrollbar scroll-smooth">
-        {/* Nút Mũi Tên Chuyển Đổi Nhóm Mục 1-4 <-> 5-8 (Mũi tên giữ nguyên hướng) */}
-        <button
-          type="button"
-          onClick={toggleGroup}
-          className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3 py-1.5 shadow-sm text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
-          title={isGroup58 ? 'Bấm để chuyển sang Mục 1 - 4' : 'Bấm để chuyển sang Mục 5 - 8'}
-        >
-          <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
-          <span>{isGroup58 ? 'Mục 5 - 8' : 'Mục 1 - 4'}</span>
-          <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
-            <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-          </div>
-        </button>
-
-        <div className="h-5 w-px bg-[rgba(34,197,94,0.2)] shrink-0 hidden sm:block" />
-
-        {/* Danh sách các Module theo nhóm được chọn */}
-        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar">
+    <nav className="w-full bg-[#080D09] border-t border-b border-[rgba(34,197,94,0.18)] px-4 sm:px-6 lg:px-8 z-30 relative shadow-inner">
+      <div className="max-w-[1750px] mx-auto flex items-center justify-between gap-4 py-1.5 overflow-x-auto no-scrollbar scroll-smooth">
+        {/* Danh sách các Module theo nhóm được chọn ở bên trái */}
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0">
           {visibleModules.map((item) => (
             <NavLink
               key={item.id}
@@ -110,6 +94,32 @@ export const TopModuleNav: React.FC = () => {
               </NavLink>
             </>
           )}
+        </div>
+
+        {/* Khối bên phải thẳng hàng với nhóm nút TopAppBar (Nút Chuyển mục đặt thẳng hàng dưới nút 'Bật Jami') */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <div className="h-5 w-px bg-[rgba(34,197,94,0.2)] shrink-0 hidden sm:block" />
+          
+          {/* Nút Chuyển Đổi Nhóm Mục 1-4 <-> 5-8 đặt thẳng hàng dưới nút Bật Jami */}
+          <button
+            type="button"
+            onClick={toggleGroup}
+            className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3 py-1.5 shadow-md text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
+            title={isGroup58 ? 'Bấm để chuyển sang Mục 1 - 4' : 'Bấm để chuyển sang Mục 5 - 8'}
+          >
+            <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
+            <span>{isGroup58 ? 'Mục 5 - 8' : 'Mục 1 - 4'}</span>
+            <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
+              <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+            </div>
+          </button>
+
+          {/* Spacers đối xứng cân chỉnh thẳng hàng theo các nút còn lại của Header (Nói mục tiêu, Bell, Profile) */}
+          <div className="hidden lg:flex items-center gap-2 sm:gap-3 invisible pointer-events-none select-none" aria-hidden="true">
+            <div className="px-3 py-1.5 text-xs font-bold w-[116px]">Nói mục tiêu</div>
+            <div className="p-2 w-8 h-8" />
+            <div className="p-1.5 sm:px-3 sm:py-1.5 w-32" />
+          </div>
         </div>
       </div>
     </nav>
