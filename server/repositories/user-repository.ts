@@ -26,6 +26,8 @@ export class UserRepository {
   private demoUsers: Map<string, StoredUser> = new Map();
   private demoProfiles: Map<string, StudentProfile> = new Map();
   private demoResetTokens: Map<string, DemoResetToken> = new Map();
+  private userCache: Map<string, { user: StoredUser; cachedAt: number }> = new Map();
+  private profileCache: Map<string, { profile: StudentProfile; cachedAt: number }> = new Map();
 
   private constructor() {
     this.seedDemoUserMemory();
@@ -185,7 +187,13 @@ export class UserRepository {
               new Date(),
             ]
           );
-          console.log('[JAMI MySQL] Seeded admin user james.admin@gmail.com into MySQL.');
+
+          await db.execute(
+            `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json, onboarding_completed_at)
+             VALUES (?, 12, 'Ban Quản Trị JAMI AI', '["Quản trị hệ thống JAMI"]', 45, 300, '{"morning":"high","afternoon":"high","evening":"high"}', '{"wakeTime":"06:00","bedTime":"23:00"}', '{"lunch":"12:00","dinner":"19:00"}', NOW(3))`,
+            [adminUser.id]
+          );
+          console.log('[JAMI MySQL] Seeded admin user (james.admin@gmail.com) into MySQL.');
         } else {
           // Ensure admin privileges and correct password hash
           await db.execute(
@@ -195,13 +203,12 @@ export class UserRepository {
         }
       }
     } catch (err: any) {
-      console.warn('[JAMI MySQL] User repository sync notice:', err.message);
+      console.warn('[JAMI MySQL] Sync demo users warning:', err.message);
     }
   }
 
   public async findByEmail(email: string): Promise<StoredUser | undefined> {
-    if (!email) return undefined;
-    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = email.toLowerCase().trim();
 
     if (db.isHealthy()) {
       try {
@@ -223,7 +230,7 @@ export class UserRepository {
             hash = parts[1];
           }
 
-          return {
+          const userObj: StoredUser = {
             id: r.id,
             email: r.email,
             passwordHash: hash,
@@ -238,9 +245,11 @@ export class UserRepository {
             status: r.status || 'active',
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
+          this.userCache.set(r.id, { user: userObj, cachedAt: Date.now() });
+          return userObj;
         }
       } catch (err: any) {
-        if (isProduction) throw err;
+        console.warn(`[UserRepository] DB query findByEmail warning:`, err.message);
       }
     }
 
@@ -249,6 +258,11 @@ export class UserRepository {
 
   public async findById(id: string): Promise<StoredUser | undefined> {
     if (!id) return undefined;
+
+    const cached = this.userCache.get(id);
+    if (cached && Date.now() - cached.cachedAt < 60000) {
+      return cached.user;
+    }
 
     if (db.isHealthy()) {
       try {
@@ -270,7 +284,7 @@ export class UserRepository {
             hash = parts[1];
           }
 
-          return {
+          const userObj: StoredUser = {
             id: r.id,
             email: r.email,
             passwordHash: hash,
@@ -285,11 +299,17 @@ export class UserRepository {
             status: r.status || 'active',
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
+
+          this.userCache.set(id, { user: userObj, cachedAt: Date.now() });
+          return userObj;
         }
       } catch (err: any) {
-        if (isProduction) throw err;
+        console.warn(`[UserRepository] DB query findById(${id}) warning:`, err.message);
+        if (cached) return cached.user;
       }
     }
+
+    if (cached) return cached.user;
 
     for (const u of this.demoUsers.values()) {
       if (u.id === id) return u;
@@ -300,6 +320,11 @@ export class UserRepository {
 
   public async getProfile(userId: string): Promise<StudentProfile | undefined> {
     if (!userId) return undefined;
+
+    const cached = this.profileCache.get(userId);
+    if (cached && Date.now() - cached.cachedAt < 60000) {
+      return cached.profile;
+    }
 
     if (db.isHealthy()) {
       try {
@@ -312,9 +337,9 @@ export class UserRepository {
 
         if (rows.length > 0) {
           const p = rows[0];
-          return {
+          const prof: StudentProfile = {
             userId: p.user_id,
-            gradeLevel: p.grade_level,
+            gradeLevel: p.grade_level || 9,
             schoolName: p.school_name || 'THCS / THPT',
             goals: typeof p.goals_json === 'string' ? JSON.parse(p.goals_json) : p.goals_json || [],
             preferredSessionMinutes: p.preferred_session_minutes || 45,
@@ -322,13 +347,18 @@ export class UserRepository {
             energyPreferences: typeof p.energy_preferences_json === 'string' ? JSON.parse(p.energy_preferences_json) : p.energy_preferences_json || {},
             sleepSchedule: typeof p.sleep_schedule_json === 'string' ? JSON.parse(p.sleep_schedule_json) : p.sleep_schedule_json || { wakeTime: '06:00', bedTime: '22:30' },
             mealTimes: typeof p.meal_times_json === 'string' ? JSON.parse(p.meal_times_json) : p.meal_times_json || { lunch: '11:45', dinner: '18:30' },
+            onboardingCompletedAt: p.onboarding_completed_at ? new Date(p.onboarding_completed_at).toISOString() : undefined,
           };
+          this.profileCache.set(userId, { profile: prof, cachedAt: Date.now() });
+          return prof;
         }
       } catch (err: any) {
-        if (isProduction) throw err;
+        console.warn(`[UserRepository] DB query getProfile(${userId}) warning:`, err.message);
+        if (cached) return cached.profile;
       }
     }
 
+    if (cached) return cached.profile;
     return this.demoProfiles.get(userId);
   }
 
