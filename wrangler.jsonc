@@ -6,15 +6,17 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
   "vars": {
     "APP_MODE": "production",
-    "BACKEND_API_ORIGIN": "https://your-backend-api.example.com",
+    "BACKEND_API_ORIGIN": "https://james-ai-web.james-ei-dn.workers.dev/",
     "OPENAI_TEXT_MODEL": "gpt-4o-mini",
     "OPENAI_TRANSCRIBE_MODEL": "gpt-transcribe",
-    "OPENAI_REALTIME_MODEL": "gpt-4o-realtime-preview"}
+    "OPENAI_REALTIME_MODEL": "gpt-4o-realtime-preview"
+  }
 }
