@@ -69,9 +69,27 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setIsPreferencesLoading(true);
     try {
       const res = await api.getNotificationPreferences();
-      setPreferences(res.preferences);
+      if (res?.preferences) {
+        setPreferences(res.preferences);
+      }
     } catch (err: any) {
-      console.warn('[NotificationContext] Failed to fetch preferences:', err.message);
+      console.warn('[NotificationContext] Failed to fetch preferences, using cached/defaults:', err.message);
+      setPreferences((prev) => prev || {
+        userId: '',
+        upcomingClass: true,
+        upcomingExam: true,
+        incompleteTask: true,
+        soundEnabled: true,
+        leadMinutes: 15,
+        classLeadMinutes: 15,
+        taskLeadMinutes: 30,
+        examLeadDays: 1,
+        quietHoursStart: '22:30',
+        quietHoursEnd: '06:30',
+        timezone: 'Asia/Ho_Chi_Minh',
+        inAppEnabled: true,
+        webPushEnabled: false,
+      });
     } finally {
       setIsPreferencesLoading(false);
     }

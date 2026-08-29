@@ -143,7 +143,7 @@ async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> 
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   let response: Response;
   try {
