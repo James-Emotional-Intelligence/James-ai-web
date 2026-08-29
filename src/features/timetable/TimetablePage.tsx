@@ -11,6 +11,7 @@ import {
   Sparkles,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   BookOpen,
   AlertTriangle,
   X,
@@ -1073,12 +1074,25 @@ export const TimetablePage: React.FC = () => {
         <div className="space-y-6">
           {/* Subheader & Timetable Action Bar */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.22)] shadow-xl">
-            <div>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#14532D]/70 text-[#86EFAC] border border-[#22C55E]/30 text-[10px] font-black uppercase tracking-wider mb-1">
-                🏫 BẢNG 1: THỜI KHÓA BIỂU CỐ ĐỊNH TRÊN LỚP
-              </div>
-              <h2 className="text-lg font-black text-[#F3FAF5]">
-                {activeTimetable ? activeTimetable.name : 'Thời khóa biểu trường học'}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveTab('schedule')}
+                className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3.5 py-2 shadow-md text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
+                title="Bấm để chuyển sang Bảng 2: Thời gian biểu sinh hoạt & tự học"
+              >
+                <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
+                <span>Bảng 1</span>
+                <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
+                  <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                </div>
+              </button>
+
+              <div className="h-5 w-px bg-[rgba(34,197,94,0.2)] shrink-0 hidden sm:block" />
+
+              <h2 className="text-base font-black text-[#F3FAF5] flex items-center gap-2">
+                <School className="w-4 h-4 text-[#22C55E]" />
+                <span>Thời Khóa Biểu Trường Học</span>
               </h2>
             </div>
 
@@ -1546,16 +1560,26 @@ export const TimetablePage: React.FC = () => {
         <div className="space-y-6">
           {/* Subheader & Schedule Controls */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.22)] shadow-xl">
-            <div>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-950/70 text-amber-300 border border-amber-800/40 text-[10px] font-black uppercase tracking-wider mb-1">
-                ⏱️ BẢNG 2: THỜI GIAN BIỂU & TỰ ĐỘNG XẾP LỊCH TỰ HỌC
-              </div>
-              <h2 className="text-lg font-black text-[#F3FAF5]">
-                Dòng Thời Gian Sinh Hoạt & Tự Học Trong Tuần
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveTab('timetable')}
+                className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3.5 py-2 shadow-md text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
+                title="Bấm để chuyển sang Bảng 1: Thời khóa biểu trường học"
+              >
+                <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
+                <span>Bảng 2</span>
+                <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
+                  <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                </div>
+              </button>
+
+              <div className="h-5 w-px bg-[rgba(34,197,94,0.2)] shrink-0 hidden sm:block" />
+
+              <h2 className="text-base font-black text-[#F3FAF5] flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#22C55E]" />
+                <span>Thời Gian Biểu & Tự Động Xếp Lịch Tự Học</span>
               </h2>
-              <p className="text-xs text-[#A9B8AE] mt-0.5">
-                Kết hợp lịch học thêm, việc bận cá nhân và các bài tập do AI thông minh tự động bố trí.
-              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
