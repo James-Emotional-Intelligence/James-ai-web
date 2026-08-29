@@ -7976,40 +7976,46 @@ var NotificationRepository = class _NotificationRepository {
       webPushEnabled: false
     };
     if (db.isHealthy()) {
-      const rows = await db.query(
-        `SELECT user_id, upcoming_class, upcoming_exam, incomplete_task, sound_enabled,
-                lead_minutes, class_lead_minutes, task_lead_minutes, exam_lead_days,
-                quiet_hours_start, quiet_hours_end, timezone, in_app_enabled, web_push_enabled, push_subscription_json
-         FROM notification_preferences
-         WHERE user_id = ?`,
-        [userId]
-      );
-      if (rows.length > 0) {
-        const r = rows[0];
-        let sub = void 0;
-        try {
-          if (r.push_subscription_json) {
-            sub = typeof r.push_subscription_json === "string" ? JSON.parse(r.push_subscription_json) : r.push_subscription_json;
+      try {
+        const rows = await db.query(
+          `SELECT user_id, upcoming_class, upcoming_exam, incomplete_task, sound_enabled,
+                  lead_minutes, class_lead_minutes, task_lead_minutes, exam_lead_days,
+                  quiet_hours_start, quiet_hours_end, timezone, in_app_enabled, web_push_enabled, push_subscription_json
+           FROM notification_preferences
+           WHERE user_id = ?`,
+          [userId]
+        );
+        if (rows.length > 0) {
+          const r = rows[0];
+          let sub = void 0;
+          try {
+            if (r.push_subscription_json) {
+              sub = typeof r.push_subscription_json === "string" ? JSON.parse(r.push_subscription_json) : r.push_subscription_json;
+            }
+          } catch {
           }
-        } catch {
+          const pref = {
+            userId: r.user_id,
+            upcomingClass: Boolean(r.upcoming_class ?? true),
+            upcomingExam: Boolean(r.upcoming_exam ?? true),
+            incompleteTask: Boolean(r.incomplete_task ?? true),
+            soundEnabled: Boolean(r.sound_enabled ?? true),
+            leadMinutes: Number(r.lead_minutes ?? 15),
+            classLeadMinutes: Number(r.class_lead_minutes ?? 15),
+            taskLeadMinutes: Number(r.task_lead_minutes ?? 30),
+            examLeadDays: Number(r.exam_lead_days ?? 1),
+            quietHoursStart: r.quiet_hours_start || "22:30",
+            quietHoursEnd: r.quiet_hours_end || "06:30",
+            timezone: r.timezone || "Asia/Ho_Chi_Minh",
+            inAppEnabled: Boolean(r.in_app_enabled ?? true),
+            webPushEnabled: Boolean(r.web_push_enabled ?? false),
+            pushSubscription: sub
+          };
+          this.demoPreferences.set(userId, pref);
+          return pref;
         }
-        return {
-          userId: r.user_id,
-          upcomingClass: Boolean(r.upcoming_class ?? true),
-          upcomingExam: Boolean(r.upcoming_exam ?? true),
-          incompleteTask: Boolean(r.incomplete_task ?? true),
-          soundEnabled: Boolean(r.sound_enabled ?? true),
-          leadMinutes: Number(r.lead_minutes ?? 15),
-          classLeadMinutes: Number(r.class_lead_minutes ?? 15),
-          taskLeadMinutes: Number(r.task_lead_minutes ?? 30),
-          examLeadDays: Number(r.exam_lead_days ?? 1),
-          quietHoursStart: r.quiet_hours_start || "22:30",
-          quietHoursEnd: r.quiet_hours_end || "06:30",
-          timezone: r.timezone || "Asia/Ho_Chi_Minh",
-          inAppEnabled: Boolean(r.in_app_enabled ?? true),
-          webPushEnabled: Boolean(r.web_push_enabled ?? false),
-          pushSubscription: sub
-        };
+      } catch (dbErr) {
+        console.warn(`[NotificationRepo] Failed to query preferences for ${userId}:`, dbErr.message);
       }
     }
     return this.demoPreferences.get(userId) || defaults;
@@ -8021,50 +8027,53 @@ var NotificationRepository = class _NotificationRepository {
       ...updates,
       userId
     };
+    this.demoPreferences.set(userId, merged);
     if (db.isHealthy()) {
-      await db.execute(
-        `INSERT INTO notification_preferences (
-          user_id, upcoming_class, upcoming_exam, incomplete_task, sound_enabled,
-          lead_minutes, class_lead_minutes, task_lead_minutes, exam_lead_days,
-          quiet_hours_start, quiet_hours_end, timezone, in_app_enabled, web_push_enabled,
-          push_subscription_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))
-        ON DUPLICATE KEY UPDATE
-          upcoming_class = VALUES(upcoming_class),
-          upcoming_exam = VALUES(upcoming_exam),
-          incomplete_task = VALUES(incomplete_task),
-          sound_enabled = VALUES(sound_enabled),
-          lead_minutes = VALUES(lead_minutes),
-          class_lead_minutes = VALUES(class_lead_minutes),
-          task_lead_minutes = VALUES(task_lead_minutes),
-          exam_lead_days = VALUES(exam_lead_days),
-          quiet_hours_start = VALUES(quiet_hours_start),
-          quiet_hours_end = VALUES(quiet_hours_end),
-          timezone = VALUES(timezone),
-          in_app_enabled = VALUES(in_app_enabled),
-          web_push_enabled = VALUES(web_push_enabled),
-          push_subscription_json = VALUES(push_subscription_json),
-          updated_at = NOW(3)`,
-        [
-          userId,
-          merged.upcomingClass ? 1 : 0,
-          merged.upcomingExam ? 1 : 0,
-          merged.incompleteTask ? 1 : 0,
-          merged.soundEnabled ? 1 : 0,
-          merged.leadMinutes,
-          merged.classLeadMinutes,
-          merged.taskLeadMinutes,
-          merged.examLeadDays,
-          merged.quietHoursStart,
-          merged.quietHoursEnd,
-          merged.timezone,
-          merged.inAppEnabled ? 1 : 0,
-          merged.webPushEnabled ? 1 : 0,
-          merged.pushSubscription ? JSON.stringify(merged.pushSubscription) : null
-        ]
-      );
-    } else {
-      this.demoPreferences.set(userId, merged);
+      try {
+        await db.execute(
+          `INSERT INTO notification_preferences (
+            user_id, upcoming_class, upcoming_exam, incomplete_task, sound_enabled,
+            lead_minutes, class_lead_minutes, task_lead_minutes, exam_lead_days,
+            quiet_hours_start, quiet_hours_end, timezone, in_app_enabled, web_push_enabled,
+            push_subscription_json, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))
+          ON DUPLICATE KEY UPDATE
+            upcoming_class = VALUES(upcoming_class),
+            upcoming_exam = VALUES(upcoming_exam),
+            incomplete_task = VALUES(incomplete_task),
+            sound_enabled = VALUES(sound_enabled),
+            lead_minutes = VALUES(lead_minutes),
+            class_lead_minutes = VALUES(class_lead_minutes),
+            task_lead_minutes = VALUES(task_lead_minutes),
+            exam_lead_days = VALUES(exam_lead_days),
+            quiet_hours_start = VALUES(quiet_hours_start),
+            quiet_hours_end = VALUES(quiet_hours_end),
+            timezone = VALUES(timezone),
+            in_app_enabled = VALUES(in_app_enabled),
+            web_push_enabled = VALUES(web_push_enabled),
+            push_subscription_json = VALUES(push_subscription_json),
+            updated_at = NOW(3)`,
+          [
+            userId,
+            merged.upcomingClass ? 1 : 0,
+            merged.upcomingExam ? 1 : 0,
+            merged.incompleteTask ? 1 : 0,
+            merged.soundEnabled ? 1 : 0,
+            merged.leadMinutes,
+            merged.classLeadMinutes,
+            merged.taskLeadMinutes,
+            merged.examLeadDays,
+            merged.quietHoursStart,
+            merged.quietHoursEnd,
+            merged.timezone,
+            merged.inAppEnabled ? 1 : 0,
+            merged.webPushEnabled ? 1 : 0,
+            merged.pushSubscription ? JSON.stringify(merged.pushSubscription) : null
+          ]
+        );
+      } catch (dbErr) {
+        console.warn(`[NotificationRepo] Failed to update preferences in MySQL:`, dbErr.message);
+      }
     }
     return merged;
   }
