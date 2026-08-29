@@ -1082,7 +1082,7 @@ export const TimetablePage: React.FC = () => {
                 title="Bấm để chuyển sang Bảng 2: Thời gian biểu sinh hoạt & tự học"
               >
                 <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
-                <span>Bảng 1</span>
+                <span>Bảng 2</span>
                 <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
                   <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
                 </div>
@@ -1568,7 +1568,7 @@ export const TimetablePage: React.FC = () => {
                 title="Bấm để chuyển sang Bảng 1: Thời khóa biểu trường học"
               >
                 <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
-                <span>Bảng 2</span>
+                <span>Bảng 1</span>
                 <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
                   <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
                 </div>

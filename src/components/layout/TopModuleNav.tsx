@@ -108,7 +108,7 @@ export const TopModuleNav: React.FC = () => {
             title={isGroup58 ? 'Bấm để chuyển sang Mục 1 - 4' : 'Bấm để chuyển sang Mục 5 - 8'}
           >
             <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
-            <span>{isGroup58 ? 'Mục 5 - 8' : 'Mục 1 - 4'}</span>
+            <span>{isGroup58 ? 'Mục 1 - 4' : 'Mục 5 - 8'}</span>
             <div className="flex items-center text-[#86EFAC] bg-[#0B120D] px-1.5 py-0.5 rounded-md border border-[rgba(34,197,94,0.2)] group-hover:border-[#22C55E]/50 group-hover:text-white transition-colors">
               <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
             </div>
