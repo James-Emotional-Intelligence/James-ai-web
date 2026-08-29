@@ -13083,7 +13083,8 @@ function createApp() {
       if (!allowedOrigins.includes("http://127.0.0.1:5173")) allowedOrigins.push("http://127.0.0.1:5173");
     }
     if (origin) {
-      const isAllowed = allowedOrigins.includes(origin);
+      const isPagesDev = origin.endsWith(".pages.dev") || origin.endsWith(".workers.dev");
+      const isAllowed = !isProduction || allowedOrigins.length === 0 || allowedOrigins.includes(origin) || allowedOrigins.includes("*") || isPagesDev;
       if (isAllowed) {
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -13095,6 +13096,9 @@ function createApp() {
           "Access-Control-Allow-Headers",
           "Content-Type, Authorization, X-Requested-With, X-Request-Id, X-CSRF-Token, X-Admin-Key"
         );
+        if (req.method === "OPTIONS") {
+          return res.sendStatus(204);
+        }
       } else if (isProduction) {
         if (req.method === "OPTIONS") {
           return res.status(403).json({ error: { code: "CORS_ORIGIN_NOT_ALLOWED", message: "Forbidden origin" } });
