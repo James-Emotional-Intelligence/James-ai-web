@@ -1092,7 +1092,7 @@ export const TimetablePage: React.FC = () => {
 
               <h2 className="text-base font-black text-[#F3FAF5] flex items-center gap-2">
                 <School className="w-4 h-4 text-[#22C55E]" />
-                <span>Thời Khóa Biểu Trường Học</span>
+                <span>Thời Khóa Biểu (Trường Học)</span>
               </h2>
             </div>
 
