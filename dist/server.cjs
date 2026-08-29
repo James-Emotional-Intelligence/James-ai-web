@@ -592,6 +592,8 @@ var UserRepository = class _UserRepository {
     this.demoUsers = /* @__PURE__ */ new Map();
     this.demoProfiles = /* @__PURE__ */ new Map();
     this.demoResetTokens = /* @__PURE__ */ new Map();
+    this.userCache = /* @__PURE__ */ new Map();
+    this.profileCache = /* @__PURE__ */ new Map();
     this.seedDemoUserMemory();
   }
   static getInstance() {
@@ -724,7 +726,12 @@ var UserRepository = class _UserRepository {
               /* @__PURE__ */ new Date()
             ]
           );
-          console.log("[JAMI MySQL] Seeded admin user james.admin@gmail.com into MySQL.");
+          await db.execute(
+            `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json, onboarding_completed_at)
+             VALUES (?, 12, 'Ban Qu\u1EA3n Tr\u1ECB JAMI AI', '["Qu\u1EA3n tr\u1ECB h\u1EC7 th\u1ED1ng JAMI"]', 45, 300, '{"morning":"high","afternoon":"high","evening":"high"}', '{"wakeTime":"06:00","bedTime":"23:00"}', '{"lunch":"12:00","dinner":"19:00"}', NOW(3))`,
+            [adminUser.id]
+          );
+          console.log("[JAMI MySQL] Seeded admin user (james.admin@gmail.com) into MySQL.");
         } else {
           await db.execute(
             `UPDATE users SET password_hash = ?, password_salt = ?, password_scheme = 'scrypt', role = 'admin', status = 'active' WHERE email = ?`,
@@ -733,12 +740,11 @@ var UserRepository = class _UserRepository {
         }
       }
     } catch (err) {
-      console.warn("[JAMI MySQL] User repository sync notice:", err.message);
+      console.warn("[JAMI MySQL] Sync demo users warning:", err.message);
     }
   }
   async findByEmail(email) {
-    if (!email) return void 0;
-    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = email.toLowerCase().trim();
     if (db.isHealthy()) {
       try {
         const rows = await db.query(
@@ -756,7 +762,7 @@ var UserRepository = class _UserRepository {
             salt = parts[0];
             hash = parts[1];
           }
-          return {
+          const userObj = {
             id: r.id,
             email: r.email,
             passwordHash: hash,
@@ -771,15 +777,21 @@ var UserRepository = class _UserRepository {
             status: r.status || "active",
             createdAt: r.created_at?.toISOString?.() || String(r.created_at)
           };
+          this.userCache.set(r.id, { user: userObj, cachedAt: Date.now() });
+          return userObj;
         }
       } catch (err) {
-        if (isProduction) throw err;
+        console.warn(`[UserRepository] DB query findByEmail warning:`, err.message);
       }
     }
     return this.demoUsers.get(normalizedEmail);
   }
   async findById(id) {
     if (!id) return void 0;
+    const cached = this.userCache.get(id);
+    if (cached && Date.now() - cached.cachedAt < 6e4) {
+      return cached.user;
+    }
     if (db.isHealthy()) {
       try {
         const rows = await db.query(
@@ -797,7 +809,7 @@ var UserRepository = class _UserRepository {
             salt = parts[0];
             hash = parts[1];
           }
-          return {
+          const userObj = {
             id: r.id,
             email: r.email,
             passwordHash: hash,
@@ -812,11 +824,15 @@ var UserRepository = class _UserRepository {
             status: r.status || "active",
             createdAt: r.created_at?.toISOString?.() || String(r.created_at)
           };
+          this.userCache.set(id, { user: userObj, cachedAt: Date.now() });
+          return userObj;
         }
       } catch (err) {
-        if (isProduction) throw err;
+        console.warn(`[UserRepository] DB query findById(${id}) warning:`, err.message);
+        if (cached) return cached.user;
       }
     }
+    if (cached) return cached.user;
     for (const u of this.demoUsers.values()) {
       if (u.id === id) return u;
     }
@@ -824,6 +840,10 @@ var UserRepository = class _UserRepository {
   }
   async getProfile(userId) {
     if (!userId) return void 0;
+    const cached = this.profileCache.get(userId);
+    if (cached && Date.now() - cached.cachedAt < 6e4) {
+      return cached.profile;
+    }
     if (db.isHealthy()) {
       try {
         const rows = await db.query(
@@ -834,22 +854,27 @@ var UserRepository = class _UserRepository {
         );
         if (rows.length > 0) {
           const p = rows[0];
-          return {
+          const prof = {
             userId: p.user_id,
-            gradeLevel: p.grade_level,
+            gradeLevel: p.grade_level || 9,
             schoolName: p.school_name || "THCS / THPT",
             goals: typeof p.goals_json === "string" ? JSON.parse(p.goals_json) : p.goals_json || [],
             preferredSessionMinutes: p.preferred_session_minutes || 45,
             maxDailyStudyMinutes: p.max_daily_study_minutes || 180,
             energyPreferences: typeof p.energy_preferences_json === "string" ? JSON.parse(p.energy_preferences_json) : p.energy_preferences_json || {},
             sleepSchedule: typeof p.sleep_schedule_json === "string" ? JSON.parse(p.sleep_schedule_json) : p.sleep_schedule_json || { wakeTime: "06:00", bedTime: "22:30" },
-            mealTimes: typeof p.meal_times_json === "string" ? JSON.parse(p.meal_times_json) : p.meal_times_json || { lunch: "11:45", dinner: "18:30" }
+            mealTimes: typeof p.meal_times_json === "string" ? JSON.parse(p.meal_times_json) : p.meal_times_json || { lunch: "11:45", dinner: "18:30" },
+            onboardingCompletedAt: p.onboarding_completed_at ? new Date(p.onboarding_completed_at).toISOString() : void 0
           };
+          this.profileCache.set(userId, { profile: prof, cachedAt: Date.now() });
+          return prof;
         }
       } catch (err) {
-        if (isProduction) throw err;
+        console.warn(`[UserRepository] DB query getProfile(${userId}) warning:`, err.message);
+        if (cached) return cached.profile;
       }
     }
+    if (cached) return cached.profile;
     return this.demoProfiles.get(userId);
   }
   async updateProfile(userId, updates) {
