@@ -47,11 +47,10 @@ export function normalizeApiBaseUrl(url?: string): string {
 }
 
 const getBaseUrl = (): string => {
+  const runtimeWindowUrl = typeof window !== 'undefined' ? (window as any).__API_BASE_URL__ : undefined;
   const envUrl = (import.meta as any).env?.VITE_API_BASE_URL;
-  return normalizeApiBaseUrl(envUrl);
+  return normalizeApiBaseUrl(runtimeWindowUrl || envUrl);
 };
-
-const API_BASE = getBaseUrl();
 
 export interface JamiChatMessageItem {
   id: string;
@@ -123,12 +122,13 @@ export class ApiError extends Error {
 
 async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> {
   const relativePath = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
+  const baseUrl = getBaseUrl();
   
   let fullUrl: string;
-  if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
-    fullUrl = `${API_BASE}${relativePath}`;
+  if (baseUrl.startsWith('http://') || baseUrl.startsWith('https://')) {
+    fullUrl = `${baseUrl}${relativePath}`;
   } else {
-    const base = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE;
+    const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     if (relativePath.startsWith(base)) {
       fullUrl = relativePath;
     } else {
