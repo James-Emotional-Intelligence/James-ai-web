@@ -54,45 +54,63 @@ export default {
       }
 
       // Reverse-Proxy API request to Backend Origin if BACKEND_API_ORIGIN is configured
-      if (env.BACKEND_API_ORIGIN) {
-        const targetUrl = new URL(url.pathname + url.search, env.BACKEND_API_ORIGIN);
-        const reqHeaders = new Headers(request.headers);
-        reqHeaders.set('X-Forwarded-Proto', 'https');
-        reqHeaders.set('X-Forwarded-Host', url.host);
+      if (env.BACKEND_API_ORIGIN && !env.BACKEND_API_ORIGIN.includes('your-backend-api.example.com')) {
+        try {
+          const targetUrl = new URL(url.pathname + url.search, env.BACKEND_API_ORIGIN);
+          const reqHeaders = new Headers(request.headers);
+          reqHeaders.set('X-Forwarded-Proto', 'https');
+          reqHeaders.set('X-Forwarded-Host', url.host);
 
-        const backendResponse = await fetch(
-          new Request(targetUrl.toString(), {
-            method: request.method,
-            headers: reqHeaders,
-            body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
-            redirect: 'manual',
-          })
-        );
+          const backendResponse = await fetch(
+            new Request(targetUrl.toString(), {
+              method: request.method,
+              headers: reqHeaders,
+              body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
+              redirect: 'manual',
+            })
+          );
 
-        const resHeaders = new Headers(backendResponse.headers);
-        resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          const resHeaders = new Headers(backendResponse.headers);
+          resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 
-        return new Response(backendResponse.body, {
-          status: backendResponse.status,
-          statusText: backendResponse.statusText,
-          headers: resHeaders,
-        });
+          return new Response(backendResponse.body, {
+            status: backendResponse.status,
+            statusText: backendResponse.statusText,
+            headers: resHeaders,
+          });
+        } catch (fetchErr: any) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'BACKEND_FETCH_FAILED',
+                message: `Không thể kết nối đến máy chủ Backend tại ${env.BACKEND_API_ORIGIN}: ${fetchErr.message}`,
+              },
+            }),
+            { status: 502, headers: defaultHeaders }
+          );
+        }
       }
 
       return new Response(
         JSON.stringify({
           error: {
-            code: 'NOT_FOUND',
-            message: `API endpoint ${url.pathname} requires BACKEND_API_ORIGIN configuration.`,
+            code: 'BACKEND_NOT_CONFIGURED',
+            message: `API endpoint ${url.pathname} chưa có Backend URL. Vui lòng cấu hình biến BACKEND_API_ORIGIN trong wrangler.jsonc hoặc Cloudflare Settings > Variables (ví dụ: https://your-backend.onrender.com).`,
           },
         }),
-        { status: 404, headers: defaultHeaders }
+        { status: 503, headers: defaultHeaders }
       );
     }
 
-    // Static Assets fallback via Cloudflare Workers Assets binding
+    // Static Assets fallback with SPA routing via Cloudflare Workers Assets binding
     if (env.ASSETS) {
-      return env.ASSETS.fetch(request);
+      const assetResponse = await env.ASSETS.fetch(request);
+      if (assetResponse.status === 404 && !url.pathname.startsWith('/api/') && !url.pathname.includes('.')) {
+        // SPA Fallback: Serve index.html for client routes like /login, /today, etc.
+        const indexRequest = new Request(new URL('/index.html', request.url), request);
+        return env.ASSETS.fetch(indexRequest);
+      }
+      return assetResponse;
     }
 
     return new Response('JAMI AI Cloudflare Worker Active', { status: 200 });
