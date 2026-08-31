@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { createApp } from './server/app';
 import { db } from './server/db/mysql';
@@ -53,7 +54,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    let distPath = path.join(process.cwd(), 'dist', 'client');
+    if (!fs.existsSync(distPath)) {
+      distPath = path.join(process.cwd(), 'dist');
+    }
     app.use('/assets', express.static(path.join(distPath, 'assets'), {
       maxAge: '1y',
       immutable: true,

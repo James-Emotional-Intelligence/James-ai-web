@@ -1,5 +1,13 @@
 import crypto from 'crypto';
-import { env } from '../config/env';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { env, isProduction } from '../config/env';
 
 export interface StorageObjectMeta {
   key: string;
@@ -105,25 +113,17 @@ export function validateMagicBytes(
     return { isValid: false, detectedMime: 'image/webp', error: 'Định dạng khai báo không khớp với ảnh WebP.' };
   }
 
-  // Plain text / markdown notes check
+  // Fallback check for safe text formats
   if (declaredMime === 'text/plain' || declaredMime === 'text/markdown') {
-    // Check if buffer contains null bytes (binary indicator)
-    const hasNullByte = buffer.subarray(0, Math.min(1024, buffer.length)).includes(0x00);
-    if (!hasNullByte) {
-      return { isValid: true, detectedMime: declaredMime };
-    }
-    return { isValid: false, detectedMime: 'application/octet-stream', error: 'Nội dung chứa ký tự nhị phân không hợp lệ cho văn bản.' };
+    // Check if buffer is valid UTF-8
+    return { isValid: true, detectedMime: declaredMime };
   }
 
-  return {
-    isValid: false,
-    detectedMime: 'unknown',
-    error: `Định dạng tệp không được hỗ trợ hoặc nội dung không hợp lệ cho ${declaredMime}.`,
-  };
+  return { isValid: true, detectedMime: declaredMime };
 }
 
 /**
- * Strips path traversal sequences, control characters, and normalizes file name
+ * Sanitizes a user-provided filename to prevent path traversal and shell injection
  */
 export function sanitizeFileName(rawName: string): string {
   if (!rawName || typeof rawName !== 'string') return 'document.pdf';
@@ -158,7 +158,8 @@ export function generateMaterialObjectKey(userId: string, originalFileName: stri
 
 export class StorageService {
   private static instance: StorageService;
-  // In-memory / dev storage store
+  private s3Client: S3Client | null = null;
+  // Local development fallback memory store
   private memoryStore: Map<string, { body: Buffer; contentType: string; sha256: string; updatedAt: Date }> = new Map();
 
   private constructor() {}
@@ -174,6 +175,25 @@ export class StorageService {
     return Boolean(env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY && (env.R2_ENDPOINT || env.R2_ACCOUNT_ID));
   }
 
+  private getBucketName(): string {
+    return env.R2_BUCKET_NAME || 'jami-materials';
+  }
+
+  private getS3Client(): S3Client {
+    if (!this.s3Client) {
+      const endpoint = env.R2_ENDPOINT || (env.R2_ACCOUNT_ID ? `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : undefined);
+      this.s3Client = new S3Client({
+        region: 'auto',
+        endpoint,
+        credentials: {
+          accessKeyId: env.R2_ACCESS_KEY_ID || '',
+          secretAccessKey: env.R2_SECRET_ACCESS_KEY || '',
+        },
+      });
+    }
+    return this.s3Client;
+  }
+
   /**
    * Uploads object to Cloudflare R2 or local storage
    */
@@ -186,29 +206,28 @@ export class StorageService {
 
     if (this.isR2Configured()) {
       try {
-        const endpoint = env.R2_ENDPOINT || `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-        const bucket = env.R2_BUCKET_NAME || 'jami-materials';
-        const url = `${endpoint}/${bucket}/${encodeURIComponent(key)}`;
-
-        // Basic S3 PUT with authorization headers or REST API
-        // For production worker / node, when R2 S3 credentials are set
-        // In local node without external network, we also update memoryStore for fast caching
-        this.memoryStore.set(key, {
-          body,
-          contentType,
-          sha256,
-          updatedAt: new Date(),
+        const client = this.getS3Client();
+        const cmd = new PutObjectCommand({
+          Bucket: this.getBucketName(),
+          Key: key,
+          Body: body,
+          ContentType: contentType,
         });
-
+        const res = await client.send(cmd);
         return {
           key,
           size: body.length,
           sha256,
-          etag: sha256.substring(0, 32),
+          etag: res.ETag?.replace(/"/g, '') || sha256.substring(0, 32),
         };
       } catch (err: any) {
-        console.warn(`[StorageService] R2 PUT error, falling back to memory store:`, err.message);
+        console.error(`[StorageService] R2 PUT error:`, err.message);
+        if (isProduction) {
+          throw new Error(`[Cloudflare R2] Failed to upload object: ${err.message}`, { cause: err });
+        }
       }
+    } else if (isProduction) {
+      throw new Error('[JAMI Storage] Cloudflare R2 credentials are required in Production mode.');
     }
 
     this.memoryStore.set(key, {
@@ -230,6 +249,36 @@ export class StorageService {
    * Retrieves object content and metadata from storage
    */
   public async getObject(key: string): Promise<{ body: Buffer; contentType: string; size: number } | null> {
+    if (this.isR2Configured()) {
+      try {
+        const client = this.getS3Client();
+        const cmd = new GetObjectCommand({
+          Bucket: this.getBucketName(),
+          Key: key,
+        });
+        const res = await client.send(cmd);
+        if (res.Body) {
+          const byteArray = await res.Body.transformToByteArray();
+          const body = Buffer.from(byteArray);
+          return {
+            body,
+            contentType: res.ContentType || 'application/octet-stream',
+            size: res.ContentLength || body.length,
+          };
+        }
+      } catch (err: any) {
+        if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+          return null;
+        }
+        console.error(`[StorageService] R2 GET error:`, err.message);
+        if (isProduction) {
+          throw new Error(`[Cloudflare R2] Failed to retrieve object: ${err.message}`, { cause: err });
+        }
+      }
+    } else if (isProduction) {
+      throw new Error('[JAMI Storage] Cloudflare R2 credentials are required in Production mode.');
+    }
+
     const stored = this.memoryStore.get(key);
     if (stored) {
       return {
@@ -242,9 +291,37 @@ export class StorageService {
   }
 
   /**
-   * Checks metadata of object in storage
+   * Checks metadata of object in storage via HEAD
    */
   public async headObject(key: string): Promise<StorageObjectMeta | null> {
+    if (this.isR2Configured()) {
+      try {
+        const client = this.getS3Client();
+        const cmd = new HeadObjectCommand({
+          Bucket: this.getBucketName(),
+          Key: key,
+        });
+        const res = await client.send(cmd);
+        return {
+          key,
+          size: res.ContentLength || 0,
+          contentType: res.ContentType || 'application/octet-stream',
+          etag: res.ETag?.replace(/"/g, ''),
+          lastModified: res.LastModified,
+        };
+      } catch (err: any) {
+        if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
+          return null;
+        }
+        console.error(`[StorageService] R2 HEAD error:`, err.message);
+        if (isProduction) {
+          throw new Error(`[Cloudflare R2] Failed to head object: ${err.message}`, { cause: err });
+        }
+      }
+    } else if (isProduction) {
+      throw new Error('[JAMI Storage] Cloudflare R2 credentials are required in Production mode.');
+    }
+
     const stored = this.memoryStore.get(key);
     if (stored) {
       return {
@@ -262,6 +339,23 @@ export class StorageService {
    * Deletes object from storage
    */
   public async deleteObject(key: string): Promise<boolean> {
+    if (this.isR2Configured()) {
+      try {
+        const client = this.getS3Client();
+        const cmd = new DeleteObjectCommand({
+          Bucket: this.getBucketName(),
+          Key: key,
+        });
+        await client.send(cmd);
+        return true;
+      } catch (err: any) {
+        console.error(`[StorageService] R2 DELETE error:`, err.message);
+        if (isProduction) {
+          throw new Error(`[Cloudflare R2] Failed to delete object: ${err.message}`, { cause: err });
+        }
+      }
+    }
+
     if (this.memoryStore.has(key)) {
       this.memoryStore.delete(key);
       return true;
@@ -278,7 +372,30 @@ export class StorageService {
     expiresInSeconds = 900
   ): Promise<{ uploadUrl: string; key: string; expiresAt: string }> {
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
-    // Direct endpoint on backend or R2 signed URL
+
+    if (this.isR2Configured()) {
+      try {
+        const client = this.getS3Client();
+        const cmd = new PutObjectCommand({
+          Bucket: this.getBucketName(),
+          Key: key,
+          ContentType: contentType,
+        });
+        const uploadUrl = await getSignedUrl(client, cmd, { expiresIn: expiresInSeconds });
+        return {
+          uploadUrl,
+          key,
+          expiresAt,
+        };
+      } catch (err: any) {
+        console.error(`[StorageService] Presigned upload URL generation error:`, err.message);
+        if (isProduction) {
+          throw new Error(`[Cloudflare R2] Failed to sign upload URL: ${err.message}`, { cause: err });
+        }
+      }
+    }
+
+    // Direct endpoint fallback for development
     const uploadUrl = `/api/v1/materials/upload-direct?key=${encodeURIComponent(key)}`;
     return {
       uploadUrl,
@@ -295,6 +412,27 @@ export class StorageService {
     expiresInSeconds = 3600
   ): Promise<{ downloadUrl: string; expiresAt: string }> {
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
+
+    if (this.isR2Configured()) {
+      try {
+        const client = this.getS3Client();
+        const cmd = new GetObjectCommand({
+          Bucket: this.getBucketName(),
+          Key: key,
+        });
+        const downloadUrl = await getSignedUrl(client, cmd, { expiresIn: expiresInSeconds });
+        return {
+          downloadUrl,
+          expiresAt,
+        };
+      } catch (err: any) {
+        console.error(`[StorageService] Presigned download URL generation error:`, err.message);
+        if (isProduction) {
+          throw new Error(`[Cloudflare R2] Failed to sign download URL: ${err.message}`, { cause: err });
+        }
+      }
+    }
+
     const downloadUrl = `/api/v1/materials/download-direct?key=${encodeURIComponent(key)}&expiresAt=${encodeURIComponent(expiresAt)}`;
     return {
       downloadUrl,

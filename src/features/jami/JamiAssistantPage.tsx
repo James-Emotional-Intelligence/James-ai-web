@@ -34,9 +34,12 @@ import { api } from '../../lib/api-client';
 import { JamiConversation, JamiMessageItem, LearningMaterial } from '../../../shared/types';
 import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
 import confetti from 'canvas-confetti';
+import { RobotJami, JamiState } from '../../components/jami/RobotJami';
+import { useVoiceJami } from '../../context/VoiceJamiContext';
 
 export const JamiAssistantPage: React.FC = () => {
   const navigate = useNavigate();
+  const voice = useVoiceJami();
 
   const [conversations, setConversations] = useState<JamiConversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -50,7 +53,6 @@ export const JamiAssistantPage: React.FC = () => {
   // Voice recognition & Wake-word states
   const [isListening, setIsListening] = useState(false);
   const [voiceStatusText, setVoiceStatusText] = useState<string | null>(null);
-  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const speechRecognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
 
@@ -94,32 +96,26 @@ export const JamiAssistantPage: React.FC = () => {
     setVoiceStatusText(null);
   }, []);
 
-  const speakText = (text: string, msgId?: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
+  const speakText = useCallback(
+    (text: string, msgId?: string) => {
+      if (msgId && voice.speakingMessageId === msgId && voice.isSpeaking) {
+        voice.stopSpeaking();
+        return;
+      }
+      voice.speak(text, { msgId });
+    },
+    [voice]
+  );
 
-    if (msgId && speakingMsgId === msgId) {
-      setSpeakingMsgId(null);
-      return;
-    }
-
-    const cleanText = text.replace(/[*_#`[\]()]/g, '');
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = 'vi-VN';
-    utterance.rate = 1.0;
-
-    utterance.onstart = () => {
-      if (msgId) setSpeakingMsgId(msgId);
-    };
-    utterance.onend = () => {
-      setSpeakingMsgId(null);
-    };
-    utterance.onerror = () => {
-      setSpeakingMsgId(null);
-    };
-
-    window.speechSynthesis.speak(utterance);
-  };
+  const activeChatRobotState: JamiState = isListening
+    ? 'listening_command'
+    : voice.isSpeaking
+    ? 'speaking'
+    : isSending
+    ? 'thinking'
+    : messages.some((m) => m.requiresConfirmation && !m.isConfirmed)
+    ? 'confirmation_pending'
+    : 'idle';
 
   const handleToggleListening = () => {
     if (isListening) {
@@ -550,10 +546,12 @@ export const JamiAssistantPage: React.FC = () => {
               <span>Đang kết nối với Jami...</span>
             </div>
           ) : messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
-              <div className="w-14 h-14 rounded-3xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center shadow-lg shadow-[#16A34A]/25 border border-[#22C55E]/30">
-                <Bot className="w-8 h-8" />
-              </div>
+            <div className="h-full flex flex-col items-center justify-center text-center p-4 space-y-3">
+              <RobotJami
+                state={activeChatRobotState}
+                size="lg"
+                showBubble={false}
+              />
               <h3 className="text-base font-bold text-[#F3FAF5]">
                 Chào em! Jami có thể giúp gì cho việc học hôm nay?
               </h3>
@@ -598,7 +596,7 @@ export const JamiAssistantPage: React.FC = () => {
           ) : (
             messages.map((m) => {
               const isUser = m.sender === 'user';
-              const isSpeakingThis = speakingMsgId === m.id;
+              const isSpeakingThis = voice.speakingMessageId === m.id && voice.isSpeaking;
 
               return (
                 <div
@@ -606,8 +604,13 @@ export const JamiAssistantPage: React.FC = () => {
                   className={`flex items-start gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
                 >
                   {!isUser && (
-                    <div className="w-8 h-8 rounded-xl bg-[#14532D] text-[#86EFAC] flex items-center justify-center text-xs font-black shrink-0 border border-[#22C55E]/30 mt-1">
-                      <Bot className="w-4 h-4" />
+                    <div className="w-9 h-9 shrink-0 mt-0.5 flex items-center justify-center">
+                      <RobotJami
+                        state={isSpeakingThis ? 'speaking' : 'idle'}
+                        size="sm"
+                        displayMode="head"
+                        showBubble={false}
+                      />
                     </div>
                   )}
 

@@ -5,6 +5,20 @@ import { subjectRepo } from './subject-repository';
 import { AiAdapter } from '../services/ai-adapter';
 import crypto from 'crypto';
 
+/**
+ * Sanitizes quiz object so correctAnswer and explanation are never leaked before submit
+ */
+export function toPublicQuiz<T extends Quiz & { questions?: QuizQuestion[] }>(quiz: T): T {
+  if (!quiz) return quiz;
+  return {
+    ...quiz,
+    questions: quiz.questions?.map((q) => {
+      const { correctAnswer: _ca, explanation: _ex, ...publicQ } = q;
+      return publicQ as QuizQuestion;
+    }),
+  };
+}
+
 export class QuizRepository {
   private static instance: QuizRepository;
   private demoQuizzes: Map<string, Quiz[]> = new Map();
@@ -518,7 +532,56 @@ export class QuizRepository {
   ): Promise<QuizAttemptResult> {
     const questions = await this.getQuizQuestions(userId, submission.quizId, true);
     if (questions.length === 0) {
-      throw new Error('Đề thi không tồn tại hoặc không có câu hỏi');
+      const err: any = new Error('Đề thi không tồn tại hoặc không có câu hỏi');
+      err.status = 404;
+      err.code = 'QUIZ_NOT_FOUND';
+      throw err;
+    }
+
+    if (submission.attemptId) {
+      if (db.isHealthy()) {
+        const attRows = await db.query<any>(
+          'SELECT id, user_id, quiz_id, status, score, feedback_summary, submitted_at FROM quiz_attempts WHERE id = ?',
+          [submission.attemptId]
+        );
+        if (attRows.length === 0 || attRows[0].user_id !== userId) {
+          const err: any = new Error('Lượt làm bài không tồn tại hoặc không thuộc quyền sở hữu.');
+          err.status = 404;
+          err.code = 'ATTEMPT_NOT_FOUND';
+          throw err;
+        }
+        const attRow = attRows[0];
+        if (attRow.quiz_id !== submission.quizId) {
+          const err: any = new Error('Lượt làm bài không khớp với đề thi tương ứng.');
+          err.status = 400;
+          err.code = 'ATTEMPT_QUIZ_MISMATCH';
+          throw err;
+        }
+        // Idempotency: if already submitted, return previous result without re-inserting
+        if (attRow.status === 'submitted') {
+          const existingAnswers = await db.query<any>(
+            'SELECT question_id, answer_json, is_correct, feedback FROM quiz_answers WHERE attempt_id = ?',
+            [submission.attemptId]
+          );
+          return {
+            attemptId: submission.attemptId,
+            quizId: submission.quizId,
+            score: Number(attRow.score) || 0,
+            maxScore: 10,
+            totalQuestions: questions.length,
+            correctCount: existingAnswers.filter((a: any) => a.is_correct).length,
+            feedbackSummary: attRow.feedback_summary || '',
+            answers: existingAnswers.map((a: any) => ({
+              questionId: a.question_id,
+              userAnswer: typeof a.answer_json === 'string' ? JSON.parse(a.answer_json) : a.answer_json,
+              correctAnswer: questions.find((q) => q.id === a.question_id)?.correctAnswer || '',
+              isCorrect: Boolean(a.is_correct),
+              explanation: a.feedback || '',
+            })),
+            submittedAt: attRow.submitted_at?.toISOString?.() || String(attRow.submitted_at),
+          };
+        }
+      }
     }
 
     const [quizRow] = db.isHealthy()
@@ -681,6 +744,84 @@ export class QuizRepository {
     }
 
     return result;
+  }
+
+  public async getAttemptResult(
+    userId: string,
+    attemptId: string
+  ): Promise<{ attempt: QuizAttemptResult; quiz: Quiz & { questions: QuizQuestion[] } } | null> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT id, user_id, quiz_id, started_at, submitted_at, score, max_score, status, feedback_summary
+         FROM quiz_attempts
+         WHERE id = ? AND user_id = ?`,
+        [attemptId, userId]
+      );
+
+      if (rows.length === 0) return null;
+      const attRow = rows[0];
+
+      const quiz = await this.getById(userId, attRow.quiz_id, true);
+      if (!quiz) return null;
+
+      const answerRows = await db.query<any>(
+        `SELECT id, attempt_id, question_id, answer_json, is_correct, feedback, score
+         FROM quiz_answers
+         WHERE attempt_id = ?`,
+         [attemptId]
+      );
+
+      const parseAnswer = (val: any) => {
+        if (!val) return '';
+        if (typeof val === 'string') {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return val;
+          }
+        }
+        return val;
+      };
+
+      const answersFeedback = answerRows.map((a: any) => {
+        const question = quiz.questions?.find((q) => q.id === a.question_id);
+        return {
+          questionId: a.question_id,
+          userAnswer: parseAnswer(a.answer_json),
+          correctAnswer: question?.correctAnswer || '',
+          isCorrect: Boolean(a.is_correct),
+          explanation: a.feedback || question?.explanation || '',
+        };
+      });
+
+      const attemptResult: QuizAttemptResult = {
+        attemptId: attRow.id,
+        quizId: attRow.quiz_id,
+        score: Number(attRow.score) || 0,
+        maxScore: Number(attRow.max_score) || 10,
+        totalQuestions: quiz.questions?.length || 0,
+        correctCount: answersFeedback.filter((a: any) => a.isCorrect).length,
+        feedbackSummary: attRow.feedback_summary || '',
+        answers: answersFeedback,
+        submittedAt: attRow.submitted_at?.toISOString?.() || String(attRow.submitted_at),
+      };
+
+      return {
+        attempt: attemptResult,
+        quiz,
+      };
+    }
+
+    for (const [quizId, attempts] of this.demoAttempts.entries()) {
+      const att = attempts.find((a) => a.attemptId === attemptId);
+      if (att) {
+        const quiz = await this.getById(userId, quizId, true);
+        if (quiz) {
+          return { attempt: att, quiz };
+        }
+      }
+    }
+    return null;
   }
 
   public async submitAttempt(

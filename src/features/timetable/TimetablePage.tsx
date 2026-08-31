@@ -294,7 +294,7 @@ export const TimetablePage: React.FC = () => {
       const sunday = new Date(monday);
       sunday.setDate(monday.getDate() + 6);
 
-      let label = '';
+      let label: string;
       if (offset === 0) {
         label = `Tuần hiện tại (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
       } else if (offset === 1) {
@@ -1092,7 +1092,7 @@ export const TimetablePage: React.FC = () => {
 
               <h2 className="text-base font-black text-[#F3FAF5] flex items-center gap-2">
                 <School className="w-4 h-4 text-[#22C55E]" />
-                <span>Thời Khóa Biểu (Trường Học)</span>
+                <span>{activeTimetable?.name || 'Thời Khóa Biểu (Trường Học)'}</span>
               </h2>
             </div>
 

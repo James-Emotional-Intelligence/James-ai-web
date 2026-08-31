@@ -222,9 +222,6 @@ export const NotificationsPage: React.FC = () => {
               </span>
             )}
           </h1>
-          <p className="text-xs text-[#A9B8AE] mt-1">
-            Tự động nhắc lịch học, đếm ngược ngày thi và đề xuất xếp lại nhiệm vụ quá hạn với AI
-          </p>
         </div>
 
         <div className="flex items-center gap-2">

@@ -85,9 +85,6 @@ export const ReportsPage: React.FC = () => {
             <BarChart3 className="w-6 h-6 text-[#22C55E]" />
             <span>Báo Cáo & Phân Tích Năng Lực Học Tập</span>
           </h1>
-          <p className="text-xs text-[#A9B8AE] print:text-gray-600 mt-1">
-            Tổng hợp thời lượng học thực tế, phân tích môn mạnh/yếu có căn cứ và theo dõi tiến trình điểm số từ dữ liệu MySQL
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 print:hidden">

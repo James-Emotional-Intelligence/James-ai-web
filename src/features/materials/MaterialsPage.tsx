@@ -471,9 +471,6 @@ export const MaterialsPage: React.FC = () => {
             <FolderKanban className="w-6 h-6 text-[#22C55E]" />
             <span>Kho Tài Liệu & Đề Cương Ôn Tập</span>
           </h1>
-          <p className="text-xs text-[#A9B8AE] mt-1">
-            Lưu trữ PDF & hình ảnh an toàn trên R2, tự động trích xuất đề cương và tạo câu hỏi luyện thi bám sát tài liệu
-          </p>
         </div>
 
         <div className="flex items-center gap-2">

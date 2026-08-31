@@ -158,4 +158,40 @@ describe('Exams & Quizzes Revision Subsystem Integration Tests', () => {
 
     expect(res.status).toBe(404);
   });
+
+  it('7. Rejects submission when attempt belongs to a different quiz', async () => {
+    const res = await request(app)
+      .post(`/api/v1/quizzes/quiz_mismatch_999/attempts/submit`)
+      .set('Cookie', [userASession])
+      .send({
+        attemptId,
+        answers: [],
+      });
+
+    expect([400, 404]).toContain(res.status);
+  });
+
+  it('8. Handles duplicate submissions idempotently without changing score or answers', async () => {
+    const res = await request(app)
+      .post(`/api/v1/quizzes/${quizId}/attempts/submit`)
+      .set('Cookie', [userASession])
+      .send({
+        attemptId,
+        answers: [],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.attempt.status).toBe('submitted');
+  });
+
+  it('9. GET /api/v1/quiz-attempts/:id/result retrieves attempt result by attemptId', async () => {
+    const res = await request(app)
+      .get(`/api/v1/quiz-attempts/${attemptId}/result`)
+      .set('Cookie', [userASession]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.attempt).toBeDefined();
+    expect(res.body.attempt.attemptId).toBe(attemptId);
+    expect(res.body.quiz).toBeDefined();
+  });
 });

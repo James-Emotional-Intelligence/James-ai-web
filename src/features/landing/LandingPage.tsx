@@ -340,10 +340,10 @@ export const LandingPage: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="flex flex-col items-center justify-center py-4 space-y-4">
+                <div className="flex flex-col items-center justify-center py-2 space-y-3">
                   <RobotJami
                     state={spotlightState}
-                    size="xl"
+                    size="lg"
                     bubbleMessage="Chào bạn! Nói mục tiêu của bạn cho Jami, mình sẽ cùng lên lịch nhé."
                     bubbleActions={['Lịch học', 'Hẹn giờ tập trung']}
                   />

@@ -30,17 +30,24 @@ export interface VoiceJamiContextType {
   state: VoiceState;
   isHandsFreeEnabled: boolean;
   isMicActive: boolean;
+  isSpeaking: boolean;
+  speakingMessageId: string | null;
+  currentUtteranceText: string;
   sessionDuration: number;
   privacyMode: 'browser_web_speech' | 'wasm_local' | 'openai_realtime';
   lastTranscript: string;
   lastReply: string;
   pendingProposal: ActionProposal | null;
   errorMessage: string | null;
+  remoteAudioElement: HTMLAudioElement | null;
+  remoteMediaStream: MediaStream | null;
   enableHandsFree: () => Promise<void>;
   disableHandsFree: () => void;
   confirmProposal: (decision?: 'confirm' | 'reject') => Promise<void>;
   cancelCurrentTurn: () => void;
   sendManualCommand: (text: string) => Promise<void>;
+  speak: (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number }) => void;
+  stopSpeaking: () => void;
 }
 
 const VoiceJamiContext = createContext<VoiceJamiContextType | null>(null);
@@ -57,6 +64,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [lastReply, setLastReply] = useState('Chào bạn! Nói "Jami ơi" khi bạn cần hỗ trợ.');
   const [pendingProposal, setPendingProposal] = useState<ActionProposal | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [currentUtteranceText, setCurrentUtteranceText] = useState<string>('');
 
   // Audio & Hardware References
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -117,28 +127,32 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [state, isHandsFreeEnabled]);
 
   /**
-   * Safe Text-to-Speech playback using SpeechSynthesis (fallback or prompt)
+   * Unified Text-to-Speech Engine using SpeechSynthesis
    */
-  const speakText = useCallback(
-    (text: string, onEnd?: () => void) => {
+  const speak = useCallback(
+    (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number }) => {
       if (!('speechSynthesis' in window)) {
-        onEnd?.();
+        options?.onEnd?.();
         return;
       }
 
       window.speechSynthesis.cancel();
       isSpeakingRef.current = true;
+      setIsSpeaking(true);
+      if (options?.msgId) setSpeakingMessageId(options.msgId);
+      setCurrentUtteranceText(text);
 
-      // Temporarily pause wake recognition while speaking
+      // Temporarily pause wake recognition while speaking to prevent self-hearing
       if (speechRecognitionRef.current) {
         try {
           speechRecognitionRef.current.stop();
         } catch {}
       }
 
-      const utterance = new SpeechSynthesisUtterance(text);
+      const cleanText = text.replace(/[*_#`[\]()]/g, '');
+      const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.lang = 'vi-VN';
-      utterance.rate = 1.05;
+      utterance.rate = options?.rate || 1.05;
       utterance.pitch = 1.0;
 
       // Pick Vietnamese voice if available
@@ -146,19 +160,45 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const viVoice = voices.find((v) => v.lang.includes('vi') || v.name.includes('Vietnamese'));
       if (viVoice) utterance.voice = viVoice;
 
+      utterance.onstart = () => {
+        isSpeakingRef.current = true;
+        setIsSpeaking(true);
+        if (options?.msgId) setSpeakingMessageId(options.msgId);
+      };
+
       utterance.onend = () => {
         isSpeakingRef.current = false;
-        onEnd?.();
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+        options?.onEnd?.();
       };
 
       utterance.onerror = () => {
         isSpeakingRef.current = false;
-        onEnd?.();
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+        options?.onEnd?.();
       };
 
       window.speechSynthesis.speak(utterance);
     },
     []
+  );
+
+  const stopSpeaking = useCallback(() => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    setSpeakingMessageId(null);
+  }, []);
+
+  const speakText = useCallback(
+    (text: string, onEnd?: () => void) => {
+      speak(text, { onEnd });
+    },
+    [speak]
   );
 
   /**
@@ -209,6 +249,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
 
     isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    setSpeakingMessageId(null);
     setIsMicActive(false);
   }, []);
 
@@ -586,17 +628,24 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         state,
         isHandsFreeEnabled,
         isMicActive,
+        isSpeaking,
+        speakingMessageId,
+        currentUtteranceText,
         sessionDuration,
         privacyMode,
         lastTranscript,
         lastReply,
         pendingProposal,
         errorMessage,
+        remoteAudioElement: remoteAudioElementRef.current,
+        remoteMediaStream: mediaStreamRef.current,
         enableHandsFree,
         disableHandsFree,
         confirmProposal,
         cancelCurrentTurn,
         sendManualCommand,
+        speak,
+        stopSpeaking,
       }}
     >
       {children}
@@ -616,17 +665,24 @@ export const useVoiceJami = () => {
       state: 'disabled' as VoiceState,
       isHandsFreeEnabled: false,
       isMicActive: false,
+      isSpeaking: false,
+      speakingMessageId: null,
+      currentUtteranceText: '',
       sessionDuration: 0,
       privacyMode: 'browser_web_speech' as const,
       lastTranscript: '',
       lastReply: '',
       pendingProposal: null,
       errorMessage: null,
+      remoteAudioElement: null,
+      remoteMediaStream: null,
       enableHandsFree: async () => {},
       disableHandsFree: () => {},
       confirmProposal: async () => {},
       cancelCurrentTurn: () => {},
       sendManualCommand: async () => {},
+      speak: () => {},
+      stopSpeaking: () => {},
     };
   }
   return context;

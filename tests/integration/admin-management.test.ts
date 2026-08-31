@@ -1,12 +1,27 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../server/app';
 import { UserRepository } from '../../server/repositories/user-repository';
 import { resetRateLimits } from '../../server/middleware/rate-limit';
+import { PasswordHasher } from '../../server/services/password-hasher';
 
 describe('Admin User Management & Ban/Delete Integration Tests', () => {
   const app = createApp();
   const userRepo = UserRepository.getInstance();
+
+  beforeAll(async () => {
+    const existing = await userRepo.findByEmail('james.admin@gmail.com');
+    if (!existing) {
+      await userRepo.createUser({
+        email: 'james.admin@gmail.com',
+        password: 'Minhtriet14',
+        displayName: 'James Admin',
+        preferredName: 'James',
+        role: 'admin',
+        gradeLevel: 12,
+      } as any);
+    }
+  });
 
   beforeEach(() => {
     resetRateLimits();

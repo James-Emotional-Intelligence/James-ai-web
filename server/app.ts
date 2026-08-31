@@ -37,17 +37,10 @@ export function createApp() {
       .map((o) => o.trim())
       .filter(Boolean);
 
-    // In local dev, allow localhost defaults
-    if (!isProduction) {
-      if (!allowedOrigins.includes('http://localhost:3000')) allowedOrigins.push('http://localhost:3000');
-      if (!allowedOrigins.includes('http://localhost:5173')) allowedOrigins.push('http://localhost:5173');
-      if (!allowedOrigins.includes('http://127.0.0.1:3000')) allowedOrigins.push('http://127.0.0.1:3000');
-      if (!allowedOrigins.includes('http://127.0.0.1:5173')) allowedOrigins.push('http://127.0.0.1:5173');
-    }
-
     if (origin) {
+      const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
       const isPagesDev = origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
-      const isAllowed = !isProduction || allowedOrigins.length === 0 || allowedOrigins.includes(origin) || allowedOrigins.includes('*') || isPagesDev;
+      const isAllowed = !isProduction || isLocalhost || isPagesDev || allowedOrigins.length === 0 || allowedOrigins.includes(origin) || allowedOrigins.includes('*');
       if (isAllowed) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -80,15 +73,22 @@ export function createApp() {
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
-      if (isProduction && origin) {
+      if (origin) {
+        const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+        const isPagesDev = origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
         const allowedOrigins = (env.CORS_ALLOWED_ORIGINS || '')
           .split(',')
           .map((o) => o.trim())
           .filter(Boolean);
-        const appBaseOrigin = new URL(env.APP_BASE_URL).origin;
-        allowedOrigins.push(appBaseOrigin);
 
-        if (!allowedOrigins.includes(origin)) {
+        let appBaseOrigin = '';
+        try {
+          appBaseOrigin = new URL(env.APP_BASE_URL).origin;
+        } catch {}
+
+        const isAllowed = !isProduction || isLocalhost || isPagesDev || allowedOrigins.length === 0 || allowedOrigins.includes(origin) || allowedOrigins.includes('*') || (appBaseOrigin && appBaseOrigin === origin);
+
+        if (!isAllowed) {
           return res.status(403).json({
             error: {
               code: 'CSRF_ORIGIN_MISMATCH',

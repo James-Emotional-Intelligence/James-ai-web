@@ -23,6 +23,8 @@ import {
   ReportOverviewResponse,
   TodayDashboardOverview,
   ExecutionGuide,
+  ExecutionStep,
+  Outline,
   TaskEvidence,
 } from '../../shared/types';
 import { z } from 'zod';
@@ -51,6 +53,8 @@ const getBaseUrl = (): string => {
   const envUrl = (import.meta as any).env?.VITE_API_BASE_URL;
   return normalizeApiBaseUrl(runtimeWindowUrl || envUrl);
 };
+
+const API_BASE = getBaseUrl();
 
 export interface JamiChatMessageItem {
   id: string;

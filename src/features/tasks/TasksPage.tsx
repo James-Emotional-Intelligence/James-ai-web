@@ -202,9 +202,6 @@ export const TasksPage: React.FC = () => {
           <h1 className="text-2xl sm:text-3xl font-black text-[#F3FAF5]">
             Quản Lý & Phân Tích Công Việc
           </h1>
-          <p className="text-xs sm:text-sm text-[#A9B8AE] mt-1">
-            Mỗi nhiệm vụ có hướng dẫn từng bước khoa học và tính toán tiến độ thực tế cùng Jami.
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 shrink-0">

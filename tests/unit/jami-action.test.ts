@@ -103,4 +103,59 @@ describe('Jami Action Service Unit Tests', () => {
     const tasks = await taskRepo.getByUserId(userId);
     expect(tasks.find((t) => t.title === 'Nhiệm vụ bị từ chối')).toBeUndefined();
   });
+
+  it('rejects confirmation when proposal belongs to another user', async () => {
+    const otherUserId = 'usr_other_hacker_99';
+    const previewRes = await jamiActionService.executeTool(userId, 'preview_create_task', {
+      title: 'Bài tập riêng của User 1',
+      subjectName: 'Vật lý',
+    });
+
+    const maliciousRes = await jamiActionService.handleProposalDecision(otherUserId, 'confirm', previewRes.proposal?.id);
+    expect(maliciousRes.success).toBe(false);
+    expect(maliciousRes.message).toContain('không thuộc quyền sở hữu');
+  });
+
+  it('fails safely when proposalId is missing or invalid', async () => {
+    const emptyRes = await jamiActionService.handleProposalDecision(userId, 'confirm', undefined);
+    expect(emptyRes.success).toBe(false);
+    expect(emptyRes.message).toContain('Yêu cầu mã định danh đề xuất');
+
+    const nonExistentRes = await jamiActionService.handleProposalDecision(userId, 'confirm', 'prop_fake_not_found');
+    expect(nonExistentRes.success).toBe(false);
+    expect(nonExistentRes.message).toContain('Không tìm thấy đề xuất');
+  });
+
+  it('handles duplicate confirmations idempotently without creating duplicate items', async () => {
+    const previewRes = await jamiActionService.executeTool(userId, 'preview_create_task', {
+      title: 'Bài tập duy nhất không trùng',
+      subjectName: 'Toán học',
+      estimatedMinutes: 30,
+    });
+
+    const firstConfirm = await jamiActionService.handleProposalDecision(userId, 'confirm', previewRes.proposal?.id);
+    expect(firstConfirm.success).toBe(true);
+
+    const secondConfirm = await jamiActionService.handleProposalDecision(userId, 'confirm', previewRes.proposal?.id);
+    expect(secondConfirm.success).toBe(true);
+    expect(secondConfirm.isAlreadyConfirmed).toBe(true);
+
+    const tasks = await taskRepo.getByUserId(userId);
+    const matched = tasks.filter((t) => t.title === 'Bài tập duy nhất không trùng');
+    expect(matched.length).toBe(1);
+  });
+
+  it('creates real reminders via Jami action service', async () => {
+    const previewRes = await jamiActionService.executeTool(userId, 'preview_create_reminder', {
+      content: 'Nhớ làm bài tập Văn trước 8h tối',
+      timeStr: '20:00',
+    });
+
+    expect(previewRes.success).toBe(true);
+    expect(previewRes.requiresConfirmation).toBe(true);
+
+    const confirmRes = await jamiActionService.handleProposalDecision(userId, 'confirm', previewRes.proposal?.id);
+    expect(confirmRes.success).toBe(true);
+    expect(confirmRes.clientAction?.route).toBe('/notifications');
+  });
 });

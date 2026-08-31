@@ -325,7 +325,11 @@ export class JamiRepository {
     }
 
     if (!targetMessage) {
-      throw new Error('Tin nhắn không tồn tại hoặc không thuộc quyền sở hữu');
+      throw new Error('Tin nhắn không tồn tại hoặc không thuộc quyền sở hữu.');
+    }
+
+    if (!targetMessage.proposalId) {
+      throw new Error('Tin nhắn này không có đề xuất hợp lệ để xác nhận.');
     }
 
     // Execute actual action proposal via JamiActionService
@@ -336,24 +340,25 @@ export class JamiRepository {
       targetMessage.conversationId
     );
 
-    // Update message confirmation state in MySQL
-    if (db.isHealthy()) {
-      await db.execute(
-        `UPDATE jami_messages SET is_confirmed = 1 WHERE id = ? AND user_id = ?`,
-        [messageId, userId]
-      );
-    }
+    if (actionResult.success) {
+      // Update message confirmation state in MySQL
+      if (db.isHealthy()) {
+        await db.execute(
+          `UPDATE jami_messages SET is_confirmed = 1 WHERE id = ? AND user_id = ?`,
+          [messageId, userId]
+        );
+      }
+      targetMessage.isConfirmed = true;
 
-    targetMessage.isConfirmed = true;
-
-    // Save Jami confirmation follow-up reply in conversation
-    if (actionResult.message) {
-      await this.saveMessage(userId, {
-        conversationId: targetMessage.conversationId,
-        sender: 'jami',
-        text: actionResult.message,
-        emotion: decision === 'confirm' ? 'celebrating' : 'speaking',
-      });
+      // Save Jami confirmation follow-up reply in conversation
+      if (actionResult.message && !actionResult.isAlreadyConfirmed) {
+        await this.saveMessage(userId, {
+          conversationId: targetMessage.conversationId,
+          sender: 'jami',
+          text: actionResult.message,
+          emotion: decision === 'confirm' ? 'celebrating' : 'speaking',
+        });
+      }
     }
 
     return {

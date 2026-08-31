@@ -506,9 +506,10 @@ export class DeterministicScheduler {
 
       const combinedDayBusy = [...overlappingGlobalBusy, ...daySpecificBusy];
 
-      // If day is today, don't schedule slots in the past
-      if (dayAvailStart < now) {
-        combinedDayBusy.push({ start: dayAvailStart, end: now });
+      // If day overlaps current reference time, don't schedule slots in the past
+      const referenceNow = startDate < now ? startDate : now;
+      if (dayAvailStart < referenceNow && dayAvailEnd > referenceNow) {
+        combinedDayBusy.push({ start: dayAvailStart, end: referenceNow });
       }
 
       const freeSlots = this.computeFreeSlots(
@@ -554,8 +555,8 @@ export class DeterministicScheduler {
         }
 
         // Check if slot has enough duration
-        const requiredMinutes = isSplittable ? Math.min(taskMinutes, maxSession) : taskMinutes;
-        if (slot.durationMinutes < requiredMinutes && slot.durationMinutes < minSession) {
+        const requiredMinutes = isSplittable ? minSession : taskMinutes;
+        if (slot.durationMinutes < requiredMinutes) {
           continue;
         }
 

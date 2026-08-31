@@ -98,6 +98,10 @@ export class TaskRepository {
     return this.create(userId, task);
   }
 
+  public async updateTask(userId: string, taskId: string, updates: Partial<StudyTask>): Promise<StudyTask | null> {
+    return this.update(userId, taskId, updates);
+  }
+
   public async create(userId: string, task: Partial<StudyTask>): Promise<StudyTask> {
     const id = task.id || 'task_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const newTask: StudyTask = {

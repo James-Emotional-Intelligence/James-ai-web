@@ -4,6 +4,7 @@ import { TopAppBar } from './TopAppBar';
 import { TopModuleNav } from './TopModuleNav';
 import { MobileTopMenu } from './MobileTopMenu';
 import { RobotJami, JamiState } from '../jami/RobotJami';
+import { JamiFloatingRobotStage } from '../jami/floating/JamiFloatingRobotStage';
 import { VoiceGoalModal } from '../../features/planner/VoiceGoalModal';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { VoiceJamiProvider, useVoiceJami } from '../../context/VoiceJamiContext';
@@ -80,18 +81,23 @@ const AppLayoutContent: React.FC = () => {
         <Outlet />
       </main>
 
-      {/* Floating Robot Jami Widget in Bottom-Right */}
+      {/* Floating Draggable Robot Jami Widget */}
       {!location.pathname.startsWith('/jami') && !location.pathname.startsWith('/focus') && (
-        <div className="fixed bottom-6 right-4 sm:right-8 z-40">
-          <RobotJami
-            state={jamiState}
-            size="md"
-            bubbleMessage={bubbleMessage}
-            bubbleActions={bubbleActions}
-            onActionClick={handleBubbleAction}
-            onClick={() => navigate('/jami')}
-          />
-        </div>
+        <JamiFloatingRobotStage robotWidth={148} robotHeight={214}>
+          {({ isDragging, dragVelocityX, dragVelocityY }) => (
+            <RobotJami
+              state={jamiState}
+              size="md"
+              bubbleMessage={bubbleMessage}
+              bubbleActions={bubbleActions}
+              onActionClick={handleBubbleAction}
+              onClick={() => navigate('/jami')}
+              isDragging={isDragging}
+              dragVelocityX={dragVelocityX}
+              dragVelocityY={dragVelocityY}
+            />
+          )}
+        </JamiFloatingRobotStage>
       )}
 
       {/* Mobile Top Menu Full Sheet */}

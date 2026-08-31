@@ -18,10 +18,41 @@ export default {
         );
       }
 
+      // Validate BACKEND_API_ORIGIN
+      const backendOrigin = (env.BACKEND_API_ORIGIN || '').trim();
+      let targetOriginUrl: URL | null = null;
+
+      if (backendOrigin && !backendOrigin.includes('your-backend-api.example.com')) {
+        try {
+          targetOriginUrl = new URL(backendOrigin);
+          if (targetOriginUrl.host === url.host) {
+            return new Response(
+              JSON.stringify({
+                error: {
+                  code: 'PROXY_LOOP_DETECTED',
+                  message: 'BACKEND_API_ORIGIN không được trỏ về chính Worker/Pages domain hiện tại.',
+                },
+              }),
+              { status: 502, headers: defaultHeaders }
+            );
+          }
+        } catch {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'INVALID_BACKEND_ORIGIN_URL',
+                message: 'BACKEND_API_ORIGIN được cung cấp không phải là một URL hợp lệ.',
+              },
+            }),
+            { status: 502, headers: defaultHeaders }
+          );
+        }
+      }
+
       if (url.pathname === '/api/v1/health/ready') {
-        if (env.BACKEND_API_ORIGIN) {
+        if (targetOriginUrl) {
           try {
-            const targetUrl = new URL('/api/v1/health/ready', env.BACKEND_API_ORIGIN);
+            const targetUrl = new URL('/api/v1/health/ready', targetOriginUrl);
             const originRes = await fetch(targetUrl.toString(), {
               method: 'GET',
               headers: { accept: 'application/json' },
@@ -47,16 +78,16 @@ export default {
             status: 'unhealthy',
             runtime: 'cloudflare_workers',
             database: 'unconfigured_origin',
-            notice: 'BACKEND_API_ORIGIN Cloudflare secret is required for production database readiness and routing.',
+            notice: 'BACKEND_API_ORIGIN environment variable is required for production database readiness and routing.',
           }),
           { status: 503, headers: defaultHeaders }
         );
       }
 
-      // Reverse-Proxy API request to Backend Origin if BACKEND_API_ORIGIN is configured
-      if (env.BACKEND_API_ORIGIN && !env.BACKEND_API_ORIGIN.includes('your-backend-api.example.com')) {
+      // Reverse-Proxy API request to Backend Origin if configured
+      if (targetOriginUrl) {
         try {
-          const targetUrl = new URL(url.pathname + url.search, env.BACKEND_API_ORIGIN);
+          const targetUrl = new URL(url.pathname + url.search, targetOriginUrl);
           const reqHeaders = new Headers(request.headers);
           reqHeaders.set('X-Forwarded-Proto', 'https');
           reqHeaders.set('X-Forwarded-Host', url.host);
@@ -83,7 +114,7 @@ export default {
             JSON.stringify({
               error: {
                 code: 'BACKEND_FETCH_FAILED',
-                message: `Không thể kết nối đến máy chủ Backend tại ${env.BACKEND_API_ORIGIN}: ${fetchErr.message}`,
+                message: `Không thể kết nối đến máy chủ Backend tại ${targetOriginUrl.origin}: ${fetchErr.message}`,
               },
             }),
             { status: 502, headers: defaultHeaders }
@@ -95,7 +126,7 @@ export default {
         JSON.stringify({
           error: {
             code: 'BACKEND_NOT_CONFIGURED',
-            message: `API endpoint ${url.pathname} chưa có Backend URL. Vui lòng cấu hình biến BACKEND_API_ORIGIN trong wrangler.jsonc hoặc Cloudflare Settings > Variables (ví dụ: https://your-backend.onrender.com).`,
+            message: `API endpoint ${url.pathname} chưa có Backend URL. Vui lòng cấu hình biến BACKEND_API_ORIGIN trong Cloudflare Settings > Variables (ví dụ: https://your-backend.example.com).`,
           },
         }),
         { status: 503, headers: defaultHeaders }

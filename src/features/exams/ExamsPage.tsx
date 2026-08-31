@@ -51,7 +51,7 @@ export const ExamsPage: React.FC = () => {
   const [isStartingQuiz, setIsStartingQuiz] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRetaking, setIsRetaking] = useState(false);
-  const [generatingMilestone, setGeneratingMilestone] = useState<{ examId: string; milestone: string } | null>(null);
+  const [generatingMilestone, setGeneratingMilestone] = useState<{ examId: string; milestone: 'D-14' | 'D-7' | 'D-3' | 'D-1' } | null>(null);
 
   // Add Exam Form State (5.1)
   const [isAddExamOpen, setIsAddExamOpen] = useState(false);
@@ -111,7 +111,7 @@ export const ExamsPage: React.FC = () => {
     }
   };
 
-  const handleGenerateExamQuiz = async (exam: Exam, milestone: string) => {
+  const handleGenerateExamQuiz = async (exam: Exam, milestone: 'D-14' | 'D-7' | 'D-3' | 'D-1') => {
     setGeneratingMilestone({ examId: exam.id, milestone });
     try {
       const res = await api.generateExamQuiz(exam.id, {
@@ -303,9 +303,6 @@ export const ExamsPage: React.FC = () => {
           </div>
           <div>
             <h1 className="text-lg font-black text-[#F3FAF5]">Kiểm Tra & Ôn Tập AI</h1>
-            <p className="text-xs text-[#A9B8AE]">
-              Quản lý lịch thi, lộ trình ôn tập khoa học và tự động tạo đề luyện thi thông minh.
-            </p>
           </div>
         </div>
 

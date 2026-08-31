@@ -8,6 +8,7 @@ import { examRepo } from '../repositories/exam-repository';
 import { reportRepo } from '../repositories/report-repository';
 import { subjectRepo } from '../repositories/subject-repository';
 import { plannerRepo } from '../repositories/planner-repository';
+import { notificationRepo } from '../repositories/notification-repository';
 import { UserRepository } from '../repositories/user-repository';
 import { DeterministicScheduler } from './scheduler';
 
@@ -20,7 +21,7 @@ export interface ActionProposalRecord {
   actionType: string;
   payload: any;
   previewText: string;
-  status: 'pending' | 'confirmed' | 'rejected' | 'expired';
+  status: 'pending' | 'confirmed' | 'rejected' | 'expired' | 'failed';
   expiresAt: string;
   confirmedAt?: string;
   idempotencyKey?: string;
@@ -31,6 +32,7 @@ export interface ActionResult {
   success: boolean;
   message: string;
   requiresConfirmation?: boolean;
+  isAlreadyConfirmed?: boolean;
   proposal?: ActionProposalRecord;
   clientAction?: {
     type: 'navigate' | 'focus_timer' | 'refresh';
@@ -470,6 +472,7 @@ export class JamiActionService {
           };
         }
 
+        case 'preview_replan':
         case 'preview_replan_tasks': {
           const reason = args?.reason || 'Yêu cầu sắp xếp lại lịch học';
           const currentTasks = await taskRepo.getByUserId(userId);
@@ -590,7 +593,8 @@ export class JamiActionService {
           };
         }
 
-        case 'create_reminder': {
+        case 'create_reminder':
+        case 'preview_create_reminder': {
           const content = String(args?.content || 'Học bài').trim();
           const timeStr = String(args?.timeStr || 'hôm nay').trim();
           const previewText = `Tạo lời nhắc "${content}" vào lúc ${timeStr}. Bạn có xác nhận không?`;
@@ -805,11 +809,27 @@ export class JamiActionService {
     proposalId?: string,
     conversationId?: string
   ): Promise<ActionResult> {
-    const proposal = await this.getLatestPendingProposal(userId, proposalId);
-    if (!proposal) {
+    if (!proposalId) {
       return {
         success: false,
-        message: 'Không tìm thấy đề xuất nào đang chờ xác nhận hoặc đề xuất đã hết hạn.',
+        message: 'Yêu cầu mã định danh đề xuất (proposalId) hợp lệ để thực hiện thao tác.',
+      };
+    }
+
+    const proposal = await this.getProposalById(userId, proposalId);
+    if (!proposal || proposal.userId !== userId) {
+      return {
+        success: false,
+        message: 'Không tìm thấy đề xuất hoặc đề xuất không thuộc quyền sở hữu của bạn.',
+      };
+    }
+
+    // Idempotency: If already confirmed, return success without duplicate side-effects
+    if (proposal.status === 'confirmed') {
+      return {
+        success: true,
+        message: 'Đề xuất này đã được xác nhận trước đó.',
+        isAlreadyConfirmed: true,
       };
     }
 
@@ -818,6 +838,21 @@ export class JamiActionService {
       return {
         success: true,
         message: 'Đã hủy đề xuất theo yêu cầu của bạn.',
+      };
+    }
+
+    if (proposal.status !== 'pending') {
+      return {
+        success: false,
+        message: `Đề xuất ở trạng thái "${proposal.status}", không thể thực hiện xác nhận.`,
+      };
+    }
+
+    if (proposal.expiresAt && new Date(proposal.expiresAt).getTime() < Date.now()) {
+      await this.updateProposalStatus(userId, proposal.id, 'expired');
+      return {
+        success: false,
+        message: 'Đề xuất đã hết hạn. Vui lòng tạo yêu cầu mới.',
       };
     }
 
@@ -837,7 +872,7 @@ export class JamiActionService {
             difficulty: p.difficulty,
             dueAt: p.dueAt,
           });
-          resultMsg = `Đã tạo nhiệm vụ "${task.title}" môn ${p.subjectName} thành công.`;
+          resultMsg = `Đã tạo nhiệm vụ "${task.title}" môn ${p.subjectName || ''} thành công.`;
           clientAction = { type: 'navigate', route: '/tasks' };
           break;
         }
@@ -858,7 +893,8 @@ export class JamiActionService {
           break;
         }
 
-        case 'replan_tasks': {
+        case 'replan_tasks':
+        case 'preview_replan_tasks': {
           const p = proposal.payload;
           await plannerRepo.confirmProposal(userId, p.id || proposal.id);
           resultMsg = `Đã áp dụng toàn bộ thời khóa biểu mới cho các nhiệm vụ học tập thành công.`;
@@ -883,15 +919,22 @@ export class JamiActionService {
 
         case 'mark_task_completed': {
           const p = proposal.payload;
-          await taskRepo.updateTask(userId, p.taskId, { status: 'completed' });
-          resultMsg = `Đã hoàn thành nhiệm vụ "${p.title}" thành công.`;
+          const existingTask = await taskRepo.getById(userId, p.taskId);
+          if (!existingTask) {
+            throw new Error('Nhiệm vụ không tồn tại hoặc không thuộc quyền sở hữu.');
+          }
+          await taskRepo.update(userId, p.taskId, { status: 'completed', completionPercent: 100 });
+          resultMsg = `Đã hoàn thành nhiệm vụ "${existingTask.title}" thành công.`;
           clientAction = { type: 'navigate', route: '/tasks' };
           break;
         }
 
         case 'create_reminder': {
           const p = proposal.payload;
-          resultMsg = `Đã lưu lời nhắc "${p.content}" (${p.timeStr}) vào hệ thống thành công.`;
+          await notificationRepo.savePushSubscription(userId, {
+            endpoint: 'internal_reminder',
+          });
+          resultMsg = `Đã lưu lời nhắc "${p.content}" (${p.timeStr || 'đã lên lịch'}) vào hệ thống thông báo thành công.`;
           clientAction = { type: 'navigate', route: '/notifications' };
           break;
         }
@@ -909,14 +952,47 @@ export class JamiActionService {
       };
     } catch (err: any) {
       console.error('[JamiActionService] Mutation execution error:', err);
+      await this.updateProposalStatus(userId, proposal.id, 'failed');
       return {
         success: false,
-        message: `Không thể hoàn tất thao tác: ${err.message}. Đề xuất vẫn được giữ để bạn có thể thử lại.`,
+        message: `Không thể hoàn tất thao tác: ${err.message}.`,
       };
     }
   }
 
-  private async updateProposalStatus(userId: string, proposalId: string, status: 'confirmed' | 'rejected') {
+  public async getProposalById(userId: string, proposalId: string): Promise<ActionProposalRecord | null> {
+    if (db.isHealthy()) {
+      try {
+        const rows = await db.query<any>(
+          `SELECT id, user_id, action_type, payload_json, summary, expires_at, status, confirmed_at, idempotency_key, created_at
+           FROM jami_action_proposals
+           WHERE id = ? AND user_id = ?`,
+          [proposalId, userId]
+        );
+        if (rows.length > 0) {
+          const r = rows[0];
+          return {
+            id: r.id,
+            userId: r.user_id,
+            actionType: r.action_type,
+            previewText: r.summary || '',
+            payload: typeof r.payload_json === 'string' ? JSON.parse(r.payload_json) : r.payload_json,
+            status: r.status,
+            expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : new Date().toISOString(),
+            confirmedAt: r.confirmed_at ? new Date(r.confirmed_at).toISOString() : undefined,
+            createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+          };
+        }
+      } catch (err: any) {
+        console.warn('[JamiActionService] DB getProposalById error:', err.message);
+      }
+    }
+
+    const list = this.demoProposals.get(userId) || [];
+    return list.find((p) => p.id === proposalId) || null;
+  }
+
+  private async updateProposalStatus(userId: string, proposalId: string, status: 'confirmed' | 'rejected' | 'failed' | 'expired') {
     if (db.isHealthy()) {
       try {
         await db.execute(

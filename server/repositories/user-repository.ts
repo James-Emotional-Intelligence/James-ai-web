@@ -41,8 +41,17 @@ export class UserRepository {
   }
 
   private seedDemoUserMemory() {
+    if (isProduction || !env.DEMO_LOGIN_ENABLED) {
+      return;
+    }
+
+    const demoPassword = process.env.DEMO_USER_PASSWORD || (process.env.NODE_ENV === 'test' ? 'TestDemo123!' : undefined);
+    if (!demoPassword) {
+      return;
+    }
+
     const demoSalt = 'demo_salt_seed_minh_1234';
-    const demoHash = crypto.createHash('sha256').update('Demo1234!' + demoSalt).digest('hex');
+    const demoHash = crypto.createHash('sha256').update(demoPassword + demoSalt).digest('hex');
 
     const demoStored: StoredUser = {
       ...DEMO_USER,
@@ -54,32 +63,6 @@ export class UserRepository {
 
     this.demoUsers.set(DEMO_USER.email.toLowerCase(), demoStored);
     this.demoProfiles.set(DEMO_USER.id, { ...DEMO_PROFILE });
-
-    // Seed Admin User (james.admin@gmail.com / Minhtriet14)
-    const adminSalt = 'admin_salt_seed_james_14';
-    const adminHash = crypto.createHash('sha256').update('Minhtriet14' + adminSalt).digest('hex');
-
-    const adminStored: StoredUser = {
-      ...ADMIN_USER,
-      role: 'admin',
-      passwordHash: adminHash,
-      passwordSalt: adminSalt,
-      passwordScheme: 'sha256',
-    };
-
-    this.demoUsers.set(ADMIN_USER.email.toLowerCase(), adminStored);
-    this.demoProfiles.set(ADMIN_USER.id, {
-      userId: ADMIN_USER.id,
-      gradeLevel: 12,
-      schoolName: 'Ban Quản Trị JAMI AI',
-      goals: ['Quản trị hệ thống, hỗ trợ người dùng và giám sát an toàn học tập'],
-      preferredSessionMinutes: 45,
-      maxDailyStudyMinutes: 300,
-      energyPreferences: { morning: 'high', afternoon: 'high', evening: 'high' },
-      sleepSchedule: { wakeTime: '06:00', bedTime: '23:00' },
-      mealTimes: { lunch: '12:00', dinner: '19:00' },
-      onboardingCompletedAt: new Date().toISOString(),
-    });
   }
 
   public async hashPassword(password: string): Promise<{ passwordHash: string; passwordSalt: string; scheme: string }> {
@@ -97,6 +80,7 @@ export class UserRepository {
 
   public async rehashUserPassword(userId: string, newPlainPassword: string): Promise<void> {
     const { passwordHash, passwordSalt } = await this.hashPassword(newPlainPassword);
+    this.userCache.delete(userId);
 
     if (db.isHealthy()) {
       try {
@@ -120,19 +104,20 @@ export class UserRepository {
 
   public async syncWithMySQL() {
     if (!db.isHealthy()) return;
+    if (isProduction || process.env.NODE_ENV === 'production' || process.env.ALLOW_DEMO_SEED !== 'true') return;
 
     try {
-      // 1. Sync Demo Student User
+      // Sync Demo Student User only in non-production when ALLOW_DEMO_SEED is true
       const demoUser = this.demoUsers.get(DEMO_USER.email.toLowerCase());
       if (demoUser) {
-        const existingDemo = await db.query<any>('SELECT id FROM users WHERE email = ?', [DEMO_USER.email]);
+        const existingDemo = await db.query<any>('SELECT id FROM users WHERE email = ?', [DEMO_USER.email.toLowerCase()]);
         if (existingDemo.length === 0) {
           await db.execute(
             `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at)
              VALUES (?, ?, ?, ?, 'sha256', ?, ?, ?, ?, ?, 'user', ?, ?)`,
             [
               demoUser.id,
-              demoUser.email,
+              demoUser.email.toLowerCase(),
               demoUser.passwordHash,
               demoUser.passwordSalt,
               demoUser.displayName,
@@ -161,45 +146,6 @@ export class UserRepository {
             ]
           );
           console.log('[JAMI MySQL] Seeded demo student into MySQL.');
-        }
-      }
-
-      // 2. Sync Admin User (james.admin@gmail.com / Minhtriet14)
-      const adminUser = this.demoUsers.get(ADMIN_USER.email.toLowerCase());
-      if (adminUser) {
-        const existingAdmin = await db.query<any>('SELECT id FROM users WHERE email = ?', [ADMIN_USER.email]);
-        const { passwordHash: adminScryptHash, passwordSalt: adminScryptSalt } = await this.hashPassword('Minhtriet14');
-
-        if (existingAdmin.length === 0) {
-          await db.execute(
-            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at)
-             VALUES (?, ?, ?, ?, 'scrypt', ?, ?, ?, ?, ?, 'admin', 'active', ?)`,
-            [
-              adminUser.id,
-              adminUser.email,
-              adminScryptHash,
-              adminScryptSalt,
-              adminUser.displayName,
-              adminUser.preferredName,
-              adminUser.locale,
-              adminUser.timezone,
-              adminUser.ageBand,
-              new Date(),
-            ]
-          );
-
-          await db.execute(
-            `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json, onboarding_completed_at)
-             VALUES (?, 12, 'Ban Quản Trị JAMI AI', '["Quản trị hệ thống JAMI"]', 45, 300, '{"morning":"high","afternoon":"high","evening":"high"}', '{"wakeTime":"06:00","bedTime":"23:00"}', '{"lunch":"12:00","dinner":"19:00"}', NOW(3))`,
-            [adminUser.id]
-          );
-          console.log('[JAMI MySQL] Seeded admin user (james.admin@gmail.com) into MySQL.');
-        } else {
-          // Ensure admin privileges and correct password hash
-          await db.execute(
-            `UPDATE users SET password_hash = ?, password_salt = ?, password_scheme = 'scrypt', role = 'admin', status = 'active' WHERE email = ?`,
-            [adminScryptHash, adminScryptSalt, ADMIN_USER.email]
-          );
         }
       }
     } catch (err: any) {
@@ -412,6 +358,7 @@ export class UserRepository {
       this.demoProfiles.set(userId, updated);
     }
 
+    this.profileCache.delete(userId);
     return updated;
   }
 
@@ -433,12 +380,14 @@ export class UserRepository {
     const userId = 'usr_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const { passwordHash, passwordSalt, scheme } = await this.hashPassword(data.password);
     const createdAt = new Date().toISOString();
+    const role = (data as any).role || 'student';
 
     const user: User = {
       id: userId,
       email: normalizedEmail,
       displayName: data.displayName.trim(),
       preferredName: (data.preferredName || data.displayName.trim().split(/\s+/).pop() || 'Học sinh').trim(),
+      role,
       locale: 'vi-VN',
       timezone: 'Asia/Ho_Chi_Minh',
       ageBand: '14-17',
@@ -463,8 +412,8 @@ export class UserRepository {
       try {
         await db.withTransaction(async (conn) => {
           await conn.execute(
-            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, role, locale, timezone, age_band, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               userId,
               normalizedEmail,
@@ -473,6 +422,7 @@ export class UserRepository {
               scheme,
               user.displayName,
               user.preferredName,
+              role,
               user.locale,
               user.timezone,
               user.ageBand,
@@ -752,6 +702,9 @@ export class UserRepository {
   }
 
   public async setUserStatus(userId: string, status: 'active' | 'banned' | 'inactive'): Promise<User> {
+    this.userCache.delete(userId);
+    this.profileCache.delete(userId);
+
     if (db.isHealthy()) {
       await db.execute(`UPDATE users SET status = ?, updated_at = NOW(3) WHERE id = ?`, [status, userId]);
       if (status === 'banned') {
@@ -776,6 +729,9 @@ export class UserRepository {
   }
 
   public async setUserRole(userId: string, role: 'admin' | 'user'): Promise<User> {
+    this.userCache.delete(userId);
+    this.profileCache.delete(userId);
+
     if (db.isHealthy()) {
       await db.execute(`UPDATE users SET role = ?, updated_at = NOW(3) WHERE id = ?`, [role, userId]);
     }
@@ -795,6 +751,9 @@ export class UserRepository {
   }
 
   public async deleteUser(userId: string): Promise<boolean> {
+    this.userCache.delete(userId);
+    this.profileCache.delete(userId);
+
     if (db.isHealthy()) {
       try {
         await db.withTransaction(async (conn) => {

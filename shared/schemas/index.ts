@@ -328,10 +328,11 @@ export const ExamQuizGenerateSchema = z.object({
 });
 
 export const QuizAttemptSubmitSchema = z.object({
+  attemptId: z.string().optional(),
   answers: z.array(z.object({
     questionId: z.string().min(1),
     answer: z.string(),
-  })).min(1, { message: 'Danh sách câu trả lời không được để trống' }),
+  })).default([]),
 });
 
 export const JamiChatRequestSchema = z.object({
