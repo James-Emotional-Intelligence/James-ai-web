@@ -242,7 +242,8 @@ export const FocusTimerPage: React.FC = () => {
 
     try {
       if (!activeSessionId && isWork) {
-        const res = await api.startFocusSession(linkedTaskId, mode, plannedM);
+        const cleanTaskId = linkedTaskId && linkedTaskId !== 'none' && linkedTaskId.trim() !== '' ? linkedTaskId.trim() : undefined;
+        const res = await api.startFocusSession(cleanTaskId, mode, plannedM);
         setActiveSessionId(res.session.id);
         setTimerState('running');
         if (res.session.targetEndAt) {

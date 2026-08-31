@@ -348,7 +348,7 @@ export const TaskDetailPage: React.FC = () => {
         <div className="h-44 rounded-3xl bg-[#0B120D] border border-[rgba(34,197,94,0.2)] animate-pulse flex items-center justify-center">
           <div className="flex items-center gap-2 text-xs text-[#A9B8AE]">
             <RefreshCw className="w-4 h-4 animate-spin text-[#22C55E]" />
-            <span>Đang tải thông tin chi tiết nhiệm vụ từ MySQL...</span>
+            <span>Đang tải thông tin chi tiết nhiệm vụ...</span>
           </div>
         </div>
       </div>

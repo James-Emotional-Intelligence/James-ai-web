@@ -229,7 +229,7 @@ export interface FocusSession {
   taskId?: string;
   taskTitle?: string;
   subjectName?: string;
-  mode: '25_5' | '45_10' | 'custom';
+  mode: '15' | '25' | '45' | '60' | '25_5' | '45_10' | 'custom' | string;
   phase?: 'work' | 'break';
   plannedMinutes: number;
   breakMinutes?: number;

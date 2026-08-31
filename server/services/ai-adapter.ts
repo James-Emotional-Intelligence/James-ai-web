@@ -339,22 +339,25 @@ Nguyên tắc:
     }
 
     if (msg.includes('lịch') || msg.includes('hôm nay') || msg.includes('làm gì')) {
-      const todayText =
-        context?.todaySessions && context.todaySessions.length > 0
-          ? context.todaySessions.map((s) => `• ${s.time}: ${s.title}`).join('\n')
-          : 'Hôm nay chưa có phiên học cố định nào trên thời khóa biểu.';
+      const hasSessions = context?.todaySessions && context.todaySessions.length > 0;
+      const hasTasks = context?.pendingTasks && context.pendingTasks.length > 0;
 
-      const tasksText =
-        context?.pendingTasks && context.pendingTasks.length > 0
-          ? `Em còn ${context.pendingTasks.length} nhiệm vụ cần hoàn thành (ưu tiên: "${context.pendingTasks[0].title}").`
-          : 'Hiện em không có nhiệm vụ nào tồn đọng.';
+      const todayText = hasSessions
+        ? `📅 **Lịch học hôm nay:**\n${context.todaySessions!.map((s) => `• ${s.time}: ${s.title} (${s.subject || 'Môn học'})`).join('\n')}`
+        : '📅 **Lịch học hôm nay:** Hôm nay em không có tiết học nào trên thời khóa biểu.';
+
+      const tasksText = hasTasks
+        ? `📝 **Nhiệm vụ cần làm (${context.pendingTasks!.length} bài):**\n${context.pendingTasks!.map((t) => `• ${t.title} (${t.estimatedMinutes || 30} phút)`).join('\n')}`
+        : '📝 **Nhiệm vụ:** Hiện em không có nhiệm vụ học tập nào cần làm.';
 
       return {
-        message: `Chào ${studentName}! Đây là kế hoạch học tập của em hôm nay:\n${todayText}\n${tasksText}\nJami đã sẵn sàng đồng hành cùng em!`,
+        message: `Chào ${studentName}! Kế hoạch học tập hôm nay của em:\n\n${todayText}\n\n${tasksText}`,
         emotion: 'speaking',
-        suggestedActions: ['Bắt đầu phiên học đầu tiên', 'Xem danh sách công việc', 'Bắt đầu Hẹn giờ tập trung'],
+        suggestedActions: hasTasks
+          ? ['Bắt đầu nhiệm vụ đầu tiên', 'Hẹn giờ tập trung', 'Xem Thời khóa biểu']
+          : ['Xem Thời khóa biểu', 'Mở Kho Tài Liệu', 'Làm đề ôn tập AI'],
         requiresConfirmation: false,
-        citationsToUserMaterial: ['Thời khóa biểu hôm nay'],
+        citationsToUserMaterial: hasSessions ? ['Thời khóa biểu hôm nay'] : [],
       };
     }
 
@@ -844,7 +847,7 @@ Trả về đúng định dạng JSON chuẩn:
 
     // High quality standard Vietnamese curriculum fallback
     return {
-      timetableName: 'Thời khóa biểu trường',
+      timetableName: 'THỜI KHÓA BIỂU (TRƯỜNG HỌC)',
       entries: [
         { dayOfWeek: 1, title: 'Chào cờ', startLocalTime: '07:15', endLocalTime: '08:00', room: 'Sân trường' },
         { dayOfWeek: 1, title: 'Toán học', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },

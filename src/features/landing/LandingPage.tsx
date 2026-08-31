@@ -418,7 +418,7 @@ export const LandingPage: React.FC = () => {
               {
                 num: 5,
                 title: 'KIỂM TRA & ÔN TẬP',
-                desc: 'Lộ trình nước rút D-14, D-7, D-3, D-1 kèm đề thi trắc nghiệm & tự luận.',
+                desc: 'Lộ trình ôn tập khoa học kèm bộ đề thi trắc nghiệm & tự luận theo tài liệu.',
                 icon: GraduationCap,
               },
               {

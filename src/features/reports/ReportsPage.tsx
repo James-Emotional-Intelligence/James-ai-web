@@ -156,7 +156,7 @@ export const ReportsPage: React.FC = () => {
       {isLoading ? (
         <div className="p-16 text-center text-xs text-[#A9B8AE] flex items-center justify-center gap-2.5">
           <RefreshCw className="w-5 h-5 animate-spin text-[#22C55E]" />
-          <span>Đang tổng hợp dữ liệu học tập từ MySQL...</span>
+          <span>Đang tổng hợp dữ liệu học tập...</span>
         </div>
       ) : report ? (
         <>

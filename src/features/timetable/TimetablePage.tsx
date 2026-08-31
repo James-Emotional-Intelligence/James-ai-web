@@ -226,7 +226,7 @@ export const TimetablePage: React.FC = () => {
   const [ocrPreviewUrl, setOcrPreviewUrl] = useState<string | null>(null);
   const [ocrBase64, setOcrBase64] = useState<string | null>(null);
   const [ocrMimeType, setOcrMimeType] = useState<string>('image/jpeg');
-  const [ocrTimetableName, setOcrTimetableName] = useState('Thời khóa biểu trường');
+  const [ocrTimetableName, setOcrTimetableName] = useState('THỜI KHÓA BIỂU (TRƯỜNG HỌC)');
   const [ocrReplaceExisting, setOcrReplaceExisting] = useState(true);
   const [ocrExtractedEntries, setOcrExtractedEntries] = useState<
     Array<{
@@ -939,11 +939,6 @@ export const TimetablePage: React.FC = () => {
             <h1 className="text-base sm:text-lg font-black text-[#F3FAF5] flex items-center gap-2">
               <span>Lịch Học & Kế Hoạch Cá Nhân</span>
             </h1>
-            <p className="text-[11px] text-[#A9B8AE]">
-              {activeTab === 'timetable'
-                ? 'Bảng 1: Quản lý thời khóa biểu chính khóa các tiết học trên trường lớp'
-                : 'Bảng 2: Quản lý thời gian biểu sinh hoạt, lịch học thêm & thời gian tự học AI'}
-            </p>
           </div>
         </div>
 
@@ -1061,7 +1056,7 @@ export const TimetablePage: React.FC = () => {
               className="flex items-center gap-1.5 px-4 py-2 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-bold rounded-xl shadow-md cursor-pointer disabled:opacity-50"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>{isConfirmingProposal ? 'Đang lưu vào MySQL...' : 'Xác nhận cập nhật lịch'}</span>
+              <span>{isConfirmingProposal ? 'Đang cập nhật...' : 'Xác nhận cập nhật lịch'}</span>
             </button>
           </div>
         </div>
@@ -1092,7 +1087,11 @@ export const TimetablePage: React.FC = () => {
 
               <h2 className="text-base font-black text-[#F3FAF5] flex items-center gap-2">
                 <School className="w-4 h-4 text-[#22C55E]" />
-                <span>{activeTimetable?.name || 'Thời Khóa Biểu (Trường Học)'}</span>
+                <span>
+                  {activeTimetable?.name && activeTimetable.name !== 'Thời khóa biểu trường'
+                    ? activeTimetable.name
+                    : 'THỜI KHÓA BIỂU (TRƯỜNG HỌC)'}
+                </span>
               </h2>
             </div>
 
@@ -1565,7 +1564,7 @@ export const TimetablePage: React.FC = () => {
                 type="button"
                 onClick={() => setActiveTab('timetable')}
                 className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3.5 py-2 shadow-md text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
-                title="Bấm để chuyển sang Bảng 1: Thời khóa biểu trường học"
+                title="Bấm để chuyển sang Bảng 1: THỜI KHÓA BIỂU (TRƯỜNG HỌC)"
               >
                 <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
                 <span>Bảng 1</span>
@@ -2907,7 +2906,7 @@ export const TimetablePage: React.FC = () => {
                       className="flex items-center gap-2 px-5 py-2.5 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black rounded-xl shadow-lg shadow-[#16A34A]/30 cursor-pointer disabled:opacity-40 transition-all"
                     >
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>{isOcrSaving ? 'Đang lưu vào MySQL...' : `Xác Nhận & Lưu (${ocrExtractedEntries.length} tiết)`}</span>
+                      <span>{isOcrSaving ? 'Đang lưu thời khóa biểu...' : `Xác Nhận & Lưu (${ocrExtractedEntries.length} tiết)`}</span>
                     </button>
                   </div>
                 </div>

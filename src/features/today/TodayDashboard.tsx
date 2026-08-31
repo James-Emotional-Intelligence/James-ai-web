@@ -206,7 +206,7 @@ export const TodayDashboard: React.FC = () => {
         <div className="h-36 rounded-3xl bg-[#0B120D] border border-[rgba(34,197,94,0.2)] animate-pulse flex items-center justify-center">
           <div className="flex items-center gap-2 text-xs text-[#A9B8AE]">
             <RefreshCw className="w-4 h-4 animate-spin text-[#22C55E]" />
-            <span>Đang tải kế hoạch học tập hôm nay từ MySQL...</span>
+            <span>Đang tải kế hoạch học tập hôm nay...</span>
           </div>
         </div>
       </div>
@@ -669,7 +669,7 @@ export const TodayDashboard: React.FC = () => {
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-[#A9B8AE]">Thời gian còn lại:</span>
                   <span className="font-extrabold text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded-lg border border-amber-800/50">
-                    Còn {overview.exams.daysRemaining} ngày
+                    {overview.exams.daysRemaining === 0 ? 'Hôm nay thi!' : `Còn ${overview.exams.daysRemaining} ngày`}
                   </span>
                 </div>
               </div>

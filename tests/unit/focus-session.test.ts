@@ -88,21 +88,21 @@ describe('Focus Session & State Machine Unit Tests', () => {
   describe('2. Validation Schemas', () => {
     it('validates start session schema with custom boundaries', () => {
       const valid = FocusSessionStartSchema.safeParse({
-        mode: 'custom',
-        minutes: 40,
-        breakMinutes: 8,
+        mode: '45',
+        minutes: 45,
+        breakMinutes: 10,
       });
       expect(valid.success).toBe(true);
 
       const invalidMin = FocusSessionStartSchema.safeParse({
         mode: 'custom',
-        minutes: 2, // below min 5
+        minutes: 0, // below min 1
       });
       expect(invalidMin.success).toBe(false);
 
       const invalidMax = FocusSessionStartSchema.safeParse({
         mode: 'custom',
-        minutes: 240, // above max 180
+        minutes: 350, // above max 300
       });
       expect(invalidMax.success).toBe(false);
     });

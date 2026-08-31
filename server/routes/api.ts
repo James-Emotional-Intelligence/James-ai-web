@@ -868,14 +868,20 @@ apiRouter.get('/dashboard/overview', requireAuth, asyncHandler(async (req: Reque
 
   // 7. Exams, Materials, Notifications
   const exams = await examRepo.getByUserId(userId);
+  const todayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const upcomingExam = exams
-    .filter((e) => e.status === 'upcoming' && new Date(e.examAt).getTime() >= nowMs)
+    .filter((e) => {
+      const examDate = new Date(e.examAt);
+      const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
+      return e.status === 'upcoming' && examDayMs >= todayStartMs;
+    })
     .sort((a, b) => new Date(a.examAt).getTime() - new Date(b.examAt).getTime())[0] || null;
 
   let daysRemaining = 0;
   if (upcomingExam?.examAt) {
-    const diffMs = new Date(upcomingExam.examAt).getTime() - nowMs;
-    daysRemaining = Math.max(0, Math.ceil(diffMs / (1000 * 3600 * 24)));
+    const examDate = new Date(upcomingExam.examAt);
+    const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
+    daysRemaining = Math.max(0, Math.round((examDayMs - todayStartMs) / (1000 * 3600 * 24)));
   }
 
   const materials = await materialRepo.getByUserId(userId);
@@ -1552,8 +1558,13 @@ apiRouter.post('/focus-sessions', requireAuth, asyncHandler(async (req: Request,
   }
 
   const { taskId, mode, minutes, breakMinutes, idempotencyKey } = parsed.data;
-  const session = await focusRepo.startSession(userId, taskId, mode, minutes, breakMinutes, idempotencyKey);
-  res.json({ session });
+  try {
+    const session = await focusRepo.startSession(userId, taskId, mode, minutes, breakMinutes, idempotencyKey);
+    res.json({ session });
+  } catch (err: any) {
+    console.error('[API] POST /focus-sessions error:', err);
+    sendError(req, res, 400, 'FOCUS_START_ERROR', err.message || 'Không thể tạo phiên tập trung.');
+  }
 }));
 
 apiRouter.post('/focus-sessions/:id/pause', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -2072,9 +2083,79 @@ apiRouter.post('/materials/:id/quizzes/generate', requireAuth, asyncHandler(asyn
   res.json(result);
 }));
 
+apiRouter.patch('/materials/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const title = (req.body?.title || '').trim();
+  if (!title) {
+    return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Tên tài liệu không được để trống.' } });
+  }
+  const updated = await materialRepo.rename(userId, req.params.id, title);
+  if (!updated) {
+    return res.status(404).json({ error: { code: 'MATERIAL_NOT_FOUND', message: 'Không tìm thấy tài liệu.' } });
+  }
+  res.json({ material: updated });
+}));
+
+apiRouter.get('/materials/:id/download', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const result = await materialRepo.getDownloadUrl(userId, req.params.id);
+  if (!result) {
+    const material = await materialRepo.getById(userId, req.params.id);
+    if (!material) {
+      return res.status(404).json({ error: { code: 'MATERIAL_NOT_FOUND', message: 'Không tìm thấy tài liệu.' } });
+    }
+    return res.json({ downloadUrl: `/api/v1/materials/${material.id}/content`, expiresAt: new Date(Date.now() + 3600000).toISOString() });
+  }
+  res.json(result);
+}));
+
+apiRouter.post('/materials/:id/outline', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const outline = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, req.body?.chapter);
+  res.json({ outline });
+}));
+
 apiRouter.delete('/materials/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const success = await materialRepo.delete(userId, req.params.id);
+  res.json({ success });
+}));
+
+// Outlines Subsystem Routes (6.2)
+apiRouter.get('/outlines', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const subjectId = req.query.subjectId as string | undefined;
+  const outlines = await materialRepo.getOutlines(userId, subjectId);
+  res.json({ outlines });
+}));
+
+apiRouter.get('/outlines/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const outline = await materialRepo.getOutline(userId, req.params.id);
+  if (!outline) {
+    return res.status(404).json({ error: { code: 'OUTLINE_NOT_FOUND', message: 'Không tìm thấy đề cương.' } });
+  }
+  res.json({ outline });
+}));
+
+apiRouter.post('/outlines', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const outline = await materialRepo.createOutline(userId, req.body || {});
+  res.status(201).json({ outline });
+}));
+
+apiRouter.patch('/outlines/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const updated = await materialRepo.updateOutline(userId, req.params.id, req.body || {});
+  if (!updated) {
+    return res.status(404).json({ error: { code: 'OUTLINE_NOT_FOUND', message: 'Không tìm thấy đề cương.' } });
+  }
+  res.json({ outline: updated });
+}));
+
+apiRouter.delete('/outlines/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await materialRepo.deleteOutline(userId, req.params.id);
   res.json({ success });
 }));
 
@@ -2308,11 +2389,19 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
       dueAt: t.dueAt,
     }));
 
+  const now = new Date();
+  const todayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
   const upcomingExams = exams
-    .filter((e) => e.status === 'upcoming')
+    .filter((e) => {
+      const examDate = new Date(e.examAt);
+      const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
+      return e.status === 'upcoming' && examDayMs >= todayStartMs;
+    })
     .map((e) => {
-      const diffMs = new Date(e.examAt).getTime() - Date.now();
-      const daysLeft = Math.max(0, Math.ceil(diffMs / (1000 * 3600 * 24)));
+      const examDate = new Date(e.examAt);
+      const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
+      const daysLeft = Math.max(0, Math.round((examDayMs - todayStartMs) / (1000 * 3600 * 24)));
       return {
         id: e.id,
         title: e.title,
@@ -2322,11 +2411,20 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
       };
     });
 
-  const todaySessions = timetableEntries.map((e) => ({
-    title: e.title,
-    time: `${e.startLocalTime} - ${e.endLocalTime}`,
-    subject: e.subjectName,
-  }));
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+  const localDayOfWeek = (() => {
+    const dayStr = new Intl.DateTimeFormat('en-US', { timeZone: userTimezone, weekday: 'short' }).format(now);
+    const map: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+    return map[dayStr] || 1;
+  })();
+
+  const todaySessions = timetableEntries
+    .filter((e) => Number(e.dayOfWeek) === localDayOfWeek)
+    .map((e) => ({
+      title: e.title,
+      time: `${e.startLocalTime} - ${e.endLocalTime}`,
+      subject: e.subjectName,
+    }));
 
   const context = {
     userId,

@@ -65,7 +65,7 @@ export const MODULES_CONFIG: ModuleDefinition[] = [
     shortName: 'Kiểm tra',
     path: '/exams',
     icon: GraduationCap,
-    description: 'Lộ trình D-14, D-7 & Đề luyện tập AI',
+    description: 'Lộ trình ôn tập & đề thi kiểm tra AI',
   },
   {
     id: 'materials',

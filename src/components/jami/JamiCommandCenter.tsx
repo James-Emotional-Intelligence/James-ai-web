@@ -221,11 +221,11 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
             <h2 className="text-sm sm:text-base font-black text-[#F3FAF5] flex items-center gap-2">
               <span>Trung Tâm Hội Thoại Jami AI</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#14532D] text-[#86EFAC] border border-[#22C55E]/30">
-                MySQL Sync
+                Đồng bộ tự động
               </span>
             </h2>
             <p className="text-[11px] text-[#A9B8AE]">
-              Tương tác giọng nói thật và lịch sử học tập cá nhân hóa
+              Tương tác giọng nói và lịch sử học tập cá nhân hóa
             </p>
           </div>
         </div>
@@ -244,7 +244,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
         {isFetching ? (
           <div className="h-full flex items-center justify-center text-xs text-[#A9B8AE] gap-2">
             <RefreshCw className="w-4 h-4 text-[#22C55E] animate-spin" />
-            <span>Đang tải lịch sử hội thoại từ MySQL...</span>
+            <span>Đang tải lịch sử hội thoại...</span>
           </div>
         ) : error ? (
           <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-800 text-rose-300 text-xs space-y-2 text-center">
@@ -300,7 +300,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
                       {msg.isConfirmed ? (
                         <div className="flex items-center gap-1 text-[11px] font-bold text-[#86EFAC] bg-[#14532D] px-2.5 py-1 rounded-lg border border-[#22C55E]/30">
                           <CheckCircle2 className="w-3.5 h-3.5 text-[#22C55E]" />
-                          <span>Đã xác nhận & cập nhật MySQL</span>
+                          <span>Đã xác nhận & cập nhật thành công</span>
                         </div>
                       ) : (
                         <button

@@ -30,7 +30,7 @@ export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({ children
           <div className="space-y-2">
             <h1 className="text-xl font-black text-[#F3FAF5]">Máy chủ chưa sẵn sàng</h1>
             <p className="text-xs text-[#A9B8AE] leading-relaxed">
-              {serverErrorDetails || 'Hệ thống backend hoặc cơ sở dữ liệu MySQL hiện không thể kết nối. Vui lòng thử lại sau.'}
+              {serverErrorDetails || 'Hệ thống máy chủ hiện không thể kết nối. Vui lòng thử lại sau ít phút.'}
             </p>
           </div>
 

@@ -912,7 +912,7 @@ export const MaterialsPage: React.FC = () => {
               {isUploading && (
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-[11px] text-[#86EFAC]">
-                    <span>Đang tải lên Cloudflare R2...</span>
+                    <span>Đang tải tệp lên hệ thống...</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <div className="w-full bg-[#101A13] rounded-full h-2 overflow-hidden">

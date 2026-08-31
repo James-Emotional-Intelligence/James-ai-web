@@ -29,30 +29,34 @@ const AppLayoutContent: React.FC = () => {
     if (!voice.isHandsFreeEnabled) {
       if (location.pathname.startsWith('/focus')) {
         setJamiState('focus');
-        setBubbleMessage('Giữ tâm trí thư thái và tập trung nào!');
+        setBubbleMessage('Giữ tâm trí thư thái và tập trung học tập nào!');
         setBubbleActions([]);
       } else if (location.pathname.startsWith('/tasks')) {
         setJamiState('guiding');
-        setBubbleMessage('Jami đã chia nhỏ từng bước để bạn hoàn thành xuất sắc.');
-        setBubbleActions(['Xem bước 1', 'Bắt đầu Hẹn giờ']);
+        setBubbleMessage('Chọn bài tập để bắt đầu hoặc tạo nhiệm vụ mới nhé.');
+        setBubbleActions(['Hẹn giờ tập trung', 'Lịch học']);
       } else if (location.pathname.startsWith('/exams')) {
         setJamiState('encouraging');
-        setBubbleMessage('Luyện tập đều đặn là bí quyết đạt điểm cao!');
-        setBubbleActions(['Làm bài kiểm tra D-7']);
+        setBubbleMessage('Luyện tập đều đặn là bí quyết ghi nhớ kiến thức tốt nhất!');
+        setBubbleActions(['Tạo đề ôn tập', 'Lịch học']);
+      } else if (location.pathname.startsWith('/materials')) {
+        setJamiState('guiding');
+        setBubbleMessage('Bạn có thể tải đề cương hoặc tài liệu để tạo câu hỏi ôn tập.');
+        setBubbleActions(['Kiểm tra & Ôn tập', 'Nhiệm vụ']);
       } else {
         setJamiState('idle');
-        setBubbleMessage(`Chào ${studentName}! Bạn cần Jami hỗ trợ lập lịch hay giải thích bài học nào?`);
-        setBubbleActions(['Lịch học thông minh', 'Nói mục tiêu']);
+        setBubbleMessage(`Chào ${studentName}! Bạn cần Jami hỗ trợ gì hôm nay?`);
+        setBubbleActions(['Lịch học', 'Hẹn giờ tập trung']);
       }
     }
   }, [location.pathname, studentName, voice.isHandsFreeEnabled]);
 
   const handleBubbleAction = (action: string) => {
     if (action.includes('Lịch')) navigate('/timetable');
-    else if (action.includes('Hẹn giờ')) navigate('/focus');
+    else if (action.includes('Hẹn giờ') || action.includes('Tập trung')) navigate('/focus');
     else if (action.includes('mục tiêu')) setIsVoiceModalOpen(true);
-    else if (action.includes('kiểm tra')) navigate('/exams');
-    else if (action.includes('bước 1')) navigate('/tasks');
+    else if (action.includes('ôn tập') || action.includes('Kiểm tra')) navigate('/exams');
+    else if (action.includes('Nhiệm vụ') || action.includes('bài tập')) navigate('/tasks');
   };
 
   const handleLogout = async () => {

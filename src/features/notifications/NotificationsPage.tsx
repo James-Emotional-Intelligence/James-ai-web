@@ -209,7 +209,7 @@ export const NotificationsPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="w-full space-y-6">
       {/* Header */}
       <div className="bg-[#0B120D] p-5 sm:p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -488,7 +488,7 @@ export const NotificationsPage: React.FC = () => {
             {settingsSuccess && (
               <div className="p-3 bg-[#14532D]/40 border border-[#22C55E]/40 rounded-2xl text-[#86EFAC] text-xs flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-[#22C55E]" />
-                <span>Đã lưu tùy chọn thông báo thành công vào MySQL!</span>
+                <span>Đã lưu cài đặt thông báo thành công!</span>
               </div>
             )}
 

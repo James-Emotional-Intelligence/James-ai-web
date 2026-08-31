@@ -24,7 +24,7 @@ export const SIDEBAR_MODULES = [
     name: '1. LỊCH HỌC THÔNG MINH',
     path: '/timetable',
     icon: CalendarDays,
-    subItems: ['Thời khóa biểu trường', 'Lịch học thêm', 'Tự động xếp lại'],
+    subItems: ['THỜI KHÓA BIỂU (TRƯỜNG HỌC)', 'Lịch học thêm', 'Tự động xếp lại'],
   },
   {
     order: 2,

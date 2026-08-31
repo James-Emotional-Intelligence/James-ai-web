@@ -187,9 +187,44 @@ export const ExamsPage: React.FC = () => {
     }
   };
 
-  const calculateDaysRemaining = (examAt: string) => {
-    const diff = new Date(examAt).getTime() - Date.now();
-    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+  const getExamCountdown = (examAt: string) => {
+    const examDate = new Date(examAt);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const examDayStart = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
+    const diffDays = Math.round((examDayStart - todayStart) / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) {
+      const pastDays = Math.abs(diffDays);
+      return {
+        status: 'past' as const,
+        days: pastDays,
+        label: pastDays === 1 ? 'Đã thi hôm qua' : `Đã thi ${pastDays} ngày trước`,
+        badgeClass: 'bg-[#101A13] text-[#A9B8AE] border border-slate-700/40',
+      };
+    }
+    if (diffDays === 0) {
+      return {
+        status: 'today' as const,
+        days: 0,
+        label: 'Hôm nay thi!',
+        badgeClass: 'bg-rose-950 text-rose-300 border border-rose-800 animate-pulse',
+      };
+    }
+    if (diffDays <= 3) {
+      return {
+        status: 'very_soon' as const,
+        days: diffDays,
+        label: `Còn ${diffDays} ngày`,
+        badgeClass: 'bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-sm',
+      };
+    }
+    return {
+      status: 'upcoming' as const,
+      days: diffDays,
+      label: `Còn ${diffDays} ngày`,
+      badgeClass: 'bg-[#101A13] text-[#86EFAC] border border-[rgba(34,197,94,0.25)]',
+    };
   };
 
   const handleCreateQuizFromMaterial = async (res: SelectedFileResult) => {
@@ -563,14 +598,16 @@ export const ExamsPage: React.FC = () => {
           ) : exams.length > 0 ? (
             <div className="space-y-4">
               {exams.map((exam) => {
-                const daysLeft = calculateDaysRemaining(exam.examAt);
-                const isVerySoon = daysLeft <= 3;
+                const countdown = getExamCountdown(exam.examAt);
+                const isPast = countdown.status === 'past';
                 const examQuizzes = quizzes.filter((q) => q.examId === exam.id);
 
                 return (
                   <div
                     key={exam.id}
-                    className="bg-[#0B120D] p-5 sm:p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl space-y-4 hover:border-[#22C55E]/40 transition-all"
+                    className={`bg-[#0B120D] p-5 sm:p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl space-y-4 hover:border-[#22C55E]/40 transition-all ${
+                      isPast ? 'opacity-75 hover:opacity-100' : ''
+                    }`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
@@ -590,14 +627,10 @@ export const ExamsPage: React.FC = () => {
 
                       <div className="flex items-center gap-2">
                         <div
-                          className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 ${
-                            isVerySoon
-                              ? 'bg-rose-950 text-rose-300 border border-rose-800 animate-pulse'
-                              : 'bg-[#101A13] text-[#86EFAC] border border-[rgba(34,197,94,0.25)]'
-                          }`}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 ${countdown.badgeClass}`}
                         >
                           <Clock className="w-3.5 h-3.5" />
-                          <span>{daysLeft === 0 ? 'Hôm nay thi!' : `Còn ${daysLeft} ngày`}</span>
+                          <span>{countdown.label}</span>
                         </div>
                       </div>
                     </div>

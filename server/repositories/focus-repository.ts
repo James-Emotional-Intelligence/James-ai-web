@@ -76,13 +76,35 @@ export class FocusRepository {
   public async startSession(
     userId: string,
     taskId?: string,
-    mode: '25_5' | '45_10' | 'custom' = '25_5',
+    mode: string = '25_5',
     minutes?: number,
     breakMinutes?: number,
     idempotencyKey?: string
   ): Promise<FocusSession> {
-    const plannedM = minutes || (mode === '45_10' ? 45 : mode === 'custom' ? 30 : 25);
-    const breakM = breakMinutes || (mode === '45_10' ? 10 : 5);
+    const plannedM =
+      minutes ||
+      (mode === '15'
+        ? 15
+        : mode === '25' || mode === '25_5'
+        ? 25
+        : mode === '45' || mode === '45_10'
+        ? 45
+        : mode === '60'
+        ? 60
+        : mode === 'custom'
+        ? 30
+        : 25);
+    const breakM =
+      breakMinutes ||
+      (mode === '15'
+        ? 3
+        : mode === '25' || mode === '25_5'
+        ? 5
+        : mode === '45' || mode === '45_10'
+        ? 10
+        : mode === '60'
+        ? 15
+        : 5);
     const totalSeconds = plannedM * 60;
     const now = new Date();
     const targetEndAt = new Date(now.getTime() + totalSeconds * 1000);
@@ -119,6 +141,14 @@ export class FocusRepository {
           [userId]
         );
 
+        let validTaskId: string | null = null;
+        if (session.taskId) {
+          const taskRows = await conn.query<any>('SELECT id FROM study_tasks WHERE id = ?', [session.taskId]);
+          if (taskRows && taskRows.length > 0) {
+            validTaskId = session.taskId;
+          }
+        }
+
         await conn.execute(
           `INSERT INTO focus_sessions 
            (id, user_id, task_id, mode, phase, planned_minutes, break_minutes, state, started_at, last_resumed_at, target_end_at, remaining_seconds_at_pause, actual_focus_seconds, accumulated_pause_seconds, pause_count, idempotency_key, created_at, updated_at)
@@ -126,7 +156,7 @@ export class FocusRepository {
           [
             session.id,
             userId,
-            session.taskId || null,
+            validTaskId,
             session.mode,
             session.plannedMinutes,
             session.breakMinutes,

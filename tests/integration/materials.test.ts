@@ -152,4 +152,60 @@ describe('Learning Materials & R2 Subsystem Integration Tests', () => {
 
     expect(hijackRes.status).toBe(403);
   });
+
+  it('4. Outlines CRUD and Material Management (Rename, Download, Generate Outline)', async () => {
+    // 1. Get Outlines (returns 200 with outlines list)
+    const listRes = await request(app)
+      .get('/api/v1/outlines')
+      .set('Cookie', [userASession]);
+
+    expect(listRes.status).toBe(200);
+    expect(Array.isArray(listRes.body.outlines)).toBe(true);
+
+    // 2. Create Outline
+    const createOutRes = await request(app)
+      .post('/api/v1/outlines')
+      .set('Cookie', [userASession])
+      .send({
+        title: 'Đề cương Phương trình Lượng giác',
+        subjectId: 'subj-math',
+        chapter: 'Chương 1: Hàm số lượng giác',
+        contentMarkdown: '# Công thức biến đổi lượng giác\n\n- sin(a+b) = sin a cos b + cos a sin b',
+      });
+
+    expect(createOutRes.status).toBe(201);
+    expect(createOutRes.body.outline.id).toBeDefined();
+    const outlineId = createOutRes.body.outline.id;
+
+    // 3. Rename Material
+    const note = await materialRepo.createNote(userAId, {
+      title: 'Tên gốc',
+      subjectId: 'subj-math',
+      contentText: 'Nội dung ghi chú',
+    });
+
+    const renameRes = await request(app)
+      .patch(`/api/v1/materials/${note.id}`)
+      .set('Cookie', [userASession])
+      .send({ title: 'Tên mới sau khi đổi' });
+
+    expect(renameRes.status).toBe(200);
+    expect(renameRes.body.material.title).toBe('Tên mới sau khi đổi');
+
+    // 4. Get Download URL
+    const dlRes = await request(app)
+      .get(`/api/v1/materials/${note.id}/download`)
+      .set('Cookie', [userASession]);
+
+    expect(dlRes.status).toBe(200);
+    expect(dlRes.body.downloadUrl).toBeDefined();
+
+    // 5. Delete Outline
+    const delRes = await request(app)
+      .delete(`/api/v1/outlines/${outlineId}`)
+      .set('Cookie', [userASession]);
+
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.success).toBe(true);
+  });
 });
