@@ -71,6 +71,14 @@ const AppLayoutContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#050806] text-[#F3FAF5] flex flex-col font-sans selection:bg-[#16A34A] selection:text-[#050806]">
+      {/* Skip to Main Content Link for Keyboard Accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:px-4 focus:py-2.5 focus:bg-[#16A34A] focus:text-[#050806] focus:font-black focus:rounded-xl focus:shadow-2xl focus:outline-none"
+      >
+        Bỏ qua đến nội dung chính
+      </a>
+
       {/* Unified 2-Tier Sticky Top Navigation with Pixel-Perfect Grid Alignment */}
       <TopAppBar
         user={user || undefined}
@@ -80,9 +88,15 @@ const AppLayoutContent: React.FC = () => {
         onLogout={handleLogout}
       />
 
-      {/* Main Content Viewport: Rộng rãi cho toàn bộ các trang và tính năng */}
-      <main className="flex-1 p-3.5 sm:p-5 lg:p-6 w-full max-w-[1750px] mx-auto px-3 sm:px-6 lg:px-8 transition-all">
-        <Outlet />
+      {/* Main Content Viewport: Rộng rãi cho toàn bộ các trang và tính năng với hiệu ứng chuyển trang PlayStation-inspired */}
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex-1 p-3.5 sm:p-5 lg:p-6 w-full max-w-[1750px] mx-auto px-3 sm:px-6 lg:px-8 transition-all overflow-x-hidden focus:outline-none"
+      >
+        <div key={location.pathname} className="jami-page-transition w-full">
+          <Outlet />
+        </div>
       </main>
 
       {/* Floating Draggable Robot Jami Widget */}

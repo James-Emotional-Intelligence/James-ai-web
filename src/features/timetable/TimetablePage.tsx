@@ -226,7 +226,7 @@ export const TimetablePage: React.FC = () => {
   const [ocrPreviewUrl, setOcrPreviewUrl] = useState<string | null>(null);
   const [ocrBase64, setOcrBase64] = useState<string | null>(null);
   const [ocrMimeType, setOcrMimeType] = useState<string>('image/jpeg');
-  const [ocrTimetableName, setOcrTimetableName] = useState('THỜI KHÓA BIỂU (TRƯỜNG HỌC)');
+  const [ocrTimetableName, setOcrTimetableName] = useState('1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)');
   const [ocrReplaceExisting, setOcrReplaceExisting] = useState(true);
   const [ocrExtractedEntries, setOcrExtractedEntries] = useState<
     Array<{
@@ -1088,9 +1088,11 @@ export const TimetablePage: React.FC = () => {
               <h2 className="text-base font-black text-[#F3FAF5] flex items-center gap-2">
                 <School className="w-4 h-4 text-[#22C55E]" />
                 <span>
-                  {activeTimetable?.name && activeTimetable.name !== 'Thời khóa biểu trường'
+                  {activeTimetable?.name &&
+                  activeTimetable.name !== 'Thời khóa biểu trường' &&
+                  activeTimetable.name !== 'THỜI KHÓA BIỂU (TRƯỜNG HỌC)'
                     ? activeTimetable.name
-                    : 'THỜI KHÓA BIỂU (TRƯỜNG HỌC)'}
+                    : '1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)'}
                 </span>
               </h2>
             </div>
@@ -1284,7 +1286,7 @@ export const TimetablePage: React.FC = () => {
               </div>
 
               {timetableEntries.filter((e) => e.dayOfWeek === selectedDayOfWeek).length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 jami-card-grid">
                   {timetableEntries
                     .filter((e) => e.dayOfWeek === selectedDayOfWeek)
                     .sort((a, b) => a.startLocalTime.localeCompare(b.startLocalTime))
@@ -1293,7 +1295,7 @@ export const TimetablePage: React.FC = () => {
                       return (
                         <div
                           key={entry.id}
-                          className={`p-4 rounded-2xl ${theme.bg} border ${theme.border} space-y-2 relative group transition-all shadow-sm`}
+                          className={`p-4 rounded-2xl ${theme.bg} border ${theme.border} space-y-2 relative group transition-all shadow-sm jami-card-interactive`}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div>
@@ -1564,7 +1566,7 @@ export const TimetablePage: React.FC = () => {
                 type="button"
                 onClick={() => setActiveTab('timetable')}
                 className="flex items-center gap-2 shrink-0 bg-[#101A13] hover:bg-[#14532D] active:scale-95 border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E]/60 rounded-xl px-3.5 py-2 shadow-md text-xs font-black text-[#86EFAC] transition-all cursor-pointer group"
-                title="Bấm để chuyển sang Bảng 1: THỜI KHÓA BIỂU (TRƯỜNG HỌC)"
+                title="Bấm để chuyển sang Bảng 1: 1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)"
               >
                 <Layers className="w-3.5 h-3.5 text-[#22C55E]" />
                 <span>Bảng 1</span>
@@ -1577,7 +1579,7 @@ export const TimetablePage: React.FC = () => {
 
               <h2 className="text-base font-black text-[#F3FAF5] flex items-center gap-2">
                 <Clock className="w-4 h-4 text-[#22C55E]" />
-                <span>Thời Gian Biểu (SINH HOẠT & TỰ HỌC)</span>
+                <span>2. THỜI GIAN BIỂU (SINH HOẠT & TỰ HỌC)</span>
               </h2>
             </div>
 
@@ -2047,7 +2049,7 @@ export const TimetablePage: React.FC = () => {
       {/* Modal: Thêm / Sửa Tiết Học Trường */}
       {isAddEntryOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-[#F3FAF5]">
                 {editingEntry ? 'Sửa tiết học trường' : 'Thêm tiết học chính khóa'}
@@ -2210,7 +2212,7 @@ export const TimetablePage: React.FC = () => {
       {/* Modal: Thêm / Sửa Lịch Bận / Học Thêm / CLB */}
       {isAddEventOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-[#F3FAF5]">
                 {editingEvent ? 'Sửa lịch học thêm / việc bận' : 'Thêm lịch học thêm, CLB hoặc việc bận'}

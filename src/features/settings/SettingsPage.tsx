@@ -6,19 +6,24 @@ import {
   Download,
   CheckCircle2,
   RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { api } from '../../lib/api-client';
+import { useNotifications } from '../../context/NotificationContext';
 import confetti from 'canvas-confetti';
 
 export const SettingsPage: React.FC = () => {
+  const { showToast } = useNotifications();
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [soundEffects, setSoundEffects] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exported, setExported] = useState(false);
   const [isSavingPrefs, setIsSavingPrefs] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getJamiPreferences()
+    api
+      .getJamiPreferences()
       .then((res) => {
         if (res.preferences) {
           setVoiceEnabled(Boolean(res.preferences.voiceEnabled));
@@ -29,21 +34,43 @@ export const SettingsPage: React.FC = () => {
   }, []);
 
   const handleToggleVoice = async (checked: boolean) => {
+    const previous = voiceEnabled;
     setVoiceEnabled(checked);
     setIsSavingPrefs(true);
+    setSaveStatus('Đang lưu cài đặt...');
     try {
       await api.updateJamiPreferences({ voiceEnabled: checked, soundEffects });
-    } catch {}
-    setIsSavingPrefs(false);
+      setSaveStatus('Đã lưu thay đổi.');
+      showToast('Đã lưu cài đặt', checked ? 'Đã bật giọng nói Jami' : 'Đã tắt giọng nói Jami', 'success');
+      setTimeout(() => setSaveStatus(null), 2500);
+    } catch (err: any) {
+      // Rollback on failure
+      setVoiceEnabled(previous);
+      setSaveStatus('Lỗi: Không thể lưu cài đặt.');
+      showToast('Không thể lưu cài đặt', err.message || 'Vui lòng kiểm tra kết nối mạng và thử lại.', 'error');
+    } finally {
+      setIsSavingPrefs(false);
+    }
   };
 
   const handleToggleSound = async (checked: boolean) => {
+    const previous = soundEffects;
     setSoundEffects(checked);
     setIsSavingPrefs(true);
+    setSaveStatus('Đang lưu cài đặt...');
     try {
       await api.updateJamiPreferences({ voiceEnabled, soundEffects: checked });
-    } catch {}
-    setIsSavingPrefs(false);
+      setSaveStatus('Đã lưu thay đổi.');
+      showToast('Đã lưu cài đặt', checked ? 'Đã bật âm thanh hẹn giờ' : 'Đã tắt âm thanh hẹn giờ', 'success');
+      setTimeout(() => setSaveStatus(null), 2500);
+    } catch (err: any) {
+      // Rollback on failure
+      setSoundEffects(previous);
+      setSaveStatus('Lỗi: Không thể lưu cài đặt.');
+      showToast('Không thể lưu cài đặt', err.message || 'Vui lòng kiểm tra kết nối mạng và thử lại.', 'error');
+    } finally {
+      setIsSavingPrefs(false);
+    }
   };
 
   const handleExportData = async () => {
@@ -114,37 +141,45 @@ export const SettingsPage: React.FC = () => {
               <Volume2 className="w-4 h-4 text-[#22C55E]" />
               <span>Âm Thanh & Giọng Nói AI</span>
             </h2>
-            {isSavingPrefs && (
-              <span className="text-[11px] text-[#22C55E] flex items-center gap-1">
-                <RefreshCw className="w-3 h-3 animate-spin" /> Đang lưu...
-              </span>
-            )}
+            <div aria-live="polite" className="text-[11px] text-[#22C55E]">
+              {isSavingPrefs ? (
+                <span className="flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin" /> Đang lưu...
+                </span>
+              ) : saveStatus ? (
+                <span>{saveStatus}</span>
+              ) : null}
+            </div>
           </div>
 
           <div className="space-y-3">
             <div className="flex items-center justify-between p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.18)]">
-              <div>
+              <label htmlFor="setting-voice-enabled" className="cursor-pointer flex-1 mr-4">
                 <div className="text-xs font-bold text-[#F3FAF5]">Giọng nói Jami (Tiếng Việt)</div>
                 <div className="text-[11px] text-[#A9B8AE]">Cho phép Jami phát âm thanh phản hồi và cổ vũ</div>
-              </div>
+              </label>
               <input
+                id="setting-voice-enabled"
                 type="checkbox"
+                disabled={isSavingPrefs}
                 checked={voiceEnabled}
                 onChange={(e) => handleToggleVoice(e.target.checked)}
-                className="w-5 h-5 accent-[#16A34A] rounded cursor-pointer"
+                className="w-5 h-5 accent-[#16A34A] rounded cursor-pointer disabled:opacity-50"
               />
             </div>
 
             <div className="flex items-center justify-between p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.18)]">
-              <div>
+              <label htmlFor="setting-sound-effects" className="cursor-pointer flex-1 mr-4">
                 <div className="text-xs font-bold text-[#F3FAF5]">Âm thanh chuông báo Hẹn giờ tập trung</div>
                 <div className="text-[11px] text-[#A9B8AE]">Phát chuông nhẹ nhàng khi hết giờ học và giờ nghỉ</div>
-              </div>
+              </label>
               <input
+                id="setting-sound-effects"
                 type="checkbox"
+                disabled={isSavingPrefs}
                 checked={soundEffects}
                 onChange={(e) => handleToggleSound(e.target.checked)}
-                className="w-5 h-5 accent-[#16A34A] rounded cursor-pointer"
+                className="w-5 h-5 accent-[#16A34A] rounded cursor-pointer disabled:opacity-50"
               />
             </div>
           </div>

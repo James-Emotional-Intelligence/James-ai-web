@@ -74,44 +74,91 @@ export const MaterialFilePickerModal: React.FC<MaterialFilePickerModalProps> = (
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load materials & subjects when modal opens
+  // Load materials & subjects when modal opens (without uploadSubjectId in deps)
   useEffect(() => {
     if (isOpen) {
       setErrorMessage(null);
       setIsLoadingMaterials(true);
-      Promise.all([api.getMaterials().catch(() => ({ materials: [] })), api.getSubjects().catch(() => ({ subjects: [] }))])
+      Promise.all([
+        api.getMaterials().catch(() => ({ materials: [] })),
+        api.getSubjects().catch(() => ({ subjects: [] })),
+      ])
         .then(([matRes, subjRes]) => {
           setMaterials(matRes.materials || []);
           setSubjects(subjRes.subjects || []);
-          if (!uploadSubjectId && subjRes.subjects && subjRes.subjects.length > 0) {
-            setUploadSubjectId(defaultSubjectId || subjRes.subjects[0].id);
-          }
+          setUploadSubjectId((prev) => prev || defaultSubjectId || subjRes.subjects?.[0]?.id || '');
         })
         .finally(() => {
           setIsLoadingMaterials(false);
         });
+    } else {
+      // Reset state and revoke object URL when closed
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setSelectedFile(null);
+      setPreviewUrl(null);
+      setBase64Data(null);
+      setErrorMessage(null);
+      setIsProcessing(false);
+      setSelectedMaterial(null);
     }
-  }, [isOpen, defaultSubjectId, uploadSubjectId]);
+  }, [isOpen, defaultSubjectId]);
+
+  // Clean up object URL when component unmounts
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
 
   if (!isOpen) return null;
 
+  const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
+  const ALLOWED_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.doc', '.docx', '.txt'];
+
   const handleFileChange = (file: File) => {
-    setSelectedFile(file);
     setErrorMessage(null);
+
+    // Validate size limit (25MB)
+    if (file.size > MAX_FILE_SIZE) {
+      setErrorMessage(`Dung lượng tệp (${formatBytes(file.size)}) vượt quá giới hạn tối đa 25MB.`);
+      return;
+    }
+
+    // Validate file extension
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+    const isAllowedExt = ALLOWED_EXTENSIONS.includes(ext);
+    const isAllowedMime =
+      file.type.startsWith('image/') ||
+      file.type === 'application/pdf' ||
+      file.type.includes('word') ||
+      file.type.includes('document') ||
+      file.type === 'text/plain';
+
+    if (!isAllowedExt && !isAllowedMime) {
+      setErrorMessage('Định dạng tệp không được hỗ trợ. Vui lòng chọn tệp PDF, ảnh (PNG, JPG, WEBP), Word hoặc TXT.');
+      return;
+    }
+
+    // Revoke previous preview URL
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+
+    setSelectedFile(file);
     const cleanName = file.name.replace(/\.[^/.]+$/, '');
     if (!customTitle) setCustomTitle(cleanName);
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const res = reader.result as string;
-      setBase64Data(res);
-      if (file.type.startsWith('image/')) {
-        setPreviewUrl(res);
-      } else {
-        setPreviewUrl(null);
-      }
-    };
-    reader.readAsDataURL(file);
+    // Use URL.createObjectURL for fast image previews without bloating memory
+    if (file.type.startsWith('image/')) {
+      const objectUrl = URL.createObjectURL(file);
+      setPreviewUrl(objectUrl);
+    } else {
+      setPreviewUrl(null);
+    }
   };
 
   const handleConfirmSelect = async () => {
@@ -195,7 +242,7 @@ export const MaterialFilePickerModal: React.FC<MaterialFilePickerModalProps> = (
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] rounded-3xl max-w-2xl w-full shadow-2xl space-y-4 text-[#F3FAF5] my-auto max-h-[90vh] flex flex-col">
+      <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] rounded-3xl max-w-2xl w-full shadow-2xl space-y-4 text-[#F3FAF5] my-auto max-h-[90vh] flex flex-col jami-modal-animate">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-[rgba(34,197,94,0.18)] shrink-0">
           <div className="flex items-center gap-2.5">
@@ -258,9 +305,18 @@ export const MaterialFilePickerModal: React.FC<MaterialFilePickerModalProps> = (
           {/* TAB 1: UPLOAD NEW FILE */}
           {activeTab === 'upload' && (
             <div className="space-y-4">
-              {/* Dropzone */}
+              {/* Dropzone with keyboard accessibility */}
               <div
+                role="button"
+                tabIndex={0}
+                aria-label="Kéo thả hoặc bấm để chọn tệp từ thiết bị"
                 onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
@@ -268,7 +324,7 @@ export const MaterialFilePickerModal: React.FC<MaterialFilePickerModalProps> = (
                     handleFileChange(e.dataTransfer.files[0]);
                   }
                 }}
-                className="border-2 border-dashed border-[rgba(34,197,94,0.35)] hover:border-[#22C55E] bg-[#050806] p-6 rounded-2xl flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:bg-[#101A13]/40 group"
+                className="border-2 border-dashed border-[rgba(34,197,94,0.35)] hover:border-[#22C55E] focus:border-[#22C55E] focus:outline-none bg-[#050806] p-6 rounded-2xl flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:bg-[#101A13]/40 group"
               >
                 <input
                   ref={fileInputRef}
@@ -427,7 +483,7 @@ export const MaterialFilePickerModal: React.FC<MaterialFilePickerModalProps> = (
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div className={`p-2 rounded-lg shrink-0 ${isSelected ? 'bg-[#22C55E] text-[#050806]' : 'bg-[#050806] text-[#22C55E]'}`}>
-                            {m.type === 'note' ? (
+                            {m.type === 'notes' ? (
                               <FileText className="w-4 h-4" />
                             ) : m.mimeType?.startsWith('image/') ? (
                               <ImageIcon className="w-4 h-4" />

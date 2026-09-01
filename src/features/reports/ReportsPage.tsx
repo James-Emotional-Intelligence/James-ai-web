@@ -172,9 +172,9 @@ export const ReportsPage: React.FC = () => {
           </div>
 
           {/* 7.1 Overview Metric Cards (4 Cards) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 jami-card-grid">
             {/* Focus Hours vs Goal */}
-            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300">
+            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300 jami-card-interactive">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-[#A9B8AE] uppercase tracking-wider">
                   Thời gian học thực tế
@@ -206,7 +206,7 @@ export const ReportsPage: React.FC = () => {
             </div>
 
             {/* Focus Sessions & Avg Duration */}
-            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300">
+            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300 jami-card-interactive">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-[#A9B8AE] uppercase tracking-wider">
                   Phiên học hoàn thành
@@ -224,7 +224,7 @@ export const ReportsPage: React.FC = () => {
             </div>
 
             {/* Task Completion Rate */}
-            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300">
+            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300 jami-card-interactive">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-[#A9B8AE] uppercase tracking-wider">
                   Nhiệm vụ hoàn thành
@@ -241,7 +241,7 @@ export const ReportsPage: React.FC = () => {
             </div>
 
             {/* Quiz Average & Streak */}
-            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300">
+            <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300 jami-card-interactive">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-[#A9B8AE] uppercase tracking-wider">
                   Điểm kiểm tra TB & Chuỗi

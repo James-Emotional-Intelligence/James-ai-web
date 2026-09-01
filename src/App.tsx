@@ -4,6 +4,8 @@ import { AuthProvider } from './features/auth/AuthProvider';
 import { RequireAuth } from './features/auth/RequireAuth';
 import { GuestOnlyRoute } from './features/auth/GuestOnlyRoute';
 import { AppLayout } from './components/layout/AppLayout';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { NotFoundPage } from './features/error/NotFoundPage';
 import { RefreshCw } from 'lucide-react';
 
 // Lazy loaded page components for optimal bundle size
@@ -27,7 +29,11 @@ const OnboardingPage = lazy(() => import('./features/onboarding/OnboardingPage')
 const AdminUsersPage = lazy(() => import('./features/admin/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })));
 
 const PageLoader = () => (
-  <div className="min-h-screen bg-[#050806] flex items-center justify-center text-[#86EFAC] text-xs gap-2">
+  <div
+    role="status"
+    aria-live="polite"
+    className="min-h-screen bg-[#050806] flex items-center justify-center text-[#86EFAC] text-xs gap-2"
+  >
     <RefreshCw className="w-5 h-5 text-[#22C55E] animate-spin" />
     <span>Đang tải JAMI AI...</span>
   </div>
@@ -35,9 +41,10 @@ const PageLoader = () => (
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Suspense fallback={<PageLoader />}>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <Suspense fallback={<PageLoader />}>
           <Routes>
             {/* Public Landing Page */}
             <Route path="/" element={<LandingPage />} />
@@ -109,11 +116,12 @@ export default function App() {
               <Route path="/admin" element={<AdminUsersPage />} />
             </Route>
 
-            {/* Catch-all redirect to Landing or Today */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Catch-all 404 Route */}
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Suspense>
       </BrowserRouter>
     </AuthProvider>
+    </ErrorBoundary>
   );
 }

@@ -666,7 +666,7 @@ export const FocusTimerPage: React.FC = () => {
             <button
               onClick={handleStart}
               disabled={isActionLoading}
-              className="flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-sm font-black shadow-lg shadow-[#16A34A]/30 transition-all cursor-pointer"
+              className="flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-sm font-black shadow-lg shadow-[#16A34A]/25 transition-all cursor-pointer disabled:opacity-50 jami-btn-glow"
             >
               <Play className="w-5 h-5 fill-[#050806]" />
               <span>Bắt Đầu Tập Trung</span>
@@ -677,7 +677,7 @@ export const FocusTimerPage: React.FC = () => {
             <button
               onClick={handlePause}
               disabled={isActionLoading}
-              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-[#050806] text-sm font-black shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
+              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-[#050806] text-sm font-black shadow-lg shadow-amber-500/20 transition-all cursor-pointer jami-btn"
             >
               <Pause className="w-4 h-4 fill-[#050806]" />
               <span>Tạm Dừng</span>
@@ -688,7 +688,7 @@ export const FocusTimerPage: React.FC = () => {
             <button
               onClick={handleStart}
               disabled={isActionLoading}
-              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-sm font-black shadow-lg shadow-[#16A34A]/25 transition-all cursor-pointer"
+              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-sm font-black shadow-lg shadow-[#16A34A]/25 transition-all cursor-pointer jami-btn-glow"
             >
               <Play className="w-4 h-4 fill-[#050806]" />
               <span>Tiếp Tục</span>
@@ -700,7 +700,7 @@ export const FocusTimerPage: React.FC = () => {
               <button
                 onClick={handleCompleteEarly}
                 disabled={isActionLoading}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] text-xs font-bold transition-all cursor-pointer"
+                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] text-xs font-bold transition-all cursor-pointer jami-btn"
                 title="Hoàn tất và lưu thời gian học"
               >
                 <CheckCircle2 className="w-4 h-4" />
@@ -710,7 +710,7 @@ export const FocusTimerPage: React.FC = () => {
               <button
                 onClick={handleAbandon}
                 disabled={isActionLoading}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-rose-950 hover:bg-rose-900 text-rose-300 text-xs font-bold border border-rose-800 transition-all cursor-pointer"
+                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-rose-950 hover:bg-rose-900 text-rose-300 text-xs font-bold border border-rose-800 transition-all cursor-pointer jami-btn"
                 title="Hủy phiên này"
               >
                 <XCircle className="w-4 h-4" />
@@ -722,7 +722,7 @@ export const FocusTimerPage: React.FC = () => {
           {(timerState === 'completed' || timerState === 'abandoned') && (
             <button
               onClick={handleReset}
-              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#16A34A] text-[#050806] text-xs font-bold transition-all cursor-pointer shadow-lg"
+              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black transition-all cursor-pointer shadow-lg jami-btn-glow"
             >
               <RotateCcw className="w-4 h-4" />
               <span>Bắt Đầu Phiên Mới</span>

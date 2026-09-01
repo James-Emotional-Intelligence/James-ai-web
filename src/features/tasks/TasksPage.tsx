@@ -314,7 +314,7 @@ export const TasksPage: React.FC = () => {
           <p>Em có thể bấm "Thêm nhiệm vụ mới" để tạo bài tập cần làm nhé.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 jami-card-grid">
           {filteredTasks.map((t) => {
             const isDone = t.status === 'completed';
 
@@ -322,7 +322,7 @@ export const TasksPage: React.FC = () => {
               <div
                 key={t.id}
                 onClick={() => navigate(`/tasks/${t.id}`)}
-                className={`bg-[#0B120D] hover:bg-[#101A13] border rounded-3xl p-6 shadow-xl transition-all cursor-pointer flex flex-col justify-between group ${
+                className={`bg-[#0B120D] hover:bg-[#101A13] border rounded-3xl p-6 shadow-xl transition-all cursor-pointer flex flex-col justify-between group jami-card-interactive ${
                   isDone
                     ? 'border-[rgba(34,197,94,0.12)] opacity-80'
                     : 'border-[rgba(34,197,94,0.25)] hover:border-[#22C55E]/60'
@@ -403,7 +403,7 @@ export const TasksPage: React.FC = () => {
       {/* Create / Edit Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden text-[#F3FAF5] jami-modal-animate">
             <div className="px-6 py-4 border-b border-[rgba(34,197,94,0.18)] flex items-center justify-between bg-[#101A13]">
               <h2 className="text-sm font-bold text-[#F3FAF5]">
                 {editingTask ? 'Chỉnh sửa nhiệm vụ' : 'Thêm nhiệm vụ học tập mới'}

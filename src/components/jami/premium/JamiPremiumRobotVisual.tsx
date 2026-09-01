@@ -168,17 +168,17 @@ export const JamiPremiumRobotVisual: React.FC<JamiPremiumRobotVisualProps> = ({
                 y: isDragging
                   ? -2
                   : isHovered
-                  ? -3
+                  ? -4
                   : isCelebrating
-                  ? [0, -6, 0]
-                  : [0, -1.8, 0, 1, 0],
+                  ? [0, -8, 0]
+                  : [0, -4.5, 0],
                 rotate: tiltAngle,
                 scale: isDragging
-                  ? 1.018
-                  : isHovered
-                  ? 1.012
-                  : isCelebrating
                   ? 1.02
+                  : isHovered
+                  ? 1.025
+                  : isCelebrating
+                  ? 1.03
                   : 1,
               }
         }
@@ -187,9 +187,11 @@ export const JamiPremiumRobotVisual: React.FC<JamiPremiumRobotVisualProps> = ({
             ? { duration: 0.15 }
             : isCelebrating
             ? { duration: 0.7, ease: 'easeInOut' }
-            : { duration: 5.0, repeat: Infinity, ease: 'easeInOut' },
+            : isHovered
+            ? { duration: 0.22, ease: 'easeOut' }
+            : { duration: 4.2, repeat: Infinity, ease: 'easeInOut' },
           rotate: { duration: 0.22, ease: 'easeOut' },
-          scale: { duration: 0.18, ease: 'easeOut' },
+          scale: { duration: 0.2, ease: 'easeOut' },
         }}
       >
         {/* Inner Media Frame with Exact Aspect Ratio */}
@@ -207,19 +209,21 @@ export const JamiPremiumRobotVisual: React.FC<JamiPremiumRobotVisualProps> = ({
             onError={onImageError}
             className={`w-full h-full object-contain pointer-events-none select-none transition-filter duration-300 ${
               isHovered
-                ? 'drop-shadow-[0_0_14px_rgba(6,182,212,0.4)]'
+                ? 'drop-shadow-[0_0_18px_rgba(34,197,94,0.55)]'
                 : isListening
                 ? 'drop-shadow-[0_0_16px_rgba(6,182,212,0.5)]'
                 : isThinking
                 ? 'drop-shadow-[0_0_14px_rgba(34,197,94,0.45)]'
                 : state === 'error'
                 ? 'drop-shadow-[0_0_12px_rgba(244,63,94,0.5)]'
-                : 'drop-shadow-[0_4px_16px_rgba(6,182,212,0.2)]'
+                : 'drop-shadow-[0_4px_16px_rgba(34,197,94,0.22)]'
             }`}
-            style={{
-              WebkitUserDrag: 'none',
-              userSelect: 'none',
-            }}
+            style={
+              {
+                WebkitUserDrag: 'none',
+                userSelect: 'none',
+              } as React.CSSProperties
+            }
           />
 
           {/* Animated Face & Overlay (when faceMode !== 'source' or debug enabled) */}

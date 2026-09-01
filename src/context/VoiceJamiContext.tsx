@@ -77,54 +77,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const sessionTimerRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
   const lastWakeTimeRef = useRef<number>(0);
+  const isMountedRef = useRef<boolean>(true);
   const isSpeakingRef = useRef<boolean>(false);
   const currentTurnIdRef = useRef<string>('');
-
-  // Audio element initialization for WebRTC remote output
-  useEffect(() => {
-    const audio = new Audio();
-    audio.autoplay = true;
-    remoteAudioElementRef.current = audio;
-
-    return () => {
-      audio.pause();
-      audio.srcObject = null;
-    };
-  }, []);
-
-  // Session Duration Timer
-  useEffect(() => {
-    if (isHandsFreeEnabled && state !== 'disabled') {
-      sessionTimerRef.current = setInterval(() => {
-        setSessionDuration((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-      setSessionDuration(0);
-    }
-    return () => {
-      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-    };
-  }, [isHandsFreeEnabled, state]);
-
-  // Tab visibility suspension handling
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        if (state === 'armed' || state === 'listening_command') {
-          setState('suspended');
-        }
-      } else {
-        if (state === 'suspended' && isHandsFreeEnabled) {
-          setState('armed');
-          startWakeWordRecognizer();
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [state, isHandsFreeEnabled]);
 
   /**
    * Unified Text-to-Speech Engine using SpeechSynthesis
@@ -621,6 +576,70 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     },
     [executeCommand]
   );
+
+  // Audio element initialization for WebRTC remote output
+  useEffect(() => {
+    isMountedRef.current = true;
+    const audio = new Audio();
+    audio.autoplay = true;
+    remoteAudioElementRef.current = audio;
+
+    return () => {
+      isMountedRef.current = false;
+      cleanupHardware();
+      audio.pause();
+      audio.srcObject = null;
+    };
+  }, [cleanupHardware]);
+
+  // Session Duration Timer
+  useEffect(() => {
+    if (isHandsFreeEnabled && state !== 'disabled') {
+      sessionTimerRef.current = setInterval(() => {
+        if (isMountedRef.current) {
+          setSessionDuration((prev) => prev + 1);
+        }
+      }, 1000);
+    } else {
+      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+      if (isMountedRef.current) setSessionDuration(0);
+    }
+    return () => {
+      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+    };
+  }, [isHandsFreeEnabled, state]);
+
+  // Tab visibility suspension handling
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (state === 'armed' || state === 'listening_command') {
+          if (speechRecognitionRef.current) {
+            try {
+              speechRecognitionRef.current.abort();
+            } catch {}
+          }
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+          if (isMountedRef.current) {
+            setState('suspended');
+          }
+        }
+      } else {
+        if (state === 'suspended' && isHandsFreeEnabled) {
+          if (isMountedRef.current) {
+            setState('armed');
+            startWakeWordRecognizer();
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [state, isHandsFreeEnabled, startWakeWordRecognizer]);
 
   return (
     <VoiceJamiContext.Provider

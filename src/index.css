@@ -83,12 +83,153 @@ body {
     radial-gradient(at 50% 80%, rgba(8, 13, 9, 0.95) 0px, transparent 100%);
 }
 
+/* ========================================================================= */
+/* PLAYSTATION-INSPIRED UI INTERACTIONS & ANIMATION SUITE */
+/* ========================================================================= */
+
+/* 1. Interactive Cards: Scale 1.02x, Lift 3-4px, Glow & Sibling Dimming */
+.jami-card-interactive,
 .jami-card-hover {
-  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              border-color 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 220ms ease,
+              filter 220ms ease;
+  will-change: transform, box-shadow;
 }
 
+.jami-card-interactive:hover,
 .jami-card-hover:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.4), 0 4px 12px -2px rgba(22, 163, 74, 0.1);
-  border-color: rgba(34, 197, 94, 0.4);
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.7), 0 0 25px -4px rgba(34, 197, 94, 0.22);
+  border-color: rgba(34, 197, 94, 0.55);
+  filter: brightness(1.03);
+}
+
+/* Sibling focus effect: Dim other cards when a card in the grid is hovered */
+@media (hover: hover) and (pointer: fine) {
+  .jami-card-grid:hover > div:not(:hover),
+  .jami-card-grid:hover > .jami-card-interactive:not(:hover) {
+    opacity: 0.86;
+    filter: brightness(0.96);
+  }
+}
+
+/* 2. Responsive Interactive Buttons: Hover Glow & Active Press */
+.jami-btn,
+.jami-btn-glow {
+  transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 150ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              filter 150ms ease,
+              background-color 150ms ease,
+              border-color 150ms ease;
+  will-change: transform, box-shadow;
+}
+
+.jami-btn:hover,
+.jami-btn-glow:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.35);
+  filter: brightness(1.06);
+}
+
+.jami-btn:active,
+.jami-btn-glow:active {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.96);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.2);
+}
+
+/* 3. Page & Module Route Transitions (Fade + 10px Horizontal Slide in 280ms) */
+@keyframes jamiPageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.jami-page-transition {
+  animation: jamiPageSlideIn 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity, transform;
+}
+
+/* 4. Scroll Reveal (Fade-up via IntersectionObserver) */
+.jami-scroll-reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 600ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.jami-scroll-reveal.is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* 5. PlayStation-Style Modal Entrance (Fade + Scale from 0.96 to 1.0) */
+@keyframes jamiModalEntrance {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.jami-modal-animate {
+  animation: jamiModalEntrance 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity, transform;
+}
+
+/* 6. Toast Notification Slide In / Out */
+@keyframes jamiToastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(40px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes jamiToastSlideOut {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(40px) scale(0.96);
+  }
+}
+
+.jami-toast-enter {
+  animation: jamiToastSlideIn 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.jami-toast-exit {
+  animation: jamiToastSlideOut 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 7. Robot Character Ambient Float */
+@keyframes jamiRobotIdleFloat {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(0.4deg);
+  }
+}
+
+.jami-robot-float {
+  animation: jamiRobotIdleFloat 4.2s ease-in-out infinite;
+  will-change: transform;
 }

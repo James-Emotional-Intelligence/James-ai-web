@@ -93,10 +93,10 @@ export const MaterialsPage: React.FC = () => {
       }
     } catch {
       setSubjects([
-        { id: 'subj-math', userId: 'default', name: 'Toán học', color: '#22C55E' },
-        { id: 'subj-eng', userId: 'default', name: 'Tiếng Anh', color: '#3B82F6' },
-        { id: 'subj-lit', userId: 'default', name: 'Ngữ văn', color: '#EC4899' },
-        { id: 'subj-phy', userId: 'default', name: 'Vật lý', color: '#8B5CF6' },
+        { id: 'subj-math', userId: 'default', name: 'Toán học', color: '#22C55E', icon: 'calculator' },
+        { id: 'subj-eng', userId: 'default', name: 'Tiếng Anh', color: '#3B82F6', icon: 'globe' },
+        { id: 'subj-lit', userId: 'default', name: 'Ngữ văn', color: '#EC4899', icon: 'book' },
+        { id: 'subj-phy', userId: 'default', name: 'Vật lý', color: '#8B5CF6', icon: 'atom' },
       ]);
     }
   };
@@ -586,7 +586,7 @@ export const MaterialsPage: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 jami-card-grid">
               {filteredMaterials.map((mat) => {
                 const isRenaming = renamingMaterialId === mat.id;
                 const isGenOutline = generatingOutlineMatId === mat.id;
@@ -594,7 +594,7 @@ export const MaterialsPage: React.FC = () => {
                 return (
                   <div
                     key={mat.id}
-                    className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/50 shadow-xl transition-all space-y-4 flex flex-col justify-between"
+                    className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] hover:border-[#22C55E]/50 shadow-xl transition-all space-y-4 flex flex-col justify-between jami-card-interactive"
                   >
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-2">
@@ -831,7 +831,7 @@ export const MaterialsPage: React.FC = () => {
       {/* Upload Modal (6.1) */}
       {modalMode === 'upload' && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.18)]">
               <div className="flex items-center gap-2 text-[#86EFAC] font-bold text-sm">
                 <Upload className="w-4 h-4 text-[#22C55E]" />
@@ -946,7 +946,7 @@ export const MaterialsPage: React.FC = () => {
       {/* Manual Outline Modal (6.2) */}
       {modalMode === 'create_outline' && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.18)]">
               <div className="flex items-center gap-2 text-[#86EFAC] font-bold text-sm">
                 <BookOpen className="w-4 h-4 text-[#22C55E]" />
@@ -1036,7 +1036,7 @@ export const MaterialsPage: React.FC = () => {
       {/* Note Modal */}
       {modalMode === 'note' && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.18)]">
               <div className="flex items-center gap-2 text-[#86EFAC] font-bold text-sm">
                 <FileCode className="w-4 h-4 text-[#22C55E]" />
@@ -1081,7 +1081,7 @@ export const MaterialsPage: React.FC = () => {
       {/* Quiz Generation Modal (6.3) */}
       {quizGenModalMaterial && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.18)]">
               <div className="flex items-center gap-2 text-[#86EFAC] font-bold text-sm">
                 <Play className="w-4 h-4 text-[#22C55E]" />

@@ -12,7 +12,8 @@ import {
   AlertCircle,
   ExternalLink,
 } from 'lucide-react';
-import { api, JamiChatMessageItem } from '../../lib/api-client';
+import { api } from '../../lib/api-client';
+import { JamiMessageItem } from '../../../shared/types';
 import { JamiState } from './RobotJami';
 import confetti from 'canvas-confetti';
 import { useVoiceJami } from '../../context/VoiceJamiContext';
@@ -28,7 +29,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
 }) => {
   const navigate = useNavigate();
   const voice = useVoiceJami();
-  const [messages, setMessages] = useState<JamiChatMessageItem[]>([]);
+  const [messages, setMessages] = useState<JamiMessageItem[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
@@ -81,8 +82,9 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
     if (onStateChange) onStateChange('thinking');
 
     // Optimistic UI append for immediate user message
-    const tempUserMsg: JamiChatMessageItem = {
+    const tempUserMsg: JamiMessageItem = {
       id: 'temp_user_' + Date.now(),
+      userId: 'me',
       sender: 'user',
       text: text.trim(),
       createdAt: new Date().toISOString(),
@@ -174,7 +176,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
 
       recognizer.start();
       setIsListening(true);
-      if (onStateChange) onStateChange('listening');
+      if (onStateChange) onStateChange('listening_command');
 
       setRecordingSeconds(0);
       timerRef.current = setInterval(() => {

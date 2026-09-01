@@ -605,7 +605,7 @@ export const ExamsPage: React.FC = () => {
                 return (
                   <div
                     key={exam.id}
-                    className={`bg-[#0B120D] p-5 sm:p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl space-y-4 hover:border-[#22C55E]/40 transition-all ${
+                    className={`bg-[#0B120D] p-5 sm:p-6 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl space-y-4 hover:border-[#22C55E]/50 transition-all jami-card-interactive ${
                       isPast ? 'opacity-75 hover:opacity-100' : ''
                     }`}
                   >
@@ -757,7 +757,7 @@ export const ExamsPage: React.FC = () => {
 
       {isAiQuizModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.18)]">
               <div className="flex items-center gap-2 text-[#86EFAC] font-bold text-sm">
                 <Sparkles className="w-4 h-4 text-[#22C55E]" />
@@ -866,7 +866,7 @@ export const ExamsPage: React.FC = () => {
 
       {isAddExamOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5]">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-4 text-[#F3FAF5] jami-modal-animate">
             <div className="flex items-center justify-between pb-3 border-b border-[rgba(34,197,94,0.18)]">
               <div className="flex items-center gap-2 text-[#86EFAC] font-bold text-sm">
                 <Plus className="w-4 h-4 text-[#22C55E]" />

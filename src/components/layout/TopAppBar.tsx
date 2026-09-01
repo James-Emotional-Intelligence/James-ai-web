@@ -85,14 +85,34 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const [isScrolled, setIsScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 15);
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
   const displayName = user?.preferredName || user?.displayName || 'Học sinh';
   const grade = profile?.gradeLevel || 9;
 
   return (
-    <header className="w-full bg-[#050806] border-b border-[rgba(34,197,94,0.25)] sticky top-0 z-40 shadow-xl">
+    <header
+      className={`w-full sticky top-0 z-40 transition-all duration-300 ${
+        isScrolled
+          ? 'bg-[#050806]/85 backdrop-blur-xl border-b border-[rgba(34,197,94,0.35)] shadow-[0_12px_36px_rgba(0,0,0,0.65)]'
+          : 'bg-[#050806] border-b border-[rgba(34,197,94,0.22)] shadow-lg'
+      }`}
+    >
       <div className="max-w-[1750px] mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-[1fr_auto] items-center">
         {/* ROW 1 - LEFT: Brand Identity + Tagline */}
-        <div className="h-16 flex items-center gap-3 min-w-0 pr-4">
+        <div
+          className={`flex items-center gap-3 min-w-0 pr-4 transition-all duration-300 ${
+            isScrolled ? 'h-14' : 'h-16'
+          }`}
+        >
           <button
             onClick={onToggleMobileMenu}
             className="lg:hidden p-2 rounded-lg text-[#A9B8AE] hover:text-[#F3FAF5] bg-[#101A13] border border-[rgba(34,197,94,0.18)] cursor-pointer"
@@ -120,7 +140,11 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
         </div>
 
         {/* ROW 1 - RIGHT: Actions (Bật Jami, Nói mục tiêu, Notifications, Profile) */}
-        <div className="h-16 flex items-center gap-2 sm:gap-3 shrink-0">
+        <div
+          className={`flex items-center gap-2 sm:gap-3 shrink-0 transition-all duration-300 ${
+            isScrolled ? 'h-14' : 'h-16'
+          }`}
+        >
           {/* Hands-Free Jami Voice Status / Toggle */}
           {voice.isHandsFreeEnabled ? (
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#14532D]/80 border border-[#22C55E]/40 text-[#86EFAC] text-xs font-bold shadow-md shadow-[#16A34A]/20">

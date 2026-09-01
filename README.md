@@ -1,14 +1,14 @@
 # JAMI AI — Trợ Lý AI Lập Kế Hoạch & Đồng Hành Học Tập Cá Nhân Hóa
 
-JAMI AI là ứng dụng trợ lý học tập thông minh dành cho học sinh Việt Nam (Lớp 6 đến 12), tuân thủ chương trình GDPT 2018 với 8 mô-đun cốt lõi:
-1. **LỊCH HỌC THÔNG MINH** — Thời khóa biểu trường, lịch học thêm & thuật toán xếp lịch tự động không xung đột
-2. **CHI TIẾT CÔNG VIỆC** — Chia nhỏ nhiệm vụ học tập thành từng bước có hướng dẫn chi tiết
-3. **HỌC TẬP HÔM NAY** — Bảng điều khiển việc cần làm, tiến độ tải học và việc ưu tiên tiếp theo
-4. **TRỢ LÝ AI** — Robot Jami đồng hành hỏi đáp bài học, giải thích gợi ý và nhắc lịch
-5. **KIỂM TRA & ÔN TẬP** — Các mốc D-14/D-7/D-3/D-1 và hệ thống trắc nghiệm/tự luận chấm điểm bảo mật
-6. **BÁO CÁO HỌC TẬP** — Phân tích thời gian học, môn mạnh/yếu và độ thành thạo kiến thức
-7. **KHO TÀI LIỆU** — Quản lý tài liệu học tập, tóm tắt và tự tạo câu hỏi ôn tập
-8. **THÔNG BÁO** — Nhắc nhở thông minh sắp đến giờ học và mốc kiểm tra
+JAMI AI là ứng dụng trợ lý học tập thông minh dành cho học sinh Việt Nam (Lớp 6 đến 12), tuân thủ chương trình GDPT 2018 với 8 mô-đun chuẩn cốt lõi:
+1. **LỊCH HỌC THÔNG MINH** (`/timetable`) — Thời khóa biểu trường, lịch học thêm & thuật toán xếp lịch tự động không xung đột
+2. **HỌC TẬP HÔM NAY** (`/today`) — Bảng điều khiển tiến độ hôm nay, hẹn giờ tập trung và nhiệm vụ ưu tiên
+3. **CHI TIẾT CÔNG VIỆC** (`/tasks`) — Danh sách nhiệm vụ, chia nhỏ từng bước có hướng dẫn AI chi tiết
+4. **TRỢ LÝ AI JAMI** (`/jami`) — Trợ lý AI đồng hành hỏi đáp bài học, giải thích gợi ý và giao tiếp giọng nói
+5. **KIỂM TRA & ÔN TẬP** (`/exams`) — Lộ trình ôn tập theo mốc D-14/D-7/D-3/D-1 và đề luyện tập AI chấm điểm an toàn
+6. **KHO TÀI LIỆU** (`/materials`) — Quản lý tài liệu học tập, trích xuất đề cương và tự tạo đề ôn tập
+7. **BÁO CÁO HỌC TẬP** (`/reports`) — Thống kê tổng phút tập trung, hoàn thành nhiệm vụ và phân tích xu hướng
+8. **THÔNG BÁO** (`/notifications`) — Nhắc nhở thông minh sắp đến giờ học và các mốc kiểm tra quan trọng
 
 ---
 

@@ -285,7 +285,7 @@ export const TodayDashboard: React.FC = () => {
           {/* Quick Focus Button */}
           <button
             onClick={() => navigate('/focus')}
-            className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-lg shadow-[#16A34A]/25 transition-all cursor-pointer shrink-0"
+            className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-lg shadow-[#16A34A]/25 transition-all cursor-pointer shrink-0 jami-btn-glow"
           >
             <Play className="w-4 h-4 fill-[#050806]" />
             <span>Bắt đầu Hẹn giờ tập trung</span>
@@ -294,9 +294,9 @@ export const TodayDashboard: React.FC = () => {
       </div>
 
       {/* 4 Stats Highlights Cards (2.3 Theo dõi tiến độ) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 jami-card-grid">
         {/* Actual Focus Today & Comparison vs Yesterday */}
-        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2">
+        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2 jami-card-interactive">
           <div className="flex items-center justify-between text-[#A9B8AE]">
             <span className="text-xs font-bold">Thời gian tập trung</span>
             <Clock className="w-4 h-4 text-[#22C55E]" />
@@ -312,7 +312,7 @@ export const TodayDashboard: React.FC = () => {
         </div>
 
         {/* Task Completion Rate & Daily Goal */}
-        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2">
+        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2 jami-card-interactive">
           <div className="flex items-center justify-between text-[#A9B8AE]">
             <span className="text-xs font-bold">Nhiệm vụ hoàn thành</span>
             <CheckCircle2 className="w-4 h-4 text-[#22C55E]" />
@@ -330,7 +330,7 @@ export const TodayDashboard: React.FC = () => {
         </div>
 
         {/* Real Streak Days */}
-        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2">
+        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2 jami-card-interactive">
           <div className="flex items-center justify-between text-[#A9B8AE]">
             <span className="text-xs font-bold">Chuỗi học liên tục</span>
             <Flame className="w-4 h-4 text-amber-400" />
@@ -345,7 +345,7 @@ export const TodayDashboard: React.FC = () => {
         </div>
 
         {/* 7-Day Focus Comparison */}
-        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2">
+        <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-md space-y-2 jami-card-interactive">
           <div className="flex items-center justify-between text-[#A9B8AE]">
             <span className="text-xs font-bold">Tổng 7 ngày</span>
             <TrendingUp className="w-4 h-4 text-[#22C55E]" />
@@ -366,7 +366,7 @@ export const TodayDashboard: React.FC = () => {
         <div className="lg:col-span-2 space-y-6">
           {/* Priority Task Highlight (2.1 Hiển thị nhiệm vụ ưu tiên tiếp theo) */}
           {nextPriorityTask && (
-            <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-[#14532D]/40 to-[#0B120D] border border-[#22C55E]/40 shadow-xl space-y-3">
+            <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-[#14532D]/40 to-[#0B120D] border border-[#22C55E]/40 shadow-xl space-y-3 jami-card-interactive">
               <div className="flex items-center justify-between">
                 <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-rose-950 text-rose-300 border border-rose-800 flex items-center gap-1.5">
                   <Target className="w-3.5 h-3.5 text-rose-400" />

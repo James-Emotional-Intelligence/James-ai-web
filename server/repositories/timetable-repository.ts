@@ -36,7 +36,7 @@ export class TimetableRepository {
       const timetables: SchoolTimetable[] = [];
       for (const r of rows) {
         const entries = await this.getTimetableEntries(userId, r.id);
-        const cleanName = (r.name || 'THỜI KHÓA BIỂU (TRƯỜNG HỌC)').replace(/\s*\(Mẫu nhận dạng AI\)/gi, '').trim() || 'THỜI KHÓA BIỂU (TRƯỜNG HỌC)';
+        const cleanName = (r.name || '1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)').replace(/\s*\(Mẫu nhận dạng AI\)/gi, '').trim() || '1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)';
         timetables.push({
           id: r.id,
           userId: r.user_id,

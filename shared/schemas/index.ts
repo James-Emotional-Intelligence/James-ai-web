@@ -357,8 +357,8 @@ export const JamiMessageConfirmSchema = z.object({
 export const FocusSessionStartSchema = z.object({
   taskId: z.string().optional().nullable().transform((v) => (v === '' || v === 'none' || v === null ? undefined : v)),
   mode: z.string().optional().default('25_5'),
-  minutes: z.coerce.number().optional().transform((v) => (v && v > 0 ? Math.min(Math.max(1, Math.round(v)), 300) : 25)),
-  breakMinutes: z.coerce.number().optional().transform((v) => (v && v > 0 ? Math.min(Math.max(1, Math.round(v)), 60) : 5)),
+  minutes: z.coerce.number().int().min(1, { message: 'Thời gian tối thiểu là 1 phút' }).max(300, { message: 'Thời gian tối đa là 300 phút' }).optional(),
+  breakMinutes: z.coerce.number().int().min(1).max(60).optional(),
   idempotencyKey: z.string().max(64).optional().nullable().transform((v) => v || undefined),
 });
 
