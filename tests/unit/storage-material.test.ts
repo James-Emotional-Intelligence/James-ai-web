@@ -113,5 +113,34 @@ describe('Storage & Material Security Unit Tests', () => {
       const result = StructuredSummarySchema.safeParse(invalidSummary);
       expect(result.success).toBe(false);
     });
+
+    it('validates MaterialUploadIntentSchema for PDF, Images, TXT and DOCX formats', () => {
+      const validPdf = MaterialUploadIntentSchema.safeParse({
+        title: 'Đề cương ôn tập Toán',
+        subjectId: 'subj_toan',
+        fileName: 'de_cuong.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 1024 * 500,
+      });
+      expect(validPdf.success).toBe(true);
+
+      const validTxt = MaterialUploadIntentSchema.safeParse({
+        title: 'Ghi chú Ngữ văn',
+        subjectId: 'subj_van',
+        fileName: 'ghi_chu.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 1024 * 50,
+      });
+      expect(validTxt.success).toBe(true);
+
+      const validDocx = MaterialUploadIntentSchema.safeParse({
+        title: 'Tiểu luận Lịch sử',
+        subjectId: 'subj_su',
+        fileName: 'tieu_luan.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        sizeBytes: 1024 * 200,
+      });
+      expect(validDocx.success).toBe(true);
+    });
   });
 });

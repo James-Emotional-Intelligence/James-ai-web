@@ -99,11 +99,15 @@ export const MaterialFilePickerModal: React.FC<MaterialFilePickerModalProps> = (
       setSelectedFile(null);
       setPreviewUrl(null);
       setBase64Data(null);
+      setCustomTitle('');
+      setMaterialSearchQuery('');
+      setSelectedSubjectFilter('all');
       setErrorMessage(null);
       setIsProcessing(false);
       setSelectedMaterial(null);
+      setActiveTab(defaultTab);
     }
-  }, [isOpen, defaultSubjectId]);
+  }, [isOpen, defaultSubjectId, defaultTab]);
 
   // Clean up object URL when component unmounts
   useEffect(() => {
@@ -195,7 +199,7 @@ export const MaterialFilePickerModal: React.FC<MaterialFilePickerModalProps> = (
         if (saveToLibrary) {
           const mimeType = selectedFile.type || 'application/octet-stream';
           const title = customTitle.trim() || selectedFile.name.replace(/\.[^/.]+$/, '');
-          const subjId = uploadSubjectId || (subjects[0]?.id || 'subj_toan');
+          const subjId = uploadSubjectId || (subjects[0]?.id || '');
 
           const intent = await api.createMaterialUploadIntent({
             title,

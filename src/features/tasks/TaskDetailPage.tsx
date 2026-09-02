@@ -286,17 +286,32 @@ export const TaskDetailPage: React.FC = () => {
     setIsSubmittingEvidence(true);
     try {
       let finalNote = evidenceNote.trim();
-      if (evidenceType === 'link') {
+      let fileUrl = evidenceLink || undefined;
+
+      if (evidenceFile) {
+        const mimeType = evidenceFile.type || 'application/octet-stream';
+        const intent = await api.createMaterialUploadIntent({
+          title: `Bằng chứng: ${task.title} - ${evidenceFile.name.replace(/\.[^/.]+$/, '')}`,
+          subjectId: task.subjectId,
+          fileName: evidenceFile.name,
+          mimeType,
+          sizeBytes: evidenceFile.size,
+        });
+        await api.uploadMaterialDirect(intent.r2ObjectKey, evidenceFile, mimeType);
+        const finalized = await api.finalizeMaterialUpload(intent.material.id, {
+          sizeBytes: evidenceFile.size,
+        });
+        fileUrl = (finalized.material as any)?.fileUrl || `/api/v1/materials/${intent.material.id}/content`;
+        finalNote = `[Tệp đính kèm (${evidenceFile.name})]: ${evidenceNote}`;
+      } else if (evidenceType === 'link') {
         finalNote = `[Liên kết trực tuyến]: ${evidenceLink} - ${evidenceNote}`;
-      } else if (evidenceType === 'file' || evidenceType === 'image') {
-        finalNote = `[Tệp đính kèm (${evidenceFile?.name || 'Tài liệu'})]: ${evidenceNote}`;
       }
 
       await api.submitTaskEvidence(task.id, {
         type: evidenceType,
         evidenceNote: finalNote || 'Minh chứng hoàn thành bài làm',
         rating: evidenceRating,
-        fileUrl: evidenceLink || undefined,
+        fileUrl,
       });
 
       confetti({ particleCount: 60, spread: 55 });
@@ -1213,11 +1228,14 @@ export const TaskDetailPage: React.FC = () => {
         onFileSelected={async (res) => {
           if (!task) return;
           try {
+            const fileUrl = (res.material as any)?.fileUrl || (res.materialId ? `/api/v1/materials/${res.materialId}/download` : undefined);
             await api.submitTaskEvidence(task.id, {
+              type: res.mimeType?.startsWith('image/') ? 'image' : 'file',
               evidenceNote: `[Tài liệu đính kèm]: ${res.materialTitle || res.fileName}${
                 res.savedToMaterials ? ' (Đã lưu vào Kho tài liệu)' : ''
               }`,
               rating: 5,
+              fileUrl,
             });
             confetti({ particleCount: 50, spread: 40 });
             await fetchTaskDetails();

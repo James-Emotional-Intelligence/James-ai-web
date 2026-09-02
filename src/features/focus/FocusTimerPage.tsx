@@ -29,15 +29,18 @@ export const FocusTimerPage: React.FC = () => {
   const queryTaskId = searchParams.get('taskId') || undefined;
   const queryMinutes = searchParams.get('minutes') ? parseInt(searchParams.get('minutes')!, 10) : undefined;
 
-  const [mode, setMode] = useState<TimerMode>(
-    queryMinutes === 15 ? '15' : queryMinutes === 25 ? '25' : queryMinutes === 45 ? '45' : queryMinutes === 60 ? '60' : queryMinutes ? 'custom' : '45'
-  );
+  const initialMode: TimerMode =
+    queryMinutes === 15 ? '15' : queryMinutes === 25 ? '25' : queryMinutes === 45 ? '45' : queryMinutes === 60 ? '60' : queryMinutes ? 'custom' : '45';
+  const initialWorkMinutes = queryMinutes || (initialMode === '15' ? 15 : initialMode === '25' ? 25 : initialMode === '60' ? 60 : 45);
+  const initialTotalSeconds = initialWorkMinutes * 60;
+
+  const [mode, setMode] = useState<TimerMode>(initialMode);
   const [phase, setPhase] = useState<TimerPhase>('work');
   const [customMinutes, setCustomMinutes] = useState<number>(queryMinutes || 30);
   const [customBreakMinutes, setCustomBreakMinutes] = useState<number>(5);
 
-  const [totalSeconds, setTotalSeconds] = useState<number>(45 * 60);
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(45 * 60);
+  const [totalSeconds, setTotalSeconds] = useState<number>(initialTotalSeconds);
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(initialTotalSeconds);
   const [timerState, setTimerState] = useState<'ready' | 'running' | 'paused' | 'break' | 'completed' | 'abandoned'>('ready');
   const [pauseCount, setPauseCount] = useState(0);
   const [sessionNotes, setSessionNotes] = useState('');
@@ -109,28 +112,6 @@ export const FocusTimerPage: React.FC = () => {
     } catch {}
   }, [isMuted]);
 
-  // Multi-tab BroadcastChannel setup
-  useEffect(() => {
-    try {
-      const channel = new BroadcastChannel('jami_focus_timer_sync');
-      broadcastChannelRef.current = channel;
-      channel.onmessage = (event) => {
-        if (event.data?.type === 'SYNC_REQUIRED') {
-          syncActiveSession();
-        }
-      };
-      return () => {
-        channel.close();
-      };
-    } catch {}
-  }, []);
-
-  const notifyOtherTabs = () => {
-    try {
-      broadcastChannelRef.current?.postMessage({ type: 'SYNC_REQUIRED', timestamp: Date.now() });
-    } catch {}
-  };
-
   // Sync active focus session from backend
   const syncActiveSession = useCallback(async () => {
     try {
@@ -184,6 +165,31 @@ export const FocusTimerPage: React.FC = () => {
     }
   }, [activeSessionId]);
 
+  // Multi-tab BroadcastChannel setup with ref to latest sync handler
+  const syncActiveSessionRef = useRef(syncActiveSession);
+  syncActiveSessionRef.current = syncActiveSession;
+
+  useEffect(() => {
+    try {
+      const channel = new BroadcastChannel('jami_focus_timer_sync');
+      broadcastChannelRef.current = channel;
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'SYNC_REQUIRED') {
+          syncActiveSessionRef.current();
+        }
+      };
+      return () => {
+        channel.close();
+      };
+    } catch {}
+  }, []);
+
+  const notifyOtherTabs = () => {
+    try {
+      broadcastChannelRef.current?.postMessage({ type: 'SYNC_REQUIRED', timestamp: Date.now() });
+    } catch {}
+  };
+
   // Load session on mount
   useEffect(() => {
     syncActiveSession();
@@ -236,7 +242,7 @@ export const FocusTimerPage: React.FC = () => {
 
     const isWork = phase === 'work';
     const plannedM = Math.round(totalSeconds / 60);
-    const breakM = mode === '45_10' ? 10 : mode === 'custom' ? customBreakMinutes : 5;
+    const breakM = Math.round(getPhaseDurationSeconds(mode, 'break', customMinutes, customBreakMinutes) / 60);
 
     playTone();
 
@@ -252,7 +258,7 @@ export const FocusTimerPage: React.FC = () => {
           targetEndTimeRef.current = Date.now() + totalSeconds * 1000;
         }
         notifyOtherTabs();
-      } else if (activeSessionId && timerState === 'paused') {
+      } else if (activeSessionId && isWork) {
         const res = await api.resumeFocusSession(activeSessionId);
         setTimerState('running');
         if (res.session.targetEndAt) {
@@ -262,11 +268,13 @@ export const FocusTimerPage: React.FC = () => {
         }
         notifyOtherTabs();
       } else {
-        setTimerState(isWork ? 'running' : 'break');
+        // Break phase resume / start: purely local countdown
+        setTimerState('break');
         targetEndTimeRef.current = Date.now() + secondsRemaining * 1000;
+        notifyOtherTabs();
       }
     } catch (err: any) {
-      setSyncWarning(err.message || 'Không thể bắt đầu phiên tập trung.');
+      setSyncWarning(err.message || 'Không thể bắt đầu phiên học.');
     } finally {
       setIsActionLoading(false);
     }
@@ -277,37 +285,34 @@ export const FocusTimerPage: React.FC = () => {
     setIsActionLoading(true);
     setSyncWarning(null);
 
+    playTone();
+
     try {
-      if (activeSessionId) {
-        const res = await api.pauseFocusSession(activeSessionId);
-        setTimerState('paused');
-        setPauseCount(res.session.pauseCount || pauseCount + 1);
-        if (res.session.remainingSecondsAtPause !== undefined) {
-          setSecondsRemaining(res.session.remainingSecondsAtPause);
-        }
-        targetEndTimeRef.current = null;
+      if (activeSessionId && phase === 'work') {
+        await api.pauseFocusSession(activeSessionId);
         notifyOtherTabs();
-      } else {
-        setTimerState('paused');
-        setPauseCount((prev) => prev + 1);
-        targetEndTimeRef.current = null;
       }
+      setTimerState('paused');
+      targetEndTimeRef.current = null;
+      setPauseCount((prev) => prev + 1);
     } catch (err: any) {
-      setSyncWarning(err.message || 'Không thể tạm dừng phiên tập trung.');
+      setSyncWarning(err.message || 'Không thể tạm dừng phiên.');
     } finally {
       setIsActionLoading(false);
     }
   };
 
   const handleReset = async () => {
-    if (activeSessionId && (timerState === 'running' || timerState === 'paused' || timerState === 'break')) {
+    if (activeSessionId && phase === 'work' && (timerState === 'running' || timerState === 'paused')) {
       const confirmReset = window.confirm('Bạn có chắc chắn muốn hủy phiên tập trung hiện tại không?');
       if (!confirmReset) return;
 
       try {
         await api.abandonFocusSession(activeSessionId, 'Người dùng thiết lập lại đồng hồ');
         notifyOtherTabs();
-      } catch {}
+      } catch (err: any) {
+        console.warn('[FocusTimer] Reset abandon error:', err);
+      }
     }
 
     setTimerState('ready');
@@ -323,13 +328,12 @@ export const FocusTimerPage: React.FC = () => {
     setIsActionLoading(true);
     setSyncWarning(null);
 
-    setTimerState('completed');
-    confetti({ particleCount: 90, spread: 60 });
-    playTone();
-
     if (activeSessionId) {
       try {
         await api.completeFocusSession(activeSessionId, sessionNotes || 'Hoàn tất sớm theo yêu cầu');
+        setTimerState('completed');
+        confetti({ particleCount: 90, spread: 60 });
+        playTone();
         notifyOtherTabs();
       } catch (err: any) {
         setSyncWarning(err.message || 'Không thể ghi nhận hoàn tất phiên.');
@@ -337,6 +341,9 @@ export const FocusTimerPage: React.FC = () => {
         setIsActionLoading(false);
       }
     } else {
+      setTimerState('completed');
+      confetti({ particleCount: 90, spread: 60 });
+      playTone();
       setIsActionLoading(false);
     }
   };
@@ -373,9 +380,10 @@ export const FocusTimerPage: React.FC = () => {
               api.completeFocusSession(activeSessionId, sessionNotes || 'Hoàn thành phiên tập trung')
                 .then(() => notifyOtherTabs())
                 .catch(() => {});
+              setActiveSessionId(null);
             }
             setPhase('break');
-            const breakSecs = mode === '45_10' ? 10 * 60 : mode === 'custom' ? customBreakMinutes * 60 : 5 * 60;
+            const breakSecs = getPhaseDurationSeconds(mode, 'break', customMinutes, customBreakMinutes);
             setTotalSeconds(breakSecs);
             setSecondsRemaining(breakSecs);
             setTimerState('break');
@@ -391,7 +399,7 @@ export const FocusTimerPage: React.FC = () => {
       }, 500);
     }
     return () => clearInterval(interval);
-  }, [timerState, phase, mode, activeSessionId, sessionNotes, customBreakMinutes, playTone]);
+  }, [timerState, phase, mode, activeSessionId, sessionNotes, customMinutes, customBreakMinutes, playTone, getPhaseDurationSeconds]);
 
   const mins = Math.floor(secondsRemaining / 60);
   const secs = secondsRemaining % 60;

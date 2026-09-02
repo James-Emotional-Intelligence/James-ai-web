@@ -62,11 +62,33 @@ describe('Notification Scheduler & Sanitization Unit Tests', () => {
       expect(isWithinQuietHours(beforeQuiet, '22:30', '06:30', 'Asia/Ho_Chi_Minh')).toBe(false);
     });
 
-    it('calculates deferred delivery timestamp to next morning quiet hours end', () => {
+    it('calculates deferred delivery timestamp to next morning quiet hours end without UTC timezone drift', () => {
       const lateNight = new Date('2026-08-25T23:15:00+07:00');
       const deferred = getDeferredDeliveryTime(lateNight, '06:30', 'Asia/Ho_Chi_Minh');
 
       expect(deferred.getTime()).toBeGreaterThan(lateNight.getTime());
+      const deferredVnStr = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(deferred);
+
+      expect(deferredVnStr).toBe('06:30');
+    });
+
+    it('calculates deferred delivery for daytime custom quiet hours (e.g. 13:00 to 15:00)', () => {
+      const afternoon = new Date('2026-08-25T13:30:00+07:00');
+      const deferred = getDeferredDeliveryTime(afternoon, '15:00', 'Asia/Ho_Chi_Minh');
+
+      const deferredVnStr = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(deferred);
+
+      expect(deferredVnStr).toBe('15:00');
     });
   });
 
@@ -158,6 +180,59 @@ describe('Notification Scheduler & Sanitization Unit Tests', () => {
 
       const scanResult = await notificationScheduler.scanAndGenerateForUser(userId, mockNow);
       expect(scanResult.created).toBe(0);
+    });
+
+    it('respects custom examLeadDays and only generates milestones within that window', async () => {
+      const mockNow = new Date('2026-08-25T08:00:00+07:00');
+      vi.setSystemTime(mockNow);
+
+      // Set user examLeadDays preference to 3 days
+      await notificationRepo.updatePreferences(userId, {
+        upcomingClass: false,
+        upcomingExam: true,
+        incompleteTask: false,
+        examLeadDays: 3,
+      });
+
+      // Exam 7 days from now (2026-09-01) -> should NOT trigger notification because 7 > 3
+      const exam7Days = new Date('2026-09-01T08:00:00+07:00');
+      examRepo.seedDemo(userId, [
+        {
+          id: 'exam_d7_custom_test',
+          userId,
+          subjectId: 'subj_toan',
+          subjectName: 'Toán học',
+          title: 'Thi Giữa Kỳ',
+          scopeText: '',
+          examAt: exam7Days.toISOString(),
+          importance: 'high',
+          topics: [],
+          milestones: [],
+        },
+      ]);
+
+      const scan7 = await notificationScheduler.scanAndGenerateForUser(userId, mockNow);
+      expect(scan7.created).toBe(0);
+
+      // Exam 3 days from now (2026-08-28) -> SHOULD trigger D-3 notification
+      const exam3Days = new Date('2026-08-28T08:00:00+07:00');
+      examRepo.seedDemo(userId, [
+        {
+          id: 'exam_d3_custom_test',
+          userId,
+          subjectId: 'subj_toan',
+          subjectName: 'Toán học',
+          title: 'Thi Cuối Kỳ',
+          scopeText: '',
+          examAt: exam3Days.toISOString(),
+          importance: 'high',
+          topics: [],
+          milestones: [],
+        },
+      ]);
+
+      const scan3 = await notificationScheduler.scanAndGenerateForUser(userId, mockNow);
+      expect(scan3.created).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -53,7 +53,7 @@ export const SignupPage: React.FC = () => {
         preferredName: data.preferredName?.trim() || data.displayName.trim().split(/\s+/).pop() || 'Học sinh',
       };
       await registerUser(payload);
-      navigate('/today', { replace: true });
+      navigate('/onboarding', { replace: true });
     } catch (err: any) {
       if (err instanceof ApiError) {
         if (err.status === 409 || err.code === 'EMAIL_ALREADY_EXISTS') {

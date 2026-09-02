@@ -90,7 +90,7 @@ export class AuthService {
       energyPreferences: { morning: 'high', afternoon: 'medium', evening: 'high' },
       sleepSchedule: { wakeTime: '06:00', bedTime: '22:30' },
       mealTimes: { lunch: '12:00', dinner: '18:30' },
-      onboardingCompletedAt: createdAt,
+      onboardingCompletedAt: undefined,
     };
 
     const rawToken = crypto.randomBytes(32).toString('hex');
@@ -141,7 +141,7 @@ export class AuthService {
               JSON.stringify(profile.energyPreferences),
               JSON.stringify(profile.sleepSchedule),
               JSON.stringify(profile.mealTimes),
-              new Date(createdAt),
+              profile.onboardingCompletedAt ? new Date(profile.onboardingCompletedAt) : null,
             ]
           );
 

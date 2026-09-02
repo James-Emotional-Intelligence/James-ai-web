@@ -37,15 +37,16 @@ export const OnboardingPage: React.FC = () => {
   const handleFinish = async () => {
     setIsSubmitting(true);
     try {
-      await api.updateProfile({
+      await api.completeOnboarding({
         gradeLevel: grade,
         goals: [targetGoal],
-      });
+        preferredName: preferredName.trim() || undefined,
+        weakSubjects,
+      } as any);
       confetti({ particleCount: 100, spread: 70 });
       navigate('/today');
-    } catch (err) {
-      console.error(err);
-      navigate('/today');
+    } catch (err: any) {
+      alert(err.message || 'Không thể lưu hồ sơ học sinh. Vui lòng thử lại.');
     } finally {
       setIsSubmitting(false);
     }

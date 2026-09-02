@@ -1,12 +1,13 @@
 import { db } from '../db/mysql';
 import { isProduction, isDatabaseRequired } from '../config/env';
-import { TimetableEntry, BusyEvent, AvailabilityRule, SchoolTimetable } from '../../shared/types';
+import { TimetableEntry, BusyEvent, AvailabilityRule, SchoolTimetable, TimetableEntryException } from '../../shared/types';
 import crypto from 'crypto';
 
 export class TimetableRepository {
   private static instance: TimetableRepository;
   private demoTimetables: Map<string, SchoolTimetable[]> = new Map();
   private demoEntries: Map<string, TimetableEntry[]> = new Map();
+  private demoExceptions: Map<string, TimetableEntryException[]> = new Map();
   private demoBusyEvents: Map<string, BusyEvent[]> = new Map();
   private demoAvailabilityRules: Map<string, AvailabilityRule[]> = new Map();
 
@@ -168,7 +169,8 @@ export class TimetableRepository {
   // Timetable Entries CRUD
   // ==========================================
 
-  public async getTimetableEntries(userId: string, timetableId?: string): Promise<TimetableEntry[]> {
+  public async getTimetableEntries(userId: string, timetableId?: string, forDate?: string): Promise<TimetableEntry[]> {
+    let entries: TimetableEntry[];
     if (db.isHealthy()) {
       let query = `
         SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.day_of_week, e.start_local_time, e.end_local_time,
@@ -192,7 +194,7 @@ export class TimetableRepository {
 
       const rows = await db.query<any>(query, params);
 
-      return rows.map((r) => ({
+      entries = rows.map((r) => ({
         id: r.id,
         timetableId: r.timetable_id,
         dayOfWeek: Number(r.day_of_week),
@@ -208,13 +210,254 @@ export class TimetableRepository {
         commuteBeforeMinutes: r.commute_before_minutes ?? 15,
         commuteAfterMinutes: r.commute_after_minutes ?? 15,
       }));
+    } else {
+      if (isProduction || isDatabaseRequired) {
+        throw new Error('[JAMI Database] Database is unreachable. Cannot retrieve timetable entries.');
+      }
+
+      const list = this.demoEntries.get(userId) || [];
+      entries = timetableId ? list.filter((e) => e.timetableId === timetableId) : [...list];
     }
 
-    if (isProduction || isDatabaseRequired) {
-      throw new Error('[JAMI Database] Database is unreachable. Cannot retrieve timetable entries.');
+    if (forDate) {
+      const exceptions = await this.getExceptions(userId, forDate, forDate);
+      const excMap = new Map(exceptions.map((exc) => [exc.timetableEntryId, exc]));
+      for (const e of entries) {
+        const exc = excMap.get(e.id);
+        if (exc) {
+          e.isSkippedThisWeek = true;
+          e.exceptionId = exc.id;
+        } else {
+          e.isSkippedThisWeek = false;
+        }
+      }
     }
 
-    return this.demoEntries.get(userId) || [];
+    return entries;
+  }
+
+  public async getEntryById(userId: string, entryId: string): Promise<TimetableEntry | null> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.day_of_week, e.start_local_time, e.end_local_time,
+                e.location, e.commute_before_minutes, e.commute_after_minutes,
+                s.name as subject_name, s.color as subject_color
+         FROM school_timetable_entries e
+         JOIN school_timetables t ON e.timetable_id = t.id
+         LEFT JOIN subjects s ON e.subject_id = s.id
+         WHERE e.id = ? AND t.user_id = ?`,
+        [entryId, userId]
+      );
+      if (rows.length === 0) return null;
+      const r = rows[0];
+      return {
+        id: r.id,
+        timetableId: r.timetable_id,
+        dayOfWeek: Number(r.day_of_week),
+        subjectId: r.subject_id,
+        subjectName: r.subject_name || r.title,
+        subjectColor: r.subject_color || '#16A34A',
+        title: r.title,
+        teacher: r.teacher || undefined,
+        room: r.location || '',
+        location: r.location || '',
+        startLocalTime: r.start_local_time,
+        endLocalTime: r.end_local_time,
+        commuteBeforeMinutes: Number(r.commute_before_minutes || 0),
+        commuteAfterMinutes: Number(r.commute_after_minutes || 0),
+      };
+    }
+    const list = this.demoEntries.get(userId) || [];
+    return list.find((e) => e.id === entryId) || null;
+  }
+
+  // ==========================================
+  // Timetable Exceptions (Nghỉ tuần này)
+  // ==========================================
+
+  public async createException(
+    userId: string,
+    entryIdOrData: string | { timetableEntryId: string; occurrenceDate: string; reason?: string; exceptionType?: 'cancelled' | 'rescheduled' | 'skip' },
+    occurrenceDateParam?: string,
+    reasonParam?: string,
+    exceptionTypeParam: 'cancelled' | 'rescheduled' | 'skip' = 'cancelled'
+  ): Promise<TimetableEntryException> {
+    let entryId: string;
+    let occurrenceDate: string;
+    let reason: string | undefined;
+    let exceptionType: 'cancelled' | 'rescheduled' | 'skip';
+
+    if (typeof entryIdOrData === 'object') {
+      entryId = entryIdOrData.timetableEntryId;
+      occurrenceDate = entryIdOrData.occurrenceDate;
+      reason = entryIdOrData.reason;
+      exceptionType = entryIdOrData.exceptionType || 'cancelled';
+    } else {
+      entryId = entryIdOrData;
+      occurrenceDate = occurrenceDateParam!;
+      reason = reasonParam;
+      exceptionType = exceptionTypeParam;
+    }
+
+    const entry = await this.getEntryById(userId, entryId);
+    if (!entry) {
+      throw new Error('Không tìm thấy tiết học hoặc bạn không có quyền truy cập.');
+    }
+
+    const id = 'exc_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const exc: TimetableEntryException = {
+      id,
+      userId,
+      timetableEntryId: entryId,
+      occurrenceDate,
+      exceptionType,
+      reason: reason || undefined,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO timetable_entry_exceptions (id, user_id, timetable_entry_id, occurrence_date, exception_type, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW(3))
+         ON DUPLICATE KEY UPDATE
+           exception_type = VALUES(exception_type),
+           reason = VALUES(reason)`,
+        [id, userId, entryId, occurrenceDate, exceptionType, reason || null]
+      );
+    } else {
+      if (isProduction || isDatabaseRequired) {
+        throw new Error('[JAMI Database] Database is unreachable. Cannot record timetable exception.');
+      }
+      const list = this.demoExceptions.get(userId) || [];
+      const existingIdx = list.findIndex((e) => e.timetableEntryId === entryId && e.occurrenceDate === occurrenceDate);
+      if (existingIdx >= 0) {
+        list[existingIdx] = exc;
+      } else {
+        list.push(exc);
+      }
+      this.demoExceptions.set(userId, list);
+    }
+
+    return exc;
+  }
+
+  public async deleteException(userId: string, entryId: string, occurrenceDate: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      const res = await db.execute(
+        `DELETE FROM timetable_entry_exceptions WHERE user_id = ? AND timetable_entry_id = ? AND occurrence_date = ?`,
+        [userId, entryId, occurrenceDate]
+      );
+      return (res?.affectedRows || 0) > 0;
+    }
+
+    const list = this.demoExceptions.get(userId) || [];
+    const idx = list.findIndex((e) => e.timetableEntryId === entryId && e.occurrenceDate === occurrenceDate);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      this.demoExceptions.set(userId, list);
+      return true;
+    }
+    return false;
+  }
+
+  public async deleteExceptionById(userId: string, exceptionId: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      const res = await db.execute(
+        `DELETE FROM timetable_entry_exceptions WHERE user_id = ? AND id = ?`,
+        [userId, exceptionId]
+      );
+      return (res?.affectedRows || 0) > 0;
+    }
+
+    const list = this.demoExceptions.get(userId) || [];
+    const idx = list.findIndex((e) => e.id === exceptionId);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      this.demoExceptions.set(userId, list);
+      return true;
+    }
+    return false;
+  }
+
+  public async getExceptions(userId: string, fromDate?: string, toDate?: string): Promise<TimetableEntryException[]> {
+    if (db.isHealthy()) {
+      let query = `
+        SELECT id, user_id, timetable_entry_id, occurrence_date, exception_type, reason, created_at
+        FROM timetable_entry_exceptions
+        WHERE user_id = ?
+      `;
+      const params: any[] = [userId];
+      if (fromDate) {
+        query += ' AND occurrence_date >= ?';
+        params.push(fromDate);
+      }
+      if (toDate) {
+        query += ' AND occurrence_date <= ?';
+        params.push(toDate);
+      }
+      query += ' ORDER BY occurrence_date ASC';
+      const rows = await db.query<any>(query, params);
+      return rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        timetableEntryId: r.timetable_entry_id,
+        occurrenceDate: r.occurrence_date,
+        exceptionType: r.exception_type,
+        reason: r.reason || undefined,
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+      }));
+    }
+
+    let list = this.demoExceptions.get(userId) || [];
+    if (fromDate) {
+      list = list.filter((e) => e.occurrenceDate >= fromDate);
+    }
+    if (toDate) {
+      list = list.filter((e) => e.occurrenceDate <= toDate);
+    }
+    return list;
+  }
+
+  public async isEntrySkippedOnDate(
+    userIdOrEntryId: string,
+    entryIdOrOccurrenceDate: string,
+    occurrenceDateParam?: string
+  ): Promise<boolean> {
+    let userId: string | undefined;
+    let entryId: string;
+    let occurrenceDate: string;
+
+    if (occurrenceDateParam) {
+      userId = userIdOrEntryId;
+      entryId = entryIdOrOccurrenceDate;
+      occurrenceDate = occurrenceDateParam;
+    } else {
+      entryId = userIdOrEntryId;
+      occurrenceDate = entryIdOrOccurrenceDate;
+    }
+
+    if (db.isHealthy()) {
+      let query = `SELECT id FROM timetable_entry_exceptions WHERE timetable_entry_id = ? AND occurrence_date = ?`;
+      const params: any[] = [entryId, occurrenceDate];
+      if (userId) {
+        query += ` AND user_id = ?`;
+        params.push(userId);
+      }
+      const rows = await db.query<any>(query, params);
+      return rows.length > 0;
+    }
+
+    if (userId) {
+      const list = this.demoExceptions.get(userId) || [];
+      return list.some((e) => e.timetableEntryId === entryId && e.occurrenceDate === occurrenceDate);
+    }
+
+    for (const list of this.demoExceptions.values()) {
+      if (list.some((e) => e.timetableEntryId === entryId && e.occurrenceDate === occurrenceDate)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public async createTimetableEntry(userId: string, data: Partial<TimetableEntry>): Promise<TimetableEntry> {

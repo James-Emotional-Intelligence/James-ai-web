@@ -10,6 +10,7 @@ export interface User {
   ageBand: string;
   role?: 'user' | 'admin';
   status: 'active' | 'inactive' | 'banned' | 'deleted';
+  lastActiveAt?: string;
   createdAt: string;
 }
 
@@ -18,6 +19,10 @@ export interface StudentProfile {
   gradeLevel: number;
   schoolName: string;
   goals: string[];
+  preferredName?: string;
+  weakSubjects?: string[];
+  curriculum?: string;
+  learningStyle?: string;
   preferredSessionMinutes: number;
   maxDailyStudyMinutes: number;
   energyPreferences: {
@@ -72,6 +77,50 @@ export interface TimetableEntry {
   location?: string;
   commuteBeforeMinutes: number;
   commuteAfterMinutes: number;
+  isSkippedThisWeek?: boolean;
+  exceptionId?: string;
+}
+
+export interface TimetableEntryException {
+  id: string;
+  userId: string;
+  timetableEntryId: string;
+  occurrenceDate: string; // "YYYY-MM-DD"
+  exceptionType: 'cancelled' | 'rescheduled' | 'skip';
+  reason?: string;
+  createdAt: string;
+}
+
+export type UnderstandingLevel = 'very_easy' | 'normal' | 'hard' | 'not_understood';
+export type SessionAttendanceStatus = 'attended' | 'absent';
+
+export interface ClassSessionCheckin {
+  id: string;
+  userId: string;
+  timetableEntryId: string;
+  occurrenceDate: string; // "YYYY-MM-DD"
+  learnedContent?: string;
+  homework?: string;
+  reflection?: string;
+  understandingLevel?: UnderstandingLevel;
+  attendanceStatus: SessionAttendanceStatus;
+  completedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MissedClassSession {
+  timetableEntryId: string;
+  subjectId?: string;
+  subjectName: string;
+  title: string;
+  dayOfWeek: number;
+  startLocalTime: string;
+  endLocalTime: string;
+  occurrenceDate: string; // "YYYY-MM-DD"
+  formattedDate: string;  // "DD/MM/YYYY"
+  dayOfWeekText: string;  // "Thứ Hai", "Thứ Ba", ...
+  room?: string;
 }
 
 export interface BusyEvent {
@@ -185,7 +234,7 @@ export interface TaskEvidence {
   taskId: string;
   userId: string;
   stepId?: string;
-  type: 'image' | 'text' | 'quiz_result' | 'file';
+  type: 'image' | 'text' | 'quiz_result' | 'file' | 'link';
   r2ObjectKey?: string;
   fileUrl?: string;
   textValue?: string;

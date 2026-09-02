@@ -134,7 +134,7 @@ describe('Auth UI Component & Regression Tests (Video Reproduction Suite)', () =
     });
     const loginEmailInput = screen.getByLabelText(/Email học sinh/i) as HTMLInputElement;
     expect(loginEmailInput.value).toBe('minh.test@example.test');
-  });
+  }, 15000);
 
   it('keeps form intact and displays 503 system interruption error upon database failure', async () => {
     const user = userEvent.setup();

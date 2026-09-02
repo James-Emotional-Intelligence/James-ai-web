@@ -47,13 +47,29 @@ describe('Task Execution Unit Tests', () => {
       expect(chkValid.success).toBe(true);
     });
 
-    it('validates evidence and reflection submission schema', () => {
-      const valid = TaskEvidenceSubmitSchema.safeParse({
+    it('validates evidence and reflection submission schema with link and file types', () => {
+      const validText = TaskEvidenceSubmitSchema.safeParse({
         rating: 5,
         evidenceNote: 'Đã giải xong toàn bộ 10 bài tập trong sách giáo khoa.',
         type: 'text',
       });
-      expect(valid.success).toBe(true);
+      expect(validText.success).toBe(true);
+
+      const validLink = TaskEvidenceSubmitSchema.safeParse({
+        rating: 4,
+        evidenceNote: 'Xem bài làm trực tuyến qua link Google Docs đính kèm.',
+        type: 'link',
+        fileUrl: 'https://docs.google.com/document/d/12345/edit',
+      });
+      expect(validLink.success).toBe(true);
+
+      const validFile = TaskEvidenceSubmitSchema.safeParse({
+        rating: 5,
+        evidenceNote: 'Đã đính kèm tệp PDF bài tập.',
+        type: 'file',
+        fileUrl: '/api/v1/materials/mat_123/content',
+      });
+      expect(validFile.success).toBe(true);
 
       const invalidRating = TaskEvidenceSubmitSchema.safeParse({
         rating: 6, // above max 5

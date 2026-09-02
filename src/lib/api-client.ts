@@ -26,6 +26,9 @@ import {
   ExecutionStep,
   Outline,
   TaskEvidence,
+  TimetableEntryException,
+  ClassSessionCheckin,
+  MissedClassSession,
 } from '../../shared/types';
 import { z } from 'zod';
 import { LoginRequestSchema, RegisterRequestSchema } from '../../shared/schemas';
@@ -252,7 +255,7 @@ export const api = {
   getSubjects: () => fetchJson<{ subjects: Subject[] }>('/subjects'),
 
   // Timetable & Schedule Management
-  getTimetable: (params?: { from?: string; to?: string }) => {
+  getTimetable: (params?: { from?: string; to?: string; forDate?: string }) => {
     const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';
     return fetchJson<{
       timetables: SchoolTimetable[];
@@ -260,6 +263,7 @@ export const api = {
       entries: TimetableEntry[];
       busyEvents: BusyEvent[];
       availabilityRules: AvailabilityRule[];
+      exceptions?: TimetableEntryException[];
     }>(`/timetables${query}`);
   },
   createTimetable: (data: Partial<SchoolTimetable>) =>
@@ -283,6 +287,45 @@ export const api = {
     const query = timetableId ? `?timetableId=${encodeURIComponent(timetableId)}` : '';
     return fetchJson<{ success: boolean; deletedCount: number }>(`/timetables-all-entries${query}`, { method: 'DELETE' });
   },
+
+  // Timetable Entry Exceptions (Nghỉ tuần này)
+  skipTimetableEntryThisWeek: (entryId: string, occurrenceDate: string, reason?: string) =>
+    fetchJson<{ success: boolean; exception: TimetableEntryException }>(`/timetables/entries/${entryId}/exceptions`, {
+      method: 'POST',
+      body: JSON.stringify({ occurrenceDate, reason, exceptionType: 'cancelled' }),
+    }),
+  undoSkipTimetableEntry: (entryId: string, occurrenceDate: string) =>
+    fetchJson<{ success: boolean }>(`/timetables/entries/${entryId}/exceptions/${occurrenceDate}`, {
+      method: 'DELETE',
+    }),
+  getTimetableExceptions: (params?: { from?: string; to?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';
+    return fetchJson<{ exceptions: TimetableEntryException[] }>(`/timetables/exceptions${query}`);
+  },
+
+  // Offline Missed Sessions & Check-ins
+  getMissedClassSessions: () =>
+    fetchJson<{ missedSessions: MissedClassSession[] }>('/timetables/missed-sessions'),
+  submitSessionCheckin: (data: {
+    timetableEntryId: string;
+    occurrenceDate: string;
+    learnedContent?: string;
+    homework?: string;
+    reflection?: string;
+    understandingLevel?: string;
+    attendanceStatus?: 'attended' | 'absent';
+    createTaskForHomework?: boolean;
+  }) =>
+    fetchJson<{ success: boolean; checkin: ClassSessionCheckin; createdTask?: StudyTask }>('/timetables/session-checkins', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getSessionCheckins: (params?: { from?: string; to?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';
+    return fetchJson<{ checkins: ClassSessionCheckin[] }>(`/timetables/session-checkins${query}`);
+  },
+  sendHeartbeat: () =>
+    fetchJson<{ success: boolean }>('/users/heartbeat', { method: 'POST' }),
   importTimetableOcr: (imageBase64: string, mimeType?: string) =>
     fetchJson<{
       success: boolean;
@@ -731,7 +774,7 @@ export const api = {
       `/jami/messages${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`,
       { method: 'DELETE' }
     ),
-  sendJamiChat: (message: string, conversationId?: string, clientMessageId?: string) =>
+  sendJamiChat: (message: string, conversationId?: string, clientMessageId?: string, materialId?: string, signal?: AbortSignal) =>
     fetchJson<{
       userMessage: JamiMessageItem;
       replyMessage: JamiMessageItem;
@@ -740,7 +783,8 @@ export const api = {
       isDemoMode: boolean;
     }>('/jami/chat', {
       method: 'POST',
-      body: JSON.stringify({ message, conversationId, clientMessageId }),
+      body: JSON.stringify({ message, conversationId, clientMessageId, materialId }),
+      signal,
     }),
   confirmJamiAction: (messageId: string, decision: 'confirm' | 'reject' = 'confirm') =>
     fetchJson<{ success: boolean; message: JamiMessageItem; actionResult?: any }>(
@@ -758,7 +802,7 @@ export const api = {
     fetchJson<{ clientSecret?: string; mode: string; message: string; expiresAt?: number; model?: string; voice?: string }>('/jami/realtime/client-secret', {
       method: 'POST',
     }),
-  sendVoiceCommand: (transcript: string, clientTurnId?: string, mode?: string, conversationId?: string) =>
+  sendVoiceCommand: (transcript: string, clientTurnId?: string, mode?: string, conversationId?: string, signal?: AbortSignal) =>
     fetchJson<{
       replyText: string;
       emotion: string;
@@ -769,6 +813,7 @@ export const api = {
     }>('/jami/voice/command', {
       method: 'POST',
       body: JSON.stringify({ transcript, clientTurnId, mode, conversationId }),
+      signal,
     }),
   confirmVoiceProposal: (decision: 'confirm' | 'reject' = 'confirm', proposalId?: string, conversationId?: string) =>
     fetchJson<{ success: boolean; message: string; clientAction?: any }>('/jami/voice/confirm', {

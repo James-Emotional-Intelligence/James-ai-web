@@ -29,6 +29,7 @@ import {
   Undo2,
   UserCheck,
   Car,
+  CalendarOff,
 } from 'lucide-react';
 import { api, ApiError } from '../../lib/api-client';
 import {
@@ -39,8 +40,9 @@ import {
   Subject,
   SchoolTimetable,
   LearningMaterial,
+  TimetableEntryException,
 } from '../../../shared/types';
-import { formatTimeVN, formatDateVN, formatDateShortVN, formatDateFullVN } from '../../lib/utils';
+import { formatTimeVN, formatDateVN, formatDateShortVN, formatDateFullVN, formatBytes } from '../../lib/utils';
 import confetti from 'canvas-confetti';
 
 export const getSubjectColorTheme = (title: string, subjectName?: string) => {
@@ -215,6 +217,28 @@ export const TimetablePage: React.FC = () => {
   const [eventSubjectId, setEventSubjectId] = useState('');
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
 
+  // Timetable Entry Exceptions (Nghỉ tuần này)
+  const [exceptions, setExceptions] = useState<TimetableEntryException[]>([]);
+  const [skipModal, setSkipModal] = useState<{
+    isOpen: boolean;
+    entry: TimetableEntry | null;
+    dayLabel: string;
+    dateStr: string;
+    formattedDate: string;
+    timeRange: string;
+    reason: string;
+    isSubmitting: boolean;
+  }>({
+    isOpen: false,
+    entry: null,
+    dayLabel: '',
+    dateStr: '',
+    formattedDate: '',
+    timeRange: '',
+    reason: '',
+    isSubmitting: false,
+  });
+
   // OCR Timetable Import Modal States
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
   const [ocrStep, setOcrStep] = useState<'upload' | 'analyzing' | 'preview'>('upload');
@@ -381,6 +405,7 @@ export const TimetablePage: React.FC = () => {
       setActiveTimetable(ttData.activeTimetable || null);
       setTimetableEntries(ttData.entries || []);
       setBusyEvents(ttData.busyEvents || []);
+      setExceptions(ttData.exceptions || []);
       setTasks(taskData.tasks || []);
       setSubjects(subData.subjects || []);
       setMaterials(matData.materials || []);
@@ -552,6 +577,64 @@ export const TimetablePage: React.FC = () => {
     }
   };
 
+  // Timetable Entry Skip This Week (Nghỉ tuần này)
+  const isEntrySkipped = (entryId: string, dateStr: string) => {
+    return exceptions.some((exc) => exc.timetableEntryId === entryId && exc.occurrenceDate === dateStr);
+  };
+
+  const handleOpenSkipModal = (
+    entry: TimetableEntry,
+    dayInfo: { label: string; dateStr: string; date: Date }
+  ) => {
+    const formatted = formatDateVN(dayInfo.date);
+    setSkipModal({
+      isOpen: true,
+      entry,
+      dayLabel: dayInfo.label,
+      dateStr: dayInfo.dateStr,
+      formattedDate: formatted,
+      timeRange: `${entry.startLocalTime} – ${entry.endLocalTime}`,
+      reason: '',
+      isSubmitting: false,
+    });
+  };
+
+  const handleConfirmSkip = async () => {
+    if (!skipModal.entry || !skipModal.dateStr) return;
+    setSkipModal((prev) => ({ ...prev, isSubmitting: true }));
+    try {
+      const res = await api.skipTimetableEntryThisWeek(
+        skipModal.entry.id,
+        skipModal.dateStr,
+        skipModal.reason.trim() || undefined
+      );
+      setExceptions((prev) => {
+        const filtered = prev.filter(
+          (e) => !(e.timetableEntryId === skipModal.entry!.id && e.occurrenceDate === skipModal.dateStr)
+        );
+        return [...filtered, res.exception];
+      });
+      setSkipModal((prev) => ({ ...prev, isOpen: false }));
+      await fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Không thể đánh dấu nghỉ tiết học này');
+    } finally {
+      setSkipModal((prev) => ({ ...prev, isSubmitting: false }));
+    }
+  };
+
+  const handleUndoSkip = async (entry: TimetableEntry, dateStr: string) => {
+    try {
+      await api.undoSkipTimetableEntry(entry.id, dateStr);
+      setExceptions((prev) =>
+        prev.filter((e) => !(e.timetableEntryId === entry.id && e.occurrenceDate === dateStr))
+      );
+      await fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Không thể hoàn tác trạng thái nghỉ học');
+    }
+  };
+
   // Busy Event CRUD Submit with Expanded Recurrence
   const handleSaveBusyEvent = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -715,13 +798,32 @@ export const TimetablePage: React.FC = () => {
 
   // OCR Timetable Import Handlers
   const handleOcrFileSelect = (file: File) => {
-    setOcrFile(file);
     setOcrErrorMessage(null);
+
+    const MAX_OCR_SIZE = 25 * 1024 * 1024; // 25MB
+    if (file.size > MAX_OCR_SIZE) {
+      setOcrErrorMessage(`Dung lượng tệp (${formatBytes(file.size)}) vượt quá giới hạn tối đa 25MB.`);
+      return;
+    }
+
     const mime = file.type || 'image/jpeg';
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+    const isImageOrPdf =
+      mime.startsWith('image/') ||
+      mime === 'application/pdf' ||
+      ['.png', '.jpg', '.jpeg', '.webp', '.pdf'].includes(ext);
+
+    if (!isImageOrPdf) {
+      setOcrErrorMessage('Định dạng tệp không được hỗ trợ. Vui lòng chọn ảnh PNG, JPG, WEBP hoặc tệp PDF.');
+      return;
+    }
+
+    setOcrFile(file);
     setOcrMimeType(mime);
     if (!ocrMaterialTitle) {
       setOcrMaterialTitle(file.name.replace(/\.[^/.]+$/, ''));
     }
+
     const reader = new FileReader();
     reader.onload = () => {
       const res = reader.result as string;
@@ -1292,14 +1394,28 @@ export const TimetablePage: React.FC = () => {
                     .sort((a, b) => a.startLocalTime.localeCompare(b.startLocalTime))
                     .map((entry) => {
                       const theme = getSubjectColorTheme(entry.title, entry.subjectName);
+                      const isSkipped = isEntrySkipped(entry.id, selectedDayInfo.dateStr);
+
                       return (
                         <div
                           key={entry.id}
-                          className={`p-4 rounded-2xl ${theme.bg} border ${theme.border} space-y-2 relative group transition-all shadow-sm jami-card-interactive`}
+                          className={`p-4 rounded-2xl ${theme.bg} border ${theme.border} space-y-2 relative group transition-all shadow-sm jami-card-interactive ${
+                            isSkipped ? 'opacity-75 saturate-50 border-dashed border-amber-600/60' : ''
+                          }`}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <span className="text-xs font-bold text-[#F3FAF5] block">{entry.title}</span>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`text-xs font-bold block ${isSkipped ? 'line-through text-[#A9B8AE]' : 'text-[#F3FAF5]'}`}>
+                                  {entry.title}
+                                </span>
+                                {isSkipped && (
+                                  <span className="text-[10px] font-black bg-amber-950/90 text-amber-300 border border-amber-600/60 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                    <CalendarOff className="w-2.5 h-2.5 text-amber-400" />
+                                    <span>Đã nghỉ tuần này</span>
+                                  </span>
+                                )}
+                              </div>
                               {entry.subjectName && (
                                 <span className={`text-[10px] font-bold ${theme.badge} px-2 py-0.5 rounded mt-1 inline-block border`}>
                                   {entry.subjectName}
@@ -1307,6 +1423,26 @@ export const TimetablePage: React.FC = () => {
                               )}
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
+                              {isSkipped ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUndoSkip(entry, selectedDayInfo.dateStr)}
+                                  className="px-2 py-1 text-[11px] font-bold text-amber-300 hover:text-white bg-amber-950/80 hover:bg-amber-900 border border-amber-700/60 rounded-lg flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
+                                  title="Hoàn tác trạng thái nghỉ tiết học này"
+                                >
+                                  <Undo2 className="w-3 h-3 text-amber-400" />
+                                  <span>Hoàn tác</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenSkipModal(entry, selectedDayInfo)}
+                                  className="p-1.5 text-amber-400 hover:text-amber-200 bg-amber-950/60 hover:bg-amber-900/80 rounded-lg border border-amber-800/60 cursor-pointer transition-colors"
+                                  title="Nghỉ tuần này"
+                                >
+                                  <CalendarOff className="w-3.5 h-3.5 text-amber-400" />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => openEditEntry(entry)}
@@ -1427,6 +1563,8 @@ export const TimetablePage: React.FC = () => {
                       <div className="space-y-2 flex-1">
                         {dayEntries.map((e, idx) => {
                           const theme = getSubjectColorTheme(e.title, e.subjectName);
+                          const isSkipped = isEntrySkipped(e.id, day.dateStr);
+
                           return (
                             <div
                               key={e.id}
@@ -1434,15 +1572,42 @@ export const TimetablePage: React.FC = () => {
                                 ev.stopPropagation();
                                 openEditEntry(e);
                               }}
-                              className={`p-2.5 rounded-xl ${theme.bg} border ${theme.border} text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm`}
-                              title="Bấm để chỉnh sửa tiết học này"
+                              className={`p-2.5 rounded-xl ${theme.bg} border ${theme.border} text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm ${
+                                isSkipped ? 'opacity-70 saturate-50 border-dashed border-amber-600/60' : ''
+                              }`}
+                              title={isSkipped ? 'Tiết này đã đánh dấu nghỉ trong tuần này' : 'Bấm để chỉnh sửa tiết học này'}
                             >
                               <div className="flex items-center justify-between gap-1">
-                                <div className="font-bold text-[#F3FAF5] truncate pr-1">
+                                <div className="font-bold truncate pr-1">
                                   <span className="text-[#86EFAC] mr-1 font-black">T{idx + 1}:</span>
-                                  {e.title}
+                                  <span className={isSkipped ? 'line-through text-[#A9B8AE]' : 'text-[#F3FAF5]'}>{e.title}</span>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
+                                  {isSkipped ? (
+                                    <button
+                                      type="button"
+                                      onClick={(ev) => {
+                                        ev.stopPropagation();
+                                        handleUndoSkip(e, day.dateStr);
+                                      }}
+                                      className="px-1.5 py-0.5 text-[9px] font-bold text-amber-300 hover:text-white bg-amber-950/80 hover:bg-amber-900 border border-amber-700/60 rounded-md transition-colors cursor-pointer"
+                                      title="Hoàn tác trạng thái nghỉ"
+                                    >
+                                      <Undo2 className="w-2.5 h-2.5" />
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={(ev) => {
+                                        ev.stopPropagation();
+                                        handleOpenSkipModal(e, day);
+                                      }}
+                                      className="p-1 text-amber-400 hover:text-amber-200 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-800/60 rounded-md transition-colors cursor-pointer"
+                                      title="Nghỉ tuần này"
+                                    >
+                                      <CalendarOff className="w-3 h-3 text-amber-400" />
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={(ev) => {
@@ -1467,6 +1632,12 @@ export const TimetablePage: React.FC = () => {
                                   </button>
                                 </div>
                               </div>
+                              {isSkipped && (
+                                <div className="text-[9px] font-black text-amber-400 flex items-center gap-1">
+                                  <CalendarOff className="w-2.5 h-2.5" />
+                                  <span>Đã nghỉ tuần này</span>
+                                </div>
+                              )}
                               <div className="text-[#A9B8AE] text-[10px] flex items-center gap-1">
                                 <Clock className="w-3 h-3 text-[#22C55E]" />
                                 <span>{e.startLocalTime} – {e.endLocalTime}</span>
@@ -2563,17 +2734,27 @@ export const TimetablePage: React.FC = () => {
 
                       {ocrPreviewUrl ? (
                         <div className="space-y-2.5 w-full flex flex-col items-center">
-                          <img
-                            src={ocrPreviewUrl}
-                            alt="Thời khóa biểu preview"
-                            className="max-h-48 rounded-xl object-contain border border-[rgba(34,197,94,0.25)] shadow-lg"
-                          />
+                          {ocrMimeType === 'application/pdf' || ocrFile?.name.toLowerCase().endsWith('.pdf') ? (
+                            <div className="w-full p-4 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] flex items-center justify-center gap-3 text-[#86EFAC]">
+                              <FileText className="w-8 h-8 text-[#22C55E]" />
+                              <div className="text-left">
+                                <div className="text-xs font-bold text-[#F3FAF5]">{ocrFile?.name || 'Tài liệu PDF'}</div>
+                                <div className="text-[11px] text-[#A9B8AE]">Định dạng tài liệu PDF sẵn sàng để phân tích</div>
+                              </div>
+                            </div>
+                          ) : (
+                            <img
+                              src={ocrPreviewUrl}
+                              alt="Thời khóa biểu preview"
+                              className="max-h-48 rounded-xl object-contain border border-[rgba(34,197,94,0.25)] shadow-lg"
+                            />
+                          )}
                           <div className="text-xs font-bold text-[#86EFAC] flex items-center gap-1.5">
                             <Check className="w-4 h-4 text-[#22C55E]" />
                             <span>Đã chọn: {ocrFile?.name} ({(ocrFile!.size / 1024).toFixed(1)} KB)</span>
                           </div>
                           <span className="text-[11px] text-[#A9B8AE] underline group-hover:text-white">
-                            Bấm để đổi ảnh khác
+                            Bấm để đổi tệp khác
                           </span>
                         </div>
                       ) : (
@@ -2583,10 +2764,10 @@ export const TimetablePage: React.FC = () => {
                           </div>
                           <div>
                             <div className="text-xs font-bold text-[#F3FAF5]">
-                              Kéo thả hoặc bấm để chọn ảnh Thời khóa biểu
+                              Kéo thả hoặc bấm để chọn ảnh hoặc PDF Thời khóa biểu
                             </div>
                             <div className="text-[11px] text-[#A9B8AE] mt-0.5">
-                              Hỗ trợ định dạng PNG, JPG, JPEG, WEBP hoặc PDF
+                              Hỗ trợ định dạng PNG, JPG, JPEG, WEBP hoặc PDF (tối đa 25MB)
                             </div>
                           </div>
                         </div>
@@ -2638,14 +2819,45 @@ export const TimetablePage: React.FC = () => {
                           return (
                             <div
                               key={m.id}
-                              onClick={() => {
+                              onClick={async () => {
                                 setSelectedMaterialId(m.id);
                                 setOcrTimetableName(m.title);
-                                // Set mock base64 or download url if available
-                                setOcrBase64('data:image/jpeg;base64,material_' + m.id);
-                                setOcrMimeType(m.mimeType || 'image/jpeg');
+                                setOcrBase64(null);
+                                const mime = m.mimeType || (m.type === 'notes' ? 'text/plain' : 'image/jpeg');
+                                setOcrMimeType(mime);
                                 setOcrFile(null);
-                                setOcrPreviewUrl(null);
+                                if (mime.startsWith('image/')) {
+                                  setOcrPreviewUrl((m as any).fileUrl || null);
+                                } else {
+                                  setOcrPreviewUrl(null);
+                                }
+
+                                try {
+                                  const dlRes = await fetch(`/api/v1/materials/${m.id}/download`, { credentials: 'include' });
+                                  if (dlRes.ok) {
+                                    const dlJson = await dlRes.json();
+                                    const fileUrl = dlJson.downloadUrl || `/api/v1/materials/${m.id}/content`;
+                                    const fileRes = await fetch(fileUrl, { credentials: 'include' });
+                                    if (fileRes.ok) {
+                                      const blob = await fileRes.blob();
+                                      const reader = new FileReader();
+                                      reader.onload = () => {
+                                        const b64 = reader.result as string;
+                                        setOcrBase64(b64);
+                                        if (mime.startsWith('image/')) {
+                                          setOcrPreviewUrl(b64);
+                                        }
+                                      };
+                                      reader.readAsDataURL(blob);
+                                    }
+                                  }
+                                } catch {
+                                  // Fallback with extractedText or note content
+                                  const extText = (m as any).extractedText;
+                                  if (extText) {
+                                    setOcrBase64(`data:text/plain;base64,${btoa(unescape(encodeURIComponent(extText)))}`);
+                                  }
+                                }
                               }}
                               className={`p-2.5 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-all ${
                                 isSelected
@@ -2655,7 +2867,11 @@ export const TimetablePage: React.FC = () => {
                             >
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <div className="p-1.5 rounded-lg bg-[#050806] text-[#22C55E] shrink-0">
-                                  <ImageIcon className="w-4 h-4" />
+                                  {m.mimeType?.startsWith('image/') ? (
+                                    <ImageIcon className="w-4 h-4" />
+                                  ) : (
+                                    <FileText className="w-4 h-4" />
+                                  )}
                                 </div>
                                 <div className="min-w-0">
                                   <div className="text-xs font-bold text-[#F3FAF5] truncate">{m.title}</div>
@@ -2969,6 +3185,80 @@ export const TimetablePage: React.FC = () => {
               >
                 <Check className="w-3.5 h-3.5" />
                 <span>Tiếp tục TKB cũ</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Xác nhận Nghỉ tuần này */}
+      {skipModal.isOpen && skipModal.entry && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.35)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-5 text-[#F3FAF5]">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-950/80 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
+                <CalendarOff className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-[#F3FAF5]">Xác nhận nghỉ tuần này</h3>
+                <p className="text-xs text-amber-300 font-bold">Chỉ hủy đúng buổi học của tuần hiện tại</p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.18)] space-y-2.5 text-xs">
+              <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                <span className="text-[#A9B8AE]">Môn / Tiết học:</span>
+                <span className="font-extrabold text-[#F3FAF5]">{skipModal.entry.title}</span>
+              </div>
+              <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                <span className="text-[#A9B8AE]">Thứ & Ngày:</span>
+                <span className="font-bold text-[#86EFAC]">
+                  {skipModal.dayLabel} ({skipModal.formattedDate})
+                </span>
+              </div>
+              <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                <span className="text-[#A9B8AE]">Giờ học:</span>
+                <span className="font-bold text-[#F3FAF5]">{skipModal.timeRange}</span>
+              </div>
+              {skipModal.entry.teacher && (
+                <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                  <span className="text-[#A9B8AE]">Giáo viên:</span>
+                  <span className="font-bold text-[#F3FAF5]">{skipModal.entry.teacher}</span>
+                </div>
+              )}
+              <div className="text-[11px] text-[#A9B8AE] leading-relaxed pt-1">
+                ℹ️ Tiết học này sẽ được đánh dấu nghỉ trong tuần này, không xuất hiện ở mục Học tập hôm nay, không tạo thông báo nhắc nhở và không tính vào kế hoạch của Jami. Tiết học lặp lại các tuần sau vẫn được giữ nguyên.
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-[#A9B8AE] block">Lý do nghỉ (Tùy chọn):</label>
+              <input
+                type="text"
+                placeholder="VD: Nghỉ lễ, giáo viên bận, nghỉ ốm..."
+                value={skipModal.reason}
+                onChange={(e) => setSkipModal((prev) => ({ ...prev, reason: e.target.value }))}
+                className="w-full bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-xl px-3 py-2 text-xs text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={skipModal.isSubmitting}
+                onClick={() => setSkipModal((prev) => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2.5 text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                disabled={skipModal.isSubmitting}
+                onClick={handleConfirmSkip}
+                className="flex items-center gap-1.5 px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-[#050806] text-xs font-black rounded-xl shadow-lg shadow-amber-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <CalendarOff className="w-3.5 h-3.5" />
+                <span>{skipModal.isSubmitting ? 'Đang cập nhật...' : 'Xác nhận nghỉ tuần này'}</span>
               </button>
             </div>
           </div>

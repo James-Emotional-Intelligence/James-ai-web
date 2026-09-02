@@ -98,7 +98,7 @@ export const NotificationsPage: React.FC = () => {
     } else if (activeTab === 'exam') {
       typeParam = 'upcoming_exam';
     } else if (activeTab === 'task') {
-      typeParam = 'incomplete_task';
+      typeParam = 'task';
     }
 
     fetchNotifications(true, typeParam, statusParam);

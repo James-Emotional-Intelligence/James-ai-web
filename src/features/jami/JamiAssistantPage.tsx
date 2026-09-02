@@ -70,15 +70,21 @@ export const JamiAssistantPage: React.FC = () => {
   const [editingConvId, setEditingConvId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const newestMessageRef = useRef<HTMLDivElement>(null);
+  const chatScrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, isSending]);
+    if (messages.length > 0) {
+      // Smoothly scroll the top of the newest message into view so the robot avatar and message header are never hidden
+      const timer = setTimeout(() => {
+        newestMessageRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [messages.length, isSending, activeConvId]);
 
   // 4.4 Voice Recognition Setup (Speech to Text & Wake Word "Jami ơi")
   const stopListening = useCallback(() => {
@@ -95,6 +101,13 @@ export const JamiAssistantPage: React.FC = () => {
     setIsListening(false);
     setVoiceStatusText(null);
   }, []);
+
+  // Cleanup local recognizer on unmount or navigation
+  useEffect(() => {
+    return () => {
+      stopListening();
+    };
+  }, [stopListening]);
 
   const speakText = useCallback(
     (text: string, msgId?: string) => {
@@ -118,6 +131,16 @@ export const JamiAssistantPage: React.FC = () => {
     : 'idle';
 
   const handleToggleListening = () => {
+    if (voice.isHandsFreeEnabled) {
+      // If global hands-free voice is already active, toggle its state to avoid dual microphone contention
+      if (voice.state === 'armed' || voice.state === 'listening_command') {
+        voice.disableHandsFree();
+      } else {
+        voice.enableHandsFree();
+      }
+      return;
+    }
+
     if (isListening) {
       stopListening();
       return;
@@ -160,18 +183,26 @@ export const JamiAssistantPage: React.FC = () => {
         if (clean) {
           setVoiceStatusText(`Jami nghe được: "${clean}"`);
 
+          const pureCommand = clean
+            .replace(/^(ơi\s+jami|jami\s+ơi|chào\s+jami|hey\s+jami|jami)[,.\s]*/i, '')
+            .trim();
+
           // Detect wake word
           if (clean.toLowerCase().includes('jami ơi') || clean.toLowerCase().includes('jami oi')) {
             speakText('Jami đang nghe đây!');
             setVoiceStatusText('Jami đang nghe đây! Hãy nói câu lệnh tiếp theo...');
           }
 
-          // If final result, send as chat command
+          // If final result, send as chat command only if there is a real command
           const isFinal = event.results[event.results.length - 1].isFinal;
-          if (isFinal && clean.length > 2) {
-            setInputMessage(clean);
-            stopListening();
-            handleSendMessage(clean);
+          if (isFinal) {
+            if (pureCommand.length > 2) {
+              setInputMessage(pureCommand);
+              stopListening();
+              handleSendMessage(pureCommand);
+            } else {
+              setVoiceStatusText('Jami đang lắng nghe bạn nói câu lệnh tiếp theo...');
+            }
           }
         }
       };
@@ -295,9 +326,17 @@ export const JamiAssistantPage: React.FC = () => {
     const rawText = (textToSend || inputMessage).trim();
     if (!rawText || isSending || !activeConvId) return;
 
-    const attachmentPrefix = attachedMaterial
-      ? `[Tài liệu đính kèm: "${attachedMaterial.title}"] `
-      : '';
+    let attachmentPrefix = '';
+    if (attachedMaterial) {
+      const mat = (attachedMaterial as any).material;
+      if (mat?.contentText) {
+        attachmentPrefix = `[Nội dung tài liệu đính kèm "${attachedMaterial.title}":\n"""\n${mat.contentText.slice(0, 3000)}\n"""\n]\n`;
+      } else if (mat?.summary) {
+        attachmentPrefix = `[Tóm tắt tài liệu đính kèm "${attachedMaterial.title}":\n"""\n${mat.summary}\n"""\n]\n`;
+      } else {
+        attachmentPrefix = `[Tài liệu đính kèm: "${attachedMaterial.title}"]\n`;
+      }
+    }
     const text = `${attachmentPrefix}${rawText}`;
 
     setInputMessage('');
@@ -319,7 +358,7 @@ export const JamiAssistantPage: React.FC = () => {
     setIsSending(true);
 
     try {
-      const res = await api.sendJamiChat(text, activeConvId, clientMessageId);
+      const res = await api.sendJamiChat(text, activeConvId, clientMessageId, currentAttachment?.id);
       // Replace optimistic message with real message and add Jami reply
       setMessages((prev) => {
         const filtered = prev.filter((m) => m.id !== clientMessageId);
@@ -539,7 +578,7 @@ export const JamiAssistantPage: React.FC = () => {
       {/* Main Chat Area */}
       <div className="flex-1 bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl flex flex-col justify-between overflow-hidden">
         {/* Messages Scroll Area */}
-        <div className="flex-1 overflow-y-auto space-y-4 pr-2">
+        <div ref={chatScrollContainerRef} className="flex-1 overflow-y-auto space-y-4 pr-2">
           {isLoading ? (
             <div className="h-full flex items-center justify-center text-xs text-[#A9B8AE] gap-2">
               <RefreshCw className="w-4 h-4 animate-spin text-[#22C55E]" />
@@ -594,13 +633,15 @@ export const JamiAssistantPage: React.FC = () => {
               </div>
             </div>
           ) : (
-            messages.map((m) => {
+            messages.map((m, index) => {
               const isUser = m.sender === 'user';
               const isSpeakingThis = voice.speakingMessageId === m.id && voice.isSpeaking;
+              const isLast = index === messages.length - 1;
 
               return (
                 <div
                   key={m.id}
+                  ref={isLast ? newestMessageRef : null}
                   className={`flex items-start gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
                 >
                   {!isUser && (
@@ -704,8 +745,6 @@ export const JamiAssistantPage: React.FC = () => {
               );
             })
           )}
-
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Live Voice Status Indicator (4.4) */}
@@ -832,7 +871,8 @@ export const JamiAssistantPage: React.FC = () => {
             fileName: res.fileName,
             source: res.source,
             savedToMaterials: res.savedToMaterials,
-          });
+            material: res.material,
+          } as any);
         }}
       />
     </div>

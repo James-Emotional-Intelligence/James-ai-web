@@ -159,7 +159,7 @@ export class UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, last_active_at, created_at
            FROM users
            WHERE LOWER(email) = ?`,
           [normalizedEmail]
@@ -189,6 +189,7 @@ export class UserRepository {
             ageBand: r.age_band,
             role: r.role || 'user',
             status: r.status || 'active',
+            lastActiveAt: r.last_active_at ? new Date(r.last_active_at).toISOString() : undefined,
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
           this.userCache.set(r.id, { user: userObj, cachedAt: Date.now() });
@@ -213,7 +214,7 @@ export class UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, last_active_at, created_at
            FROM users
            WHERE id = ?`,
           [id]
@@ -243,6 +244,7 @@ export class UserRepository {
             ageBand: r.age_band,
             role: r.role || 'user',
             status: r.status || 'active',
+            lastActiveAt: r.last_active_at ? new Date(r.last_active_at).toISOString() : undefined,
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
 
@@ -264,6 +266,27 @@ export class UserRepository {
     return undefined;
   }
 
+  public async touchLastActive(userId: string): Promise<void> {
+    if (!userId) return;
+    const nowIso = new Date().toISOString();
+    if (db.isHealthy()) {
+      try {
+        await db.execute('UPDATE users SET last_active_at = NOW(3) WHERE id = ?', [userId]);
+      } catch (err: any) {
+        console.warn(`[UserRepository] touchLastActive(${userId}) warning:`, err.message);
+      }
+    }
+    const cached = this.userCache.get(userId);
+    if (cached && cached.user) {
+      cached.user.lastActiveAt = nowIso;
+    }
+    for (const u of this.demoUsers.values()) {
+      if (u.id === userId) {
+        u.lastActiveAt = nowIso;
+      }
+    }
+  }
+
   public async getProfile(userId: string): Promise<StudentProfile | undefined> {
     if (!userId) return undefined;
 
@@ -283,11 +306,36 @@ export class UserRepository {
 
         if (rows.length > 0) {
           const p = rows[0];
+          let goals: string[] = [];
+          let weakSubjects: string[] | undefined = undefined;
+          let curriculum: string | undefined = undefined;
+          let learningStyle: string | undefined = undefined;
+
+          if (p.goals_json) {
+            try {
+              const parsedGoals = typeof p.goals_json === 'string' ? JSON.parse(p.goals_json) : p.goals_json;
+              if (Array.isArray(parsedGoals)) {
+                goals = parsedGoals;
+              } else if (parsedGoals && typeof parsedGoals === 'object') {
+                goals = parsedGoals.goals || [];
+                weakSubjects = parsedGoals.weakSubjects;
+                curriculum = parsedGoals.curriculum;
+                learningStyle = parsedGoals.learningStyle;
+              }
+            } catch {}
+          }
+
+          const user = await this.findById(userId);
+
           const prof: StudentProfile = {
             userId: p.user_id,
             gradeLevel: p.grade_level || 9,
             schoolName: p.school_name || 'THCS / THPT',
-            goals: typeof p.goals_json === 'string' ? JSON.parse(p.goals_json) : p.goals_json || [],
+            goals,
+            preferredName: user?.preferredName,
+            weakSubjects,
+            curriculum,
+            learningStyle,
             preferredSessionMinutes: p.preferred_session_minutes || 45,
             maxDailyStudyMinutes: p.max_daily_study_minutes || 180,
             energyPreferences: typeof p.energy_preferences_json === 'string' ? JSON.parse(p.energy_preferences_json) : p.energy_preferences_json || {},
@@ -326,6 +374,24 @@ export class UserRepository {
       ...updates,
     };
 
+    if (updates.preferredName) {
+      if (db.isHealthy()) {
+        try {
+          await db.execute('UPDATE users SET preferred_name = ? WHERE id = ?', [updates.preferredName, userId]);
+        } catch (err: any) {
+          console.warn(`[UserRepository] Could not update preferred_name for ${userId}:`, err.message);
+        }
+      }
+      const userCached = this.userCache.get(userId);
+      if (userCached && userCached.user) {
+        userCached.user.preferredName = updates.preferredName;
+      }
+      const demoUser = this.demoUsers.get(userId);
+      if (demoUser) {
+        demoUser.preferredName = updates.preferredName;
+      }
+    }
+
     if (db.isHealthy()) {
       await db.execute(
         `INSERT INTO student_profiles
@@ -345,13 +411,18 @@ export class UserRepository {
           userId,
           updated.gradeLevel,
           updated.schoolName,
-          JSON.stringify(updated.goals),
+          JSON.stringify({
+            goals: updated.goals || [],
+            weakSubjects: updated.weakSubjects,
+            curriculum: updated.curriculum,
+            learningStyle: updated.learningStyle,
+          }),
           updated.preferredSessionMinutes,
           updated.maxDailyStudyMinutes,
           JSON.stringify(updated.energyPreferences),
           JSON.stringify(updated.sleepSchedule),
           JSON.stringify(updated.mealTimes),
-          updated.onboardingCompletedAt ? new Date(updated.onboardingCompletedAt) : new Date(),
+          updated.onboardingCompletedAt ? new Date(updated.onboardingCompletedAt) : null,
         ]
       );
     } else {

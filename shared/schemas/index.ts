@@ -180,6 +180,23 @@ export const SchoolTimetableInputSchema = z.object({
   entries: z.array(TimetableEntryInputSchema).optional(),
 });
 
+export const TimetableExceptionCreateSchema = z.object({
+  occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Định dạng ngày phải là YYYY-MM-DD' }),
+  exceptionType: z.enum(['cancelled', 'rescheduled', 'skip']).default('cancelled'),
+  reason: z.string().max(255).optional().nullable(),
+});
+
+export const ClassSessionCheckinSubmitSchema = z.object({
+  timetableEntryId: z.string().min(1, { message: 'Mã tiết học không được để trống' }),
+  occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Định dạng ngày phải là YYYY-MM-DD' }),
+  learnedContent: z.string().max(3000).optional().nullable(),
+  homework: z.string().max(3000).optional().nullable(),
+  reflection: z.string().max(3000).optional().nullable(),
+  understandingLevel: z.enum(['very_easy', 'normal', 'hard', 'not_understood']).optional().nullable(),
+  attendanceStatus: z.enum(['attended', 'absent']).default('attended'),
+  createTaskForHomework: z.boolean().optional().default(false),
+});
+
 export const BusyEventInputSchema = z
   .object({
     title: z.string().trim().min(1, { message: 'Tiêu đề sự kiện/lịch bận không được để trống' }).max(150),
@@ -244,7 +261,22 @@ export const NotificationPreferencesUpdateSchema = z.object({
 
 export const NotificationFilterQuerySchema = z.object({
   status: z.enum(['all', 'unread', 'read', 'archived']).optional().default('all'),
-  type: z.enum(['all', 'upcoming_class', 'upcoming_exam', 'incomplete_task', 'task_due', 'task_overdue', 'focus_upcoming', 'system']).optional().default('all'),
+  type: z
+    .enum([
+      'all',
+      'task',
+      'class',
+      'exam',
+      'upcoming_class',
+      'upcoming_exam',
+      'incomplete_task',
+      'task_due',
+      'task_overdue',
+      'focus_upcoming',
+      'system',
+    ])
+    .optional()
+    .default('all'),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
 });
@@ -259,7 +291,11 @@ export const MaterialUploadIntentSchema = z.object({
     'image/jpeg',
     'image/jpg',
     'image/webp',
-  ], { message: 'Định dạng file không được hỗ trợ. Chỉ chấp nhận PDF, PNG, JPG/JPEG, WebP' }),
+    'text/plain',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/octet-stream',
+  ], { message: 'Định dạng file không được hỗ trợ. Chỉ chấp nhận PDF, PNG, JPG/JPEG, WebP, TXT, DOC/DOCX' }),
   sizeBytes: z.number().int().min(1).max(25 * 1024 * 1024, { message: 'Dung lượng file tối đa là 25MB' }),
 });
 
@@ -401,7 +437,7 @@ export const StepActionSchema = z.object({
 });
 
 export const TaskEvidenceSubmitSchema = z.object({
-  type: z.enum(['image', 'text', 'quiz_result', 'file']).default('text'),
+  type: z.enum(['image', 'text', 'quiz_result', 'file', 'link']).default('text'),
   rating: z.coerce.number().int().min(1).max(5).default(5),
   evidenceNote: z.string().min(1, { message: 'Ghi chú minh chứng không được để trống' }).max(2000),
   fileUrl: z.string().optional(),

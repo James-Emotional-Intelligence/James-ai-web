@@ -230,14 +230,36 @@ export const ExamsPage: React.FC = () => {
   const handleCreateQuizFromMaterial = async (res: SelectedFileResult) => {
     setIsGeneratingMaterialQuiz(true);
     try {
-      if (res.materialId) {
-        await api.generateQuizFromMaterial(res.materialId, {
+      let matId = res.materialId;
+
+      // If user uploaded a direct file without explicitly saving to library, upload it to generate quiz
+      if (!matId && res.file) {
+        const mimeType = res.file.type || 'application/octet-stream';
+        const subjId = subjects[0]?.id || 'subj-math';
+        const intent = await api.createMaterialUploadIntent({
+          title: res.fileName.replace(/\.[^/.]+$/, ''),
+          subjectId: subjId,
+          fileName: res.fileName,
+          mimeType,
+          sizeBytes: res.file.size,
+        });
+        await api.uploadMaterialDirect(intent.r2ObjectKey, res.file, mimeType);
+        const finalized = await api.finalizeMaterialUpload(intent.material.id, {
+          sizeBytes: res.file.size,
+        });
+        matId = finalized.material?.id || intent.material.id;
+      }
+
+      if (matId) {
+        await api.generateQuizFromMaterial(matId, {
           questionCount: 5,
           difficulty: 'medium',
           title: `Đề ôn tập: ${res.materialTitle || res.fileName}`,
         });
         confetti({ particleCount: 80, spread: 60 });
         await fetchData();
+      } else {
+        throw new Error('Không thể xử lý tệp để tạo câu hỏi ôn tập.');
       }
     } catch (err: any) {
       alert(err.message || 'Không thể tạo đề ôn tập từ tài liệu này.');

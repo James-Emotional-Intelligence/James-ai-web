@@ -36,6 +36,8 @@ import {
   ChecklistItemUpdateSchema,
   StepActionSchema,
   TaskEvidenceSubmitSchema,
+  TimetableExceptionCreateSchema,
+  ClassSessionCheckinSubmitSchema,
 } from '../../shared/schemas';
 import { env, isProduction, isProductionRuntime, isDatabaseRequired, isDemoMode } from '../config/env';
 import { createRateLimiter } from '../middleware/rate-limit';
@@ -49,6 +51,7 @@ import {
 
 import { subjectRepo } from '../repositories/subject-repository';
 import { timetableRepo } from '../repositories/timetable-repository';
+import { sessionCheckinRepo } from '../repositories/session-checkin-repository';
 import { taskRepo } from '../repositories/task-repository';
 import { focusRepo } from '../repositories/focus-repository';
 import { examRepo } from '../repositories/exam-repository';
@@ -96,6 +99,16 @@ function sendError(req: Request, res: Response, status: number, code: string, me
   });
 }
 
+const lastTouchMap = new Map<string, number>();
+function maybeTouchLastActive(userId: string) {
+  const now = Date.now();
+  const last = lastTouchMap.get(userId) || 0;
+  if (now - last > 60000) {
+    lastTouchMap.set(userId, now);
+    userRepo.touchLastActive(userId).catch(() => {});
+  }
+}
+
 // Auth Middleware
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
@@ -119,6 +132,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
     (req as any).user = user;
     (req as any).userId = user.id;
     (req as any).session = session;
+    maybeTouchLastActive(user.id);
     next();
   } catch (err: any) {
     console.error('[API requireAuth ERROR]:', err.message);
@@ -678,8 +692,11 @@ apiRouter.get('/dashboard/overview', requireAuth, asyncHandler(async (req: Reque
   const currentTimeStr = new Intl.DateTimeFormat('en-GB', { timeZone: userTimezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
 
   // 2. Timetable and busy events today
-  const timetableEntries = await timetableRepo.getTimetableEntries(userId);
-  const todayTimetable = timetableEntries.filter((e) => Number(e.dayOfWeek) === localDayOfWeek);
+  const activeTimetable = await timetableRepo.getActiveTimetable(userId);
+  const timetableEntries = activeTimetable?.id
+    ? await timetableRepo.getTimetableEntries(userId, activeTimetable.id, todayDateStr)
+    : await timetableRepo.getTimetableEntries(userId, undefined, todayDateStr);
+  const todayTimetable = timetableEntries.filter((e) => Number(e.dayOfWeek) === localDayOfWeek && !e.isSkippedThisWeek);
   
   const allBusyEvents = await timetableRepo.getBusyEvents(userId);
   const currentDayDate = new Date(`${todayDateStr}T00:00:00`);
@@ -960,13 +977,14 @@ apiRouter.get('/subjects', requireAuth, asyncHandler(async (req: Request, res: R
 
 apiRouter.get('/timetables', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const { from, to } = req.query as { from?: string; to?: string };
+  const { from, to, forDate } = req.query as { from?: string; to?: string; forDate?: string };
 
   const timetables = await timetableRepo.getTimetables(userId);
   const activeTimetable = timetables.find((t) => t.isActive) || timetables[0] || null;
-  const entries = await timetableRepo.getTimetableEntries(userId, activeTimetable?.id);
+  const entries = await timetableRepo.getTimetableEntries(userId, activeTimetable?.id, forDate);
   const busyEvents = await timetableRepo.getBusyEvents(userId, from, to);
   const availabilityRules = await timetableRepo.getAvailabilityRules(userId);
+  const exceptions = await timetableRepo.getExceptions(userId, from, to);
 
   res.json({
     timetables,
@@ -974,6 +992,7 @@ apiRouter.get('/timetables', requireAuth, asyncHandler(async (req: Request, res:
     entries,
     busyEvents,
     availabilityRules,
+    exceptions,
   });
 }));
 
@@ -1043,6 +1062,81 @@ apiRouter.delete('/timetables-all-entries', requireAuth, asyncHandler(async (req
   const timetableId = req.query.timetableId as string | undefined;
   const deletedCount = await timetableRepo.deleteAllEntries(userId, timetableId);
   res.json({ success: true, deletedCount });
+}));
+
+// Timetable Exceptions (Nghỉ tuần này)
+apiRouter.post('/timetables/entries/:id/exceptions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = TimetableExceptionCreateSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+  const { occurrenceDate, exceptionType, reason } = parseResult.data;
+  const exception = await timetableRepo.createException(userId, req.params.id, occurrenceDate, reason || undefined, exceptionType);
+  res.status(201).json({ success: true, exception });
+}));
+
+apiRouter.delete('/timetables/entries/:id/exceptions/:occurrenceDate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await timetableRepo.deleteException(userId, req.params.id, req.params.occurrenceDate);
+  res.json({ success });
+}));
+
+apiRouter.get('/timetables/exceptions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { from, to } = req.query as { from?: string; to?: string };
+  const exceptions = await timetableRepo.getExceptions(userId, from, to);
+  res.json({ exceptions });
+}));
+
+// Offline Missed Sessions & Check-ins
+apiRouter.get('/timetables/missed-sessions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const user = (req as any).user;
+  const missedSessions = await sessionCheckinRepo.getMissedSessions(userId, user?.timezone || 'Asia/Ho_Chi_Minh');
+  res.json({ missedSessions });
+}));
+
+apiRouter.post('/timetables/session-checkins', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = ClassSessionCheckinSubmitSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu check-in không hợp lệ');
+  }
+  const data = parseResult.data;
+  const checkin = await sessionCheckinRepo.createOrUpdateCheckin(userId, data);
+
+  let createdTask: any = null;
+  if (data.createTaskForHomework && data.homework && data.homework.trim() && data.attendanceStatus === 'attended') {
+    const entry = await timetableRepo.getEntryById(userId, data.timetableEntryId);
+    const title = `BTVN: ${entry?.subjectName ? `${entry.subjectName} - ` : ''}${data.homework.slice(0, 80)}`;
+    createdTask = await taskRepo.create(userId, {
+      title,
+      subjectId: entry?.subjectId,
+      subjectName: entry?.subjectName,
+      status: 'pending',
+      priority: 'high',
+      estimatedMinutes: 45,
+      dueAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      objective: `Bài tập về nhà buổi học ngày ${data.occurrenceDate}:\n${data.homework}`,
+    });
+  }
+
+  res.status(201).json({ success: true, checkin, createdTask });
+}));
+
+apiRouter.get('/timetables/session-checkins', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { from, to } = req.query as { from?: string; to?: string };
+  const checkins = await sessionCheckinRepo.getCheckins(userId, from, to);
+  res.json({ checkins });
+}));
+
+// User Heartbeat
+apiRouter.post('/users/heartbeat', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  await userRepo.touchLastActive(userId);
+  res.json({ success: true });
 }));
 
 // Timetable OCR Import from Image (Preview)
@@ -2374,7 +2468,10 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
   const user = (req as any).user;
   const profile = await userRepo.getProfile(userId);
   const studentName = user.preferredName || user.displayName || 'bạn';
-  const timetableEntries = await timetableRepo.getTimetableEntries(userId);
+  const activeTimetable = await timetableRepo.getActiveTimetable(userId);
+  const timetableEntries = activeTimetable?.id
+    ? await timetableRepo.getTimetableEntries(userId, activeTimetable.id)
+    : await timetableRepo.getTimetableEntries(userId);
   const tasks = await taskRepo.getByUserId(userId);
   const exams = await examRepo.getByUserId(userId);
   const materials = await materialRepo.getByUserId(userId);
@@ -2412,19 +2509,56 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
     });
 
   const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
-  const localDayOfWeek = (() => {
-    const dayStr = new Intl.DateTimeFormat('en-US', { timeZone: userTimezone, weekday: 'short' }).format(now);
-    const map: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
-    return map[dayStr] || 1;
+  const todayParts = (() => {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: userTimezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      weekday: 'short',
+    });
+    const parts = formatter.formatToParts(now);
+    const m: Record<string, string> = {};
+    for (const p of parts) m[p.type] = p.value;
+    const dateKey = `${m.year}-${m.month}-${m.day}`;
+    const weekdayMap: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+    return { dateKey, dayOfWeek: weekdayMap[m.weekday] || 1 };
   })();
 
+  const todayExceptions = await timetableRepo.getExceptions(userId, todayParts.dateKey, todayParts.dateKey);
+  const skippedEntryIds = new Set(todayExceptions.map((exc) => exc.timetableEntryId));
+
   const todaySessions = timetableEntries
-    .filter((e) => Number(e.dayOfWeek) === localDayOfWeek)
+    .filter((e) => Number(e.dayOfWeek) === todayParts.dayOfWeek && !skippedEntryIds.has(e.id))
     .map((e) => ({
       title: e.title,
       time: `${e.startLocalTime} - ${e.endLocalTime}`,
       subject: e.subjectName,
     }));
+
+  // Fetch recent class session check-ins for rich context
+  const recentCheckins = await sessionCheckinRepo.getCheckins(userId);
+  const recentCheckinSummary = recentCheckins.slice(-5).map((c) => ({
+    date: c.occurrenceDate,
+    learnedContent: c.learnedContent,
+    homework: c.homework,
+    reflection: c.reflection,
+    understandingLevel: c.understandingLevel,
+    attendanceStatus: c.attendanceStatus,
+  }));
+
+  let attachedMaterialInfo: { id: string; title: string; summary?: string; contentText?: string } | undefined = undefined;
+  if (req.body?.materialId) {
+    const mat = await materialRepo.getById(userId, req.body.materialId);
+    if (mat) {
+      attachedMaterialInfo = {
+        id: mat.id,
+        title: mat.title,
+        summary: mat.summary,
+        contentText: mat.contentText ? mat.contentText.slice(0, 4000) : undefined,
+      };
+    }
+  }
 
   const context = {
     userId,
@@ -2435,6 +2569,8 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
     pendingTasks,
     upcomingExams,
     latestMaterialTitle: materials[0]?.title,
+    attachedMaterial: attachedMaterialInfo,
+    recentCheckins: recentCheckinSummary,
   };
 
   // 3. Process chat message with real context

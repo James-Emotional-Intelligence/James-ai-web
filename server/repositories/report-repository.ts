@@ -20,6 +20,24 @@ export interface ReportQueryOptions {
   timezone?: string;
 }
 
+function getTimezoneOffsetString(date: Date, timezone: string): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'longOffset',
+    });
+    const parts = formatter.formatToParts(date);
+    const tzPart = parts.find((p) => p.type === 'timeZoneName')?.value;
+    if (tzPart && tzPart.startsWith('GMT')) {
+      const offset = tzPart.slice(3);
+      if (offset.length === 6) return offset;
+      if (offset.length === 3) return `${offset}:00`;
+      if (offset === '') return '+00:00';
+    }
+  } catch {}
+  return '+07:00';
+}
+
 export class ReportRepository {
   private static instance: ReportRepository;
 
@@ -48,10 +66,13 @@ export class ReportRepository {
   } {
     const now = new Date();
     const periodType = options.period || 'week';
+    const tzOffset = getTimezoneOffsetString(now, timezone);
 
     if (periodType === 'custom' && options.from && options.to) {
-      const startDate = new Date(options.from);
-      const endDate = new Date(options.to);
+      const fromStr = options.from.split('T')[0];
+      const toStr = options.to.split('T')[0];
+      const startDate = new Date(`${fromStr}T00:00:00.000${tzOffset}`);
+      const endDate = new Date(`${toStr}T23:59:59.999${tzOffset}`);
       const durationMs = Math.max(86400000, endDate.getTime() - startDate.getTime());
       const prevEndDate = new Date(startDate.getTime() - 1);
       const prevStartDate = new Date(prevEndDate.getTime() - durationMs);
@@ -68,52 +89,75 @@ export class ReportRepository {
       };
     }
 
-    if (periodType === 'month') {
-      const year = now.getFullYear();
-      const month = now.getMonth(); // 0-indexed
-      const startDate = new Date(Date.UTC(year, month, 1, 0, 0, 0));
-      const endDate = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999));
+    // Get current year, month, day in user's timezone
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(now);
+    const curYear = parseInt(parts.find((p) => p.type === 'year')?.value || '2026', 10);
+    const curMonth = parseInt(parts.find((p) => p.type === 'month')?.value || '1', 10);
+    const curDay = parseInt(parts.find((p) => p.type === 'day')?.value || '1', 10);
 
-      const prevStartDate = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
-      const prevEndDate = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+    if (periodType === 'month') {
+      const lastDayOfMonth = new Date(Date.UTC(curYear, curMonth, 0)).getUTCDate();
+      const mStr = String(curMonth).padStart(2, '0');
+      const startIso = `${curYear}-${mStr}-01T00:00:00.000${tzOffset}`;
+      const endIso = `${curYear}-${mStr}-${String(lastDayOfMonth).padStart(2, '0')}T23:59:59.999${tzOffset}`;
+
+      const startDate = new Date(startIso);
+      const endDate = new Date(endIso);
+
+      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+      const prevMonth = curMonth === 1 ? 12 : curMonth - 1;
+      const lastDayOfPrevMonth = new Date(Date.UTC(prevYear, prevMonth, 0)).getUTCDate();
+      const pmStr = String(prevMonth).padStart(2, '0');
+      const prevStartIso = `${prevYear}-${pmStr}-01T00:00:00.000${tzOffset}`;
+      const prevEndIso = `${prevYear}-${pmStr}-${String(lastDayOfPrevMonth).padStart(2, '0')}T23:59:59.999${tzOffset}`;
 
       return {
         periodType: 'month',
         startDate,
         endDate,
-        prevStartDate,
-        prevEndDate,
-        label: `Tháng ${month + 1}/${year}`,
+        prevStartDate: new Date(prevStartIso),
+        prevEndDate: new Date(prevEndIso),
+        label: `Tháng ${curMonth}/${curYear}`,
       };
     }
 
-    // Default: 'week' (Monday to Sunday in user's timezone)
-    const day = now.getDay();
-    const diffToMonday = (day === 0 ? -6 : 1) - day;
+    // Default: 'week' (Monday 00:00:00 to Sunday 23:59:59 in user timezone)
+    const localDateObj = new Date(`${curYear}-${String(curMonth).padStart(2, '0')}-${String(curDay).padStart(2, '0')}T12:00:00.000Z`);
+    const dayOfWeek = localDateObj.getUTCDay(); // 0 is Sun, 1 is Mon
+    const diffToMonday = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
 
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + diffToMonday);
-    monday.setHours(0, 0, 0, 0);
+    const mondayLocal = new Date(localDateObj.getTime() + diffToMonday * 86400000);
+    const mY = mondayLocal.getUTCFullYear();
+    const mM = String(mondayLocal.getUTCMonth() + 1).padStart(2, '0');
+    const mD = String(mondayLocal.getUTCDate()).padStart(2, '0');
 
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
+    const sundayLocal = new Date(mondayLocal.getTime() + 6 * 86400000);
+    const sY = sundayLocal.getUTCFullYear();
+    const sM = String(sundayLocal.getUTCMonth() + 1).padStart(2, '0');
+    const sD = String(sundayLocal.getUTCDate()).padStart(2, '0');
 
-    const prevMonday = new Date(monday);
-    prevMonday.setDate(monday.getDate() - 7);
-    const prevSunday = new Date(sunday);
-    prevSunday.setDate(sunday.getDate() - 7);
+    const startIso = `${mY}-${mM}-${mD}T00:00:00.000${tzOffset}`;
+    const endIso = `${sY}-${sM}-${sD}T23:59:59.999${tzOffset}`;
 
-    const d1 = monday.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', timeZone: timezone });
-    const d2 = sunday.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: timezone });
+    const startDate = new Date(startIso);
+    const endDate = new Date(endIso);
+
+    const prevStartDate = new Date(startDate.getTime() - 7 * 86400000);
+    const prevEndDate = new Date(endDate.getTime() - 7 * 86400000);
 
     return {
       periodType: 'week',
-      startDate: monday,
-      endDate: sunday,
-      prevStartDate: prevMonday,
-      prevEndDate: prevSunday,
-      label: `Tuần (${d1} - ${d2})`,
+      startDate,
+      endDate,
+      prevStartDate,
+      prevEndDate,
+      label: `Tuần (${mD}/${mM} - ${sD}/${sM})`,
     };
   }
 

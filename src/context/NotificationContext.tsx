@@ -92,6 +92,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const activeFilterRef = useRef<{ type?: string; status?: string }>({});
   const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const toastExitTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const prevUnreadCountRef = useRef<number>(-1);
 
   // Mount tracking
   useEffect(() => {
@@ -110,12 +111,19 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     try {
       const res = await api.getUnreadNotificationCount();
       if (isMountedRef.current) {
-        setUnreadCount(res.unreadCount);
+        const newCount = Number(res.unreadCount || 0);
+        if (prevUnreadCountRef.current !== -1 && newCount > prevUnreadCountRef.current) {
+          if (preferences?.soundEnabled !== false) {
+            playJamiNotificationSound();
+          }
+        }
+        prevUnreadCountRef.current = newCount;
+        setUnreadCount(newCount);
       }
     } catch {
       // Background count fetch failure handled silently
     }
-  }, []);
+  }, [preferences?.soundEnabled]);
 
   const fetchPreferences = useCallback(async () => {
     if (isMountedRef.current) setIsPreferencesLoading(true);

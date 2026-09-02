@@ -39,7 +39,11 @@ export class NotificationRepository {
     const unreadCount = await this.getUnreadCount(userId);
 
     if (db.isHealthy()) {
-      const conditions: string[] = ['user_id = ?', 'deleted_at IS NULL'];
+      const conditions: string[] = [
+        'user_id = ?',
+        'deleted_at IS NULL',
+        '(delivered_at IS NULL OR delivered_at <= NOW(3))',
+      ];
       const params: any[] = [userId];
 
       if (options.status && options.status !== 'all') {
@@ -48,8 +52,16 @@ export class NotificationRepository {
       }
 
       if (options.type && options.type !== 'all') {
-        conditions.push('type = ?');
-        params.push(options.type);
+        if ((options.type as string) === 'task' || options.type === 'incomplete_task') {
+          conditions.push('type IN ("incomplete_task", "task_due", "task_overdue")');
+        } else if ((options.type as string) === 'class') {
+          conditions.push('type = "upcoming_class"');
+        } else if ((options.type as string) === 'exam') {
+          conditions.push('type = "upcoming_exam"');
+        } else {
+          conditions.push('type = ?');
+          params.push(options.type);
+        }
       }
 
       if (options.cursor) {
@@ -110,13 +122,24 @@ export class NotificationRepository {
     }
 
     // In-memory demo fallback
-    let list = (this.demoNotifications.get(userId) || []).filter((n) => n.status !== 'archived');
+    const nowMs = Date.now();
+    let list = (this.demoNotifications.get(userId) || []).filter(
+      (n) => n.status !== 'archived' && (!n.deliveredAt || new Date(n.deliveredAt).getTime() <= nowMs)
+    );
 
     if (options.status && options.status !== 'all') {
       list = list.filter((n) => n.status === options.status);
     }
     if (options.type && options.type !== 'all') {
-      list = list.filter((n) => n.type === options.type);
+      if ((options.type as string) === 'task' || options.type === 'incomplete_task') {
+        list = list.filter((n) => ['incomplete_task', 'task_due', 'task_overdue'].includes(n.type));
+      } else if ((options.type as string) === 'class') {
+        list = list.filter((n) => n.type === 'upcoming_class');
+      } else if ((options.type as string) === 'exam') {
+        list = list.filter((n) => n.type === 'upcoming_exam');
+      } else {
+        list = list.filter((n) => n.type === options.type);
+      }
     }
     if (options.cursor) {
       const cursorTime = new Date(options.cursor).getTime();
@@ -142,14 +165,15 @@ export class NotificationRepository {
   public async getUnreadCount(userId: string): Promise<number> {
     if (db.isHealthy()) {
       const rows = await db.query<any>(
-        `SELECT COUNT(*) as unread_count FROM notifications WHERE user_id = ? AND status = 'unread' AND deleted_at IS NULL`,
+        `SELECT COUNT(*) as unread_count FROM notifications WHERE user_id = ? AND status = 'unread' AND deleted_at IS NULL AND (delivered_at IS NULL OR delivered_at <= NOW(3))`,
         [userId]
       );
       return Number(rows[0]?.unread_count || 0);
     }
 
+    const nowMs = Date.now();
     const list = this.demoNotifications.get(userId) || [];
-    return list.filter((n) => n.status === 'unread').length;
+    return list.filter((n) => n.status === 'unread' && (!n.deliveredAt || new Date(n.deliveredAt).getTime() <= nowMs)).length;
   }
 
   public async markAsRead(userId: string, id: string): Promise<boolean> {
@@ -174,7 +198,12 @@ export class NotificationRepository {
   public async markAllAsRead(userId: string): Promise<number> {
     if (db.isHealthy()) {
       const res = await db.execute(
-        `UPDATE notifications SET status = 'read', read_at = NOW(3) WHERE user_id = ? AND status = 'unread' AND deleted_at IS NULL`,
+        `UPDATE notifications
+         SET status = 'read', read_at = NOW(3)
+         WHERE user_id = ?
+           AND status = 'unread'
+           AND deleted_at IS NULL
+           AND (delivered_at IS NULL OR delivered_at <= NOW(3))`,
         [userId]
       );
       return Number(res?.affectedRows || 0);
@@ -182,8 +211,10 @@ export class NotificationRepository {
 
     const list = this.demoNotifications.get(userId) || [];
     let count = 0;
+    const nowMs = Date.now();
     for (const n of list) {
-      if (n.status === 'unread') {
+      const isDelivered = !n.deliveredAt || new Date(n.deliveredAt).getTime() <= nowMs;
+      if (n.status === 'unread' && isDelivered) {
         n.status = 'read';
         n.readAt = new Date().toISOString();
         count++;
@@ -221,7 +252,7 @@ export class NotificationRepository {
       leadMinutes: 15,
       classLeadMinutes: 15,
       taskLeadMinutes: 30,
-      examLeadDays: 1,
+      examLeadDays: 14,
       quietHoursStart: '22:30',
       quietHoursEnd: '06:30',
       timezone: 'Asia/Ho_Chi_Minh',

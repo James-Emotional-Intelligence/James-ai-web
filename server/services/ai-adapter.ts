@@ -800,7 +800,47 @@ Trả về đúng định dạng JSON chuẩn:
   ]
 }`;
 
-        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+        const cleanBase64 = imageBase64.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
+
+        let userContent: any;
+        if (mimeType.startsWith('image/')) {
+          userContent = [
+            { type: 'text', text: 'Hãy nhận dạng toàn bộ thời khóa biểu từ hình ảnh sau:' },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:${mimeType};base64,${cleanBase64}`,
+                detail: 'high',
+              },
+            },
+          ];
+        } else {
+          let extractedDocText = '';
+          try {
+            const buf = Buffer.from(cleanBase64, 'base64');
+            if (buf.subarray(0, 5).toString('ascii') === '%PDF-') {
+              // PDF text stream parser: extract text within text blocks
+              const rawStr = buf.toString('latin1');
+              const textMatches: string[] = [];
+              const tjRegex = /\(([^)]+)\)\s*(?:Tj|'|"|TJ)/g;
+              let match;
+              while ((match = tjRegex.exec(rawStr)) !== null) {
+                if (match[1] && match[1].trim().length > 0) {
+                  textMatches.push(match[1].trim());
+                }
+              }
+              extractedDocText = textMatches.join(' ');
+              if (!extractedDocText.trim()) {
+                extractedDocText = rawStr.replace(/[^\x20-\x7E\r\n\t]/g, ' ').replace(/\s+/g, ' ');
+              }
+            } else {
+              extractedDocText = buf.toString('utf-8');
+            }
+          } catch {
+            extractedDocText = cleanBase64;
+          }
+          userContent = `Hãy trích xuất thời khóa biểu học tập từ nội dung tài liệu sau:\n\n${extractedDocText.slice(0, 8000)}`;
+        }
 
         const completion = await client.chat.completions.create({
           model: this.getTextModel(),
@@ -808,16 +848,7 @@ Trả về đúng định dạng JSON chuẩn:
             { role: 'system', content: systemPrompt },
             {
               role: 'user',
-              content: [
-                { type: 'text', text: 'Hãy nhận dạng toàn bộ thời khóa biểu từ hình ảnh sau:' },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: `data:${mimeType};base64,${cleanBase64}`,
-                    detail: 'high',
-                  },
-                },
-              ],
+              content: userContent,
             },
           ],
           response_format: { type: 'json_object' },
@@ -840,8 +871,9 @@ Trả về đúng định dạng JSON chuẩn:
             entries,
           };
         }
-      } catch (err) {
-        console.warn('[AI Adapter] Timetable OCR extraction error, using high-quality fallback', err);
+      } catch (err: any) {
+        console.warn('[AI Adapter] Timetable OCR extraction error:', err.message);
+        throw new Error(`Nhận dạng OCR thất bại: ${err.message || 'Không thể đọc nội dung ảnh'}`, { cause: err });
       }
     }
 

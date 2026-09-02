@@ -53,6 +53,61 @@ export function sanitizeActionUrl(url?: string): string | undefined {
 }
 
 /**
+ * Converts a local time HH:mm on today's local date in user timezone into exact UTC Date
+ */
+export function parseLocalTimeToUTC(
+  now: Date,
+  timeStr: string,
+  timezone = 'Asia/Ho_Chi_Minh'
+): Date {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const dateStr = formatter.format(now); // YYYY-MM-DD
+    const [startH, startM] = timeStr.split(':').map(Number);
+    const targetIso = `${dateStr}T${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}:00`;
+
+    if (timezone === 'Asia/Ho_Chi_Minh' || timezone === 'Asia/Saigon' || timezone === 'Asia/Bangkok') {
+      return new Date(`${targetIso}+07:00`);
+    }
+
+    const tempUtc = new Date(`${targetIso}Z`);
+    const localParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour12: false,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    }).formatToParts(tempUtc);
+
+    const getPart = (type: string) => parseInt(localParts.find((p) => p.type === type)?.value || '0', 10);
+    const localAsUtc = Date.UTC(
+      getPart('year'),
+      getPart('month') - 1,
+      getPart('day'),
+      getPart('hour'),
+      getPart('minute'),
+      getPart('second')
+    );
+    const offsetMs = localAsUtc - tempUtc.getTime();
+
+    return new Date(tempUtc.getTime() - offsetMs);
+  } catch {
+    const [startH, startM] = timeStr.split(':').map(Number);
+    const fallback = new Date(now.getTime());
+    fallback.setHours(startH, startM, 0, 0);
+    return fallback;
+  }
+}
+
+/**
  * Checks if a given timestamp falls within user quiet hours in their timezone
  * Handles overnight ranges spanning midnight (e.g. 22:30 -> 06:30)
  */
@@ -102,29 +157,73 @@ export function getDeferredDeliveryTime(
   timezone = 'Asia/Ho_Chi_Minh'
 ): Date {
   try {
-    const [endH, endM] = quietEnd.split(':').map(Number);
-    const deferred = new Date(now.getTime());
-
-    // Approximate next quietEnd time
-    const formatter = new Intl.DateTimeFormat('en-US', {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
       timeZone: timezone,
       year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
       hour: 'numeric',
       minute: 'numeric',
       hour12: false,
     });
 
     const parts = formatter.formatToParts(now);
+    const year = parts.find((p) => p.type === 'year')?.value || '2026';
+    const month = parts.find((p) => p.type === 'month')?.value || '01';
+    const day = parts.find((p) => p.type === 'day')?.value || '01';
     const currentH = parseInt(parts.find((p) => p.type === 'hour')?.value || '0', 10);
+    const currentM = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
 
-    if (currentH >= 22) {
-      // Next day morning
-      deferred.setDate(deferred.getDate() + 1);
+    const [endH, endM] = quietEnd.split(':').map(Number);
+    const currentMinutes = currentH * 60 + currentM;
+    const endMinutes = endH * 60 + endM;
+
+    let targetDateStr = `${year}-${month}-${day}`;
+
+    // If current local time is past or equal to quietEnd, advance to next calendar day in user timezone
+    if (currentMinutes >= endMinutes) {
+      const nextDay = new Date(now.getTime() + 24 * 3600 * 1000);
+      const nextParts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(nextDay);
+      const nYear = nextParts.find((p) => p.type === 'year')?.value || year;
+      const nMonth = nextParts.find((p) => p.type === 'month')?.value || month;
+      const nDay = nextParts.find((p) => p.type === 'day')?.value || day;
+      targetDateStr = `${nYear}-${nMonth}-${nDay}`;
     }
-    deferred.setHours(endH, endM, 0, 0);
-    return deferred;
+
+    const targetIso = `${targetDateStr}T${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}:00`;
+    if (timezone === 'Asia/Ho_Chi_Minh' || timezone === 'Asia/Saigon' || timezone === 'Asia/Bangkok') {
+      return new Date(`${targetIso}+07:00`);
+    }
+
+    const tempUtc = new Date(`${targetIso}Z`);
+    const localParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour12: false,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    }).formatToParts(tempUtc);
+
+    const getPart = (type: string) => parseInt(localParts.find((p) => p.type === type)?.value || '0', 10);
+    const localAsUtc = Date.UTC(
+      getPart('year'),
+      getPart('month') - 1,
+      getPart('day'),
+      getPart('hour'),
+      getPart('minute'),
+      getPart('second')
+    );
+    const offsetMs = localAsUtc - tempUtc.getTime();
+
+    return new Date(tempUtc.getTime() - offsetMs);
   } catch {
     return now;
   }
@@ -165,13 +264,13 @@ export class NotificationSchedulerService {
     const notificationsToCreate: Omit<Notification, 'id' | 'status'>[] = [];
     let scannedCount = 0;
 
-    // 1. Scan School Timetable Entries (Classes)
+    // 1. Scan School Timetable Entries (Classes) with exact timezone handling
     if (prefs.upcomingClass) {
       try {
         const entries = await timetableRepo.getTimetableEntries(userId);
 
         if (entries && entries.length > 0) {
-          // Get today's Day of Week (1=Monday ... 7=Sunday)
+          // Get today's Day of Week in user timezone (1=Monday ... 7=Sunday)
           const localDayFormatter = new Intl.DateTimeFormat('en-US', {
             timeZone: timezone,
             weekday: 'short',
@@ -188,14 +287,21 @@ export class NotificationSchedulerService {
           };
           const todayDOW = dayMap[weekdayStr] || (now.getDay() === 0 ? 7 : now.getDay());
 
-          const dateStr = now.toISOString().split('T')[0];
+          const localDateFormatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          });
+          const dateStr = localDateFormatter.format(now);
+
+          const exceptions = await timetableRepo.getExceptions(userId, dateStr, dateStr);
+          const skippedEntryIds = new Set(exceptions.map((exc) => exc.timetableEntryId));
 
           for (const entry of entries) {
-            if (entry.dayOfWeek === todayDOW && entry.startLocalTime) {
+            if (entry.dayOfWeek === todayDOW && entry.startLocalTime && !skippedEntryIds.has(entry.id)) {
               scannedCount++;
-              const [startH, startM] = entry.startLocalTime.split(':').map(Number);
-              const classStartTime = new Date(now.getTime());
-              classStartTime.setHours(startH, startM, 0, 0);
+              const classStartTime = parseLocalTimeToUTC(now, entry.startLocalTime, timezone);
 
               const leadMs = (prefs.classLeadMinutes || prefs.leadMinutes || 15) * 60 * 1000;
               const timeUntilClass = classStartTime.getTime() - now.getTime();
@@ -300,9 +406,15 @@ export class NotificationSchedulerService {
           const diffDays = Math.ceil((examDate.getTime() - now.getTime()) / (24 * 3600 * 1000));
           const examDateKey = exam.examAt.split('T')[0];
 
-          // Check Milestone intervals: D-14, D-7, D-3, D-1
-          const milestones = [14, 7, 3, 1];
-          if (milestones.includes(diffDays)) {
+          // Check Milestone intervals: only alert on milestones <= prefs.examLeadDays
+          const maxLeadDays = typeof prefs.examLeadDays === 'number' && prefs.examLeadDays > 0 ? prefs.examLeadDays : 14;
+          const validMilestones = [14, 7, 3, 1].filter((m) => m <= maxLeadDays);
+          if (maxLeadDays > 1 && !validMilestones.includes(maxLeadDays)) {
+            validMilestones.push(maxLeadDays);
+          }
+          validMilestones.sort((a, b) => b - a);
+
+          if (validMilestones.includes(diffDays)) {
             const dedupeKey = `exam_${exam.id}_D-${diffDays}_${examDateKey}`;
             const milestoneLabels: Record<number, string> = {
               14: 'Mốc D-14: Bắt đầu ôn tập nền tảng lý thuyết',

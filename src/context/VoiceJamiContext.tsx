@@ -76,6 +76,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const remoteAudioElementRef = useRef<HTMLAudioElement | null>(null);
   const sessionTimerRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
+  const restartTimerRef = useRef<any>(null);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const isHandsFreeRef = useRef<boolean>(false);
   const lastWakeTimeRef = useRef<number>(0);
   const isMountedRef = useRef<boolean>(true);
   const isSpeakingRef = useRef<boolean>(false);
@@ -91,49 +94,71 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return;
       }
 
+      // Cancel any ongoing speech
       window.speechSynthesis.cancel();
-      isSpeakingRef.current = true;
-      setIsSpeaking(true);
-      if (options?.msgId) setSpeakingMessageId(options.msgId);
-      setCurrentUtteranceText(text);
 
-      // Temporarily pause wake recognition while speaking to prevent self-hearing
-      if (speechRecognitionRef.current) {
-        try {
-          speechRecognitionRef.current.stop();
-        } catch {}
+      // Clean markdown, symbols, and code blocks for crisp speech
+      const cleanText = text
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/[*_#~>[\]]/g, '')
+        .replace(/https?:\/\/\S+/g, '')
+        .trim();
+
+      if (!cleanText) {
+        options?.onEnd?.();
+        return;
       }
 
-      const cleanText = text.replace(/[*_#`[\]()]/g, '');
       const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.lang = 'vi-VN';
       utterance.rate = options?.rate || 1.05;
       utterance.pitch = 1.0;
 
-      // Pick Vietnamese voice if available
       const voices = window.speechSynthesis.getVoices();
-      const viVoice = voices.find((v) => v.lang.includes('vi') || v.name.includes('Vietnamese'));
-      if (viVoice) utterance.voice = viVoice;
+      const viVoice = voices.find((v) => v.lang.startsWith('vi') || v.name.includes('Vietnamese'));
+      if (viVoice) {
+        utterance.voice = viVoice;
+      }
 
       utterance.onstart = () => {
-        isSpeakingRef.current = true;
-        setIsSpeaking(true);
-        if (options?.msgId) setSpeakingMessageId(options.msgId);
+        if (isMountedRef.current) {
+          isSpeakingRef.current = true;
+          setIsSpeaking(true);
+          setSpeakingMessageId(options?.msgId || null);
+          setCurrentUtteranceText(cleanText);
+        }
       };
 
       utterance.onend = () => {
-        isSpeakingRef.current = false;
-        setIsSpeaking(false);
-        setSpeakingMessageId(null);
+        if (isMountedRef.current) {
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          setSpeakingMessageId(null);
+          setCurrentUtteranceText('');
+        }
         options?.onEnd?.();
       };
 
       utterance.onerror = () => {
-        isSpeakingRef.current = false;
-        setIsSpeaking(false);
-        setSpeakingMessageId(null);
+        if (isMountedRef.current) {
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          setSpeakingMessageId(null);
+          setCurrentUtteranceText('');
+        }
         options?.onEnd?.();
       };
+
+      // Workaround for Chrome SpeechSynthesis pause bug
+      const resumeInterval = setInterval(() => {
+        if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+          window.speechSynthesis.pause();
+          window.speechSynthesis.resume();
+        } else {
+          clearInterval(resumeInterval);
+        }
+      }, 5000);
 
       window.speechSynthesis.speak(utterance);
     },
@@ -147,6 +172,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     isSpeakingRef.current = false;
     setIsSpeaking(false);
     setSpeakingMessageId(null);
+    setCurrentUtteranceText('');
   }, []);
 
   const speakText = useCallback(
@@ -157,7 +183,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   );
 
   /**
-   * Stop and cleanup all hardware tracks and connections
+   * Release hardware resources cleanly
    */
   const cleanupHardware = useCallback(() => {
     if (speechRecognitionRef.current) {
@@ -171,12 +197,18 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       speechRecognitionRef.current = null;
     }
 
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+      activeAbortControllerRef.current = null;
+    }
+
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch {}
-      });
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
     }
 
@@ -214,6 +246,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
    */
   const disableHandsFree = useCallback(() => {
     cleanupHardware();
+    isHandsFreeRef.current = false;
     setIsHandsFreeEnabled(false);
     setState('disabled');
     setPendingProposal(null);
@@ -231,14 +264,30 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return;
       }
 
+      // Strip wake-word prefixes if user said "Jami ơi mở bài học"
+      let cleanCmd = commandText
+        .replace(/^(ơi\s+jami|jami\s+ơi|chào\s+jami|hey\s+jami|jami|em\s+ơi\s+jami)[,.\s]*/i, '')
+        .trim();
+      if (!cleanCmd) cleanCmd = commandText.trim();
+
       setState('thinking');
-      setLastTranscript(commandText);
+      setLastTranscript(cleanCmd);
+
+      // Abort previous command in flight
+      if (activeAbortControllerRef.current) {
+        activeAbortControllerRef.current.abort();
+      }
+      const abortController = new AbortController();
+      activeAbortControllerRef.current = abortController;
 
       try {
         const turnId = 'turn_' + Date.now();
         currentTurnIdRef.current = turnId;
 
-        const res = await api.sendVoiceCommand(commandText, turnId, privacyMode);
+        const res = await api.sendVoiceCommand(cleanCmd, turnId, privacyMode, undefined, abortController.signal);
+
+        // If aborted while waiting for server
+        if (abortController.signal.aborted) return;
 
         setLastReply(res.replyText);
 
@@ -265,7 +314,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         // Normal response speech
         setState('speaking');
         speakText(res.replyText, () => {
-          if (isHandsFreeEnabled) {
+          if (isHandsFreeRef.current && !document.hidden) {
             setState('armed');
             startWakeWordRecognizer();
           } else {
@@ -273,16 +322,28 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           }
         });
       } catch (err: any) {
+        if (err.name === 'AbortError' || abortController.signal.aborted) {
+          // User aborted/cancelled turn, return silently
+          if (isHandsFreeRef.current && !document.hidden) {
+            setState('armed');
+            startWakeWordRecognizer();
+          } else {
+            setState('disabled');
+          }
+          return;
+        }
         console.error('[VoiceJami] Error executing command:', err);
         setErrorMessage(err.message || 'Không thể xử lý câu lệnh.');
         setState('error');
         speakText('Jami gặp trục trặc khi kết nối, bạn thử lại nhé.', () => {
-          setState('armed');
-          startWakeWordRecognizer();
+          if (isHandsFreeRef.current && !document.hidden) {
+            setState('armed');
+            startWakeWordRecognizer();
+          }
         });
       }
     },
-    [privacyMode, isHandsFreeEnabled, navigate, speakText]
+    [privacyMode, navigate, speakText]
   );
 
   /**
@@ -371,7 +432,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
    * Continuous Wake Word Recognizer ("Jami ơi")
    */
   const startWakeWordRecognizer = useCallback(() => {
-    if (!isHandsFreeEnabled || isSpeakingRef.current) return;
+    if (!isHandsFreeRef.current || isSpeakingRef.current) return;
 
     const SpeechRecognitionClass =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -438,9 +499,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setErrorMessage('Quyền micro bị từ chối.');
           disableHandsFree();
         } else if (event.error !== 'no-speech') {
-          // Restart with slight backoff
-          setTimeout(() => {
-            if (isHandsFreeEnabled && !isSpeakingRef.current && state === 'armed') {
+          if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+          restartTimerRef.current = setTimeout(() => {
+            if (isHandsFreeRef.current && !isSpeakingRef.current && !document.hidden) {
               startWakeWordRecognizer();
             }
           }, 1000);
@@ -448,13 +509,16 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       };
 
       recognizer.onend = () => {
-        // Continuous auto-restart when armed and not speaking
-        if (isHandsFreeEnabled && !isSpeakingRef.current && (state === 'armed' || state === 'disabled')) {
-          setTimeout(() => {
-            if (isHandsFreeEnabled && !isSpeakingRef.current) {
+        // Continuous auto-restart when hands-free is enabled, not speaking, and tab is visible
+        if (isHandsFreeRef.current && !isSpeakingRef.current && !document.hidden) {
+          if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+          restartTimerRef.current = setTimeout(() => {
+            if (isHandsFreeRef.current && !isSpeakingRef.current && !document.hidden) {
               try {
                 recognizer.start();
-              } catch {}
+              } catch {
+                startWakeWordRecognizer();
+              }
             }
           }, 300);
         }
@@ -466,7 +530,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } catch (err: any) {
       console.warn('[VoiceJami] Could not start wake recognizer:', err);
     }
-  }, [isHandsFreeEnabled, speakText, executeCommand, startCommandListening, disableHandsFree, state]);
+  }, [speakText, executeCommand, startCommandListening, disableHandsFree]);
 
   /**
    * User Gesture: Enable Hands-Free mode & acquire microphone permission
@@ -479,6 +543,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       // 1. Explicit user gesture requesting microphone stream
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
+      isHandsFreeRef.current = true;
       setIsMicActive(true);
       setIsHandsFreeEnabled(true);
 
@@ -500,13 +565,16 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setState('speaking');
 
       speakText(greeting, () => {
-        setState('armed');
-        startWakeWordRecognizer();
+        if (isHandsFreeRef.current) {
+          setState('armed');
+          startWakeWordRecognizer();
+        }
       });
     } catch (err: any) {
       console.error('[VoiceJami] Permission denied or media error:', err);
       setErrorMessage('Không thể truy cập micro. Vui lòng cấp quyền micro để sử dụng Jami rảnh tay.');
       setState('error');
+      isHandsFreeRef.current = false;
       setIsHandsFreeEnabled(false);
       setIsMicActive(false);
     }
@@ -531,7 +599,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
         setState('speaking');
         speakText(res.message, () => {
-          if (isHandsFreeEnabled) {
+          if (isHandsFreeRef.current) {
             setState('armed');
             startWakeWordRecognizer();
           } else {
@@ -543,13 +611,25 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setState('error');
       }
     },
-    [pendingProposal, isHandsFreeEnabled, navigate, speakText, startWakeWordRecognizer]
+    [pendingProposal, navigate, speakText, startWakeWordRecognizer]
   );
 
   /**
    * Cancel current turn and return to armed state
    */
   const cancelCurrentTurn = useCallback(() => {
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+      activeAbortControllerRef.current = null;
+    }
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     if (speechRecognitionRef.current) {
       try {
         speechRecognitionRef.current.abort();
@@ -559,13 +639,13 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       window.speechSynthesis.cancel();
     }
     setPendingProposal(null);
-    if (isHandsFreeEnabled) {
+    if (isHandsFreeRef.current) {
       setState('armed');
       startWakeWordRecognizer();
     } else {
       setState('disabled');
     }
-  }, [isHandsFreeEnabled, startWakeWordRecognizer]);
+  }, [startWakeWordRecognizer]);
 
   /**
    * Send a manual text command through the voice agent pipeline
@@ -613,6 +693,10 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
+        // Suspend microphone tracks and speech recognition when tab is hidden
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = false));
+        }
         if (state === 'armed' || state === 'listening_command') {
           if (speechRecognitionRef.current) {
             try {
@@ -628,7 +712,11 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           }
         }
       } else {
-        if (state === 'suspended' && isHandsFreeEnabled) {
+        // Resume microphone tracks and re-arm when tab is visible again
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = true));
+        }
+        if (state === 'suspended' && isHandsFreeRef.current) {
           if (isMountedRef.current) {
             setState('armed');
             startWakeWordRecognizer();
@@ -639,7 +727,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [state, isHandsFreeEnabled, startWakeWordRecognizer]);
+  }, [state, startWakeWordRecognizer]);
 
   return (
     <VoiceJamiContext.Provider
