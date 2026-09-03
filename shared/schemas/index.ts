@@ -188,13 +188,18 @@ export const TimetableExceptionCreateSchema = z.object({
 
 export const ClassSessionCheckinSubmitSchema = z.object({
   timetableEntryId: z.string().min(1, { message: 'Mã tiết học không được để trống' }),
+  timetableEntryIds: z.array(z.string()).optional(),
   occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Định dạng ngày phải là YYYY-MM-DD' }),
   learnedContent: z.string().max(3000).optional().nullable(),
   homework: z.string().max(3000).optional().nullable(),
+  hasNoHomework: z.boolean().optional().default(false),
   reflection: z.string().max(3000).optional().nullable(),
   understandingLevel: z.enum(['very_easy', 'normal', 'hard', 'not_understood']).optional().nullable(),
   attendanceStatus: z.enum(['attended', 'absent']).default('attended'),
   createTaskForHomework: z.boolean().optional().default(false),
+  dueAt: z.string().optional().nullable(),
+  estimatedMinutes: z.coerce.number().int().min(5).max(360).optional().nullable(),
+  taskId: z.string().optional().nullable(),
 });
 
 export const BusyEventInputSchema = z
@@ -471,6 +476,141 @@ export const ExecutionGuideOutputSchema = z.object({
   fallbackAction: z.string().default('Nếu gặp khó khăn quá 5 phút, hãy tạm thời bỏ qua hoặc hỏi trợ lý Jami AI.'),
   completionQuestions: z.array(z.string()).default([]),
   nextAction: z.string().default('Chuyển sang làm bài tập vận dụng nâng cao.'),
+});
+
+export const TomorrowPlanGenerateRequestSchema = z.object({
+  energyLevel: z.enum(['high', 'normal', 'low', 'due_only', 'skip']).default('normal'),
+  customAvailableMinutes: z.coerce.number().int().min(10).max(300).optional(),
+});
+
+export const TomorrowPlanEnergyUpdateRequestSchema = z.object({
+  energyLevel: z.enum(['high', 'normal', 'low', 'due_only', 'skip']),
+});
+
+export const TomorrowPlanItemUpdateRequestSchema = z.object({
+  title: z.string().trim().min(1).max(255).optional(),
+  description: z.string().optional().nullable(),
+  reason: z.string().optional().nullable(),
+  plannedMinutes: z.coerce.number().int().min(5).max(180).optional(),
+  startAt: z.string().regex(TimeStringRegex).optional(),
+  endAt: z.string().regex(TimeStringRegex).optional(),
+  status: z.enum(['pending', 'in_progress', 'completed', 'skipped']).optional(),
+});
+
+export const TomorrowPlanAiSuggestionItemSchema = z.object({
+  subjectId: z.string().optional().nullable(),
+  title: z.string().min(1),
+  description: z.string().optional().nullable(),
+  reason: z.string().optional().nullable(),
+  plannedMinutes: z.coerce.number().int().min(5).max(60).default(15),
+  priority: z.enum(['high', 'medium', 'low']).default('medium'),
+  sourceType: z.enum([
+    'due_task',
+    'exam_review',
+    'class_checkin_reflection',
+    'class_checkin_homework',
+    'tomorrow_subject_preview',
+    'pack_bag',
+    'general_review',
+  ]).default('general_review'),
+  sourceId: z.string().optional().nullable(),
+});
+
+export const TomorrowPlanAiSuggestionsResponseSchema = z.object({
+  suggestions: z.array(TomorrowPlanAiSuggestionItemSchema),
+});
+
+// ==========================================
+// Exam Study Plan Schemas
+// ==========================================
+
+export const ExamStudyPlanGenerateSchema = z.object({
+  startDate: z.string().optional(),
+  dailyMinutes: z.coerce.number().int().min(15).max(180).default(45),
+  blackoutDates: z.array(z.string()).default([]),
+});
+
+export const ExamStudyPlanItemUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(255).optional(),
+  description: z.string().optional().nullable(),
+  plannedDate: z.string().optional(),
+  startAt: z.string().regex(TimeStringRegex).optional(),
+  endAt: z.string().regex(TimeStringRegex).optional(),
+  plannedMinutes: z.coerce.number().int().min(10).max(180).optional(),
+  status: z.enum(['pending', 'in_progress', 'completed', 'missed', 'skipped']).optional(),
+});
+
+export const ExamStudyPlanReplanConfirmSchema = z.object({
+  action: z.enum(['accept', 'custom_slot', 'skip_session', 'keep_as_is']),
+  customSlot: z
+    .object({
+      plannedDate: z.string(),
+      startAt: z.string().regex(TimeStringRegex),
+      endAt: z.string().regex(TimeStringRegex),
+    })
+    .optional(),
+});
+
+// ==========================================
+// Mistake Notebook Schemas
+// ==========================================
+
+export const MistakeReasonEnum = z.enum([
+  'knowledge_gap',
+  'misread_question',
+  'calculation_error',
+  'wrong_choice',
+  'time_pressure',
+  'not_learned_yet',
+  'other',
+]);
+
+export const MistakeStatusEnum = z.enum(['new', 'reviewing', 'needs_retry', 'mastered']);
+export const MistakeDifficultyEnum = z.enum(['easy', 'medium', 'hard']);
+export const MistakeSourceTypeEnum = z.enum(['quiz', 'exam_mock', 'manual', 'class_exercise']);
+
+export const MistakeCreateSchema = z.object({
+  subjectId: z.string().optional().nullable(),
+  topic: z.string().trim().min(1, { message: 'Chủ đề / Chương không được để trống' }).max(150),
+  questionText: z.string().trim().min(1, { message: 'Nội dung câu hỏi không được để trống' }),
+  questionDataJson: z.string().optional().nullable(),
+  selectedAnswer: z.string().optional().nullable(),
+  correctAnswer: z.string().trim().min(1, { message: 'Đáp án đúng không được để trống' }),
+  mistakeReason: MistakeReasonEnum.default('other'),
+  correctExplanation: z.string().optional().nullable(),
+  difficulty: MistakeDifficultyEnum.default('medium'),
+  sourceType: MistakeSourceTypeEnum.default('manual'),
+  sourceId: z.string().optional().nullable(),
+});
+
+export const MistakeUpdateSchema = z.object({
+  subjectId: z.string().optional().nullable(),
+  topic: z.string().trim().min(1).max(150).optional(),
+  questionText: z.string().trim().min(1).optional(),
+  selectedAnswer: z.string().optional().nullable(),
+  correctAnswer: z.string().trim().min(1).optional(),
+  mistakeReason: MistakeReasonEnum.optional(),
+  correctExplanation: z.string().optional().nullable(),
+  difficulty: MistakeDifficultyEnum.optional(),
+  status: MistakeStatusEnum.optional(),
+});
+
+export const MistakeReviewSubmitSchema = z.object({
+  answer: z.string().trim().min(1, { message: 'Vui lòng nhập hoặc chọn câu trả lời' }),
+});
+
+export const MistakeSimilarQuestionSchema = z.object({
+  questionText: z.string().min(1),
+  options: z.array(z.string()).optional(),
+  correctAnswer: z.string().min(1),
+  explanation: z.string().min(1),
+  difficulty: MistakeDifficultyEnum.default('medium'),
+});
+
+export const BusyEventExceptionCreateSchema = z.object({
+  occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Ngày ngoại lệ không đúng định dạng YYYY-MM-DD' }),
+  reason: z.string().trim().max(255).optional(),
+  exceptionType: z.enum(['cancelled', 'skip']).default('cancelled'),
 });
 
 

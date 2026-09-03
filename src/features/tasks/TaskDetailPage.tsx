@@ -511,7 +511,11 @@ export const TaskDetailPage: React.FC = () => {
           )}
 
           <button
-            onClick={() => navigate(`/focus?taskId=${task.id}&minutes=${task.estimatedMinutes}`)}
+            onClick={() =>
+              navigate(
+                `/focus?duration=${task.estimatedMinutes || 25}&taskId=${task.id}&title=${encodeURIComponent(task.title)}&subjectId=${task.subjectId || ''}&subject=${encodeURIComponent(task.subjectName || '')}&returnTo=${encodeURIComponent(`/tasks/${task.id}`)}`
+              )
+            }
             className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-[#101A13] hover:bg-[#142219] text-[#F3FAF5] border border-[rgba(34,197,94,0.2)] font-bold text-xs transition-colors cursor-pointer"
           >
             <Clock className="w-4 h-4 text-[#86EFAC]" />

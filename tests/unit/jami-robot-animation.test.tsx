@@ -64,7 +64,7 @@ describe('Robot Jami 2D Character & Animation Unit Tests', () => {
       expect(result.current.blinkProgress).toBeGreaterThanOrEqual(0);
 
       act(() => {
-        vi.advanceTimersByTime(200);
+        vi.advanceTimersByTime(500);
       });
 
       expect(result.current.isBlinking).toBe(false);

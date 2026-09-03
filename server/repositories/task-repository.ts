@@ -267,6 +267,10 @@ export class TaskRepository {
     return false;
   }
 
+  public async delete(userId: string, taskId: string): Promise<boolean> {
+    return this.deleteTask(userId, taskId);
+  }
+
   public async completeTask(userId: string, taskId: string): Promise<StudyTask | null> {
     return this.update(userId, taskId, { status: 'completed', completionPercent: 100 });
   }

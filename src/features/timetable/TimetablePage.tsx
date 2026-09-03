@@ -35,6 +35,7 @@ import { api, ApiError } from '../../lib/api-client';
 import {
   TimetableEntry,
   BusyEvent,
+  BusyEventException,
   StudyTask,
   ScheduleProposal,
   Subject,
@@ -42,6 +43,7 @@ import {
   LearningMaterial,
   TimetableEntryException,
 } from '../../../shared/types';
+import { doesEventOccurOnLocalDate } from '../../../shared/utils/recurrence-utils';
 import { formatTimeVN, formatDateVN, formatDateShortVN, formatDateFullVN, formatBytes } from '../../lib/utils';
 import confetti from 'canvas-confetti';
 
@@ -217,7 +219,7 @@ export const TimetablePage: React.FC = () => {
   const [eventSubjectId, setEventSubjectId] = useState('');
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
 
-  // Timetable Entry Exceptions (Nghỉ tuần này)
+  // Timetable Entry Exceptions (Nghỉ tuần này - Bảng 1)
   const [exceptions, setExceptions] = useState<TimetableEntryException[]>([]);
   const [skipModal, setSkipModal] = useState<{
     isOpen: boolean;
@@ -231,6 +233,28 @@ export const TimetablePage: React.FC = () => {
   }>({
     isOpen: false,
     entry: null,
+    dayLabel: '',
+    dateStr: '',
+    formattedDate: '',
+    timeRange: '',
+    reason: '',
+    isSubmitting: false,
+  });
+
+  // Busy Event Exceptions (Nghỉ tạm lần này - Bảng 2)
+  const [busyExceptions, setBusyExceptions] = useState<BusyEventException[]>([]);
+  const [skipBusyModal, setSkipBusyModal] = useState<{
+    isOpen: boolean;
+    event: BusyEvent | null;
+    dayLabel: string;
+    dateStr: string;
+    formattedDate: string;
+    timeRange: string;
+    reason: string;
+    isSubmitting: boolean;
+  }>({
+    isOpen: false,
+    event: null,
     dayLabel: '',
     dateStr: '',
     formattedDate: '',
@@ -406,6 +430,7 @@ export const TimetablePage: React.FC = () => {
       setTimetableEntries(ttData.entries || []);
       setBusyEvents(ttData.busyEvents || []);
       setExceptions(ttData.exceptions || []);
+      setBusyExceptions(ttData.busyExceptions || []);
       setTasks(taskData.tasks || []);
       setSubjects(subData.subjects || []);
       setMaterials(matData.materials || []);
@@ -632,6 +657,68 @@ export const TimetablePage: React.FC = () => {
       await fetchData();
     } catch (err: any) {
       alert(err.message || 'Không thể hoàn tác trạng thái nghỉ học');
+    }
+  };
+
+  // Busy Event Skip This Week (Nghỉ tạm lần này - Thời gian biểu)
+  const isBusyEventSkipped = (busyEventId: string, dateStr: string) => {
+    return busyExceptions.some((exc) => exc.busyEventId === busyEventId && exc.occurrenceDate === dateStr);
+  };
+
+  const handleOpenSkipBusyModal = (
+    event: BusyEvent,
+    dayInfo: { label: string; dateStr: string; date: Date }
+  ) => {
+    const formatted = formatDateVN(dayInfo.date);
+    const timeRange = event.startsAt && event.endsAt
+      ? `${formatTimeVN(new Date(event.startsAt))} – ${formatTimeVN(new Date(event.endsAt))}`
+      : 'Cả ngày';
+
+    setSkipBusyModal({
+      isOpen: true,
+      event,
+      dayLabel: dayInfo.label,
+      dateStr: dayInfo.dateStr,
+      formattedDate: formatted,
+      timeRange,
+      reason: '',
+      isSubmitting: false,
+    });
+  };
+
+  const handleConfirmSkipBusy = async () => {
+    if (!skipBusyModal.event || !skipBusyModal.dateStr) return;
+    setSkipBusyModal((prev) => ({ ...prev, isSubmitting: true }));
+    try {
+      const res = await api.skipBusyEventThisWeek(
+        skipBusyModal.event.id,
+        skipBusyModal.dateStr,
+        skipBusyModal.reason.trim() || undefined
+      );
+      setBusyExceptions((prev) => {
+        const filtered = prev.filter(
+          (e) => !(e.busyEventId === skipBusyModal.event!.id && e.occurrenceDate === skipBusyModal.dateStr)
+        );
+        return [...filtered, res.exception];
+      });
+      setSkipBusyModal((prev) => ({ ...prev, isOpen: false }));
+      await fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Không thể đánh dấu nghỉ sự kiện này');
+    } finally {
+      setSkipBusyModal((prev) => ({ ...prev, isSubmitting: false }));
+    }
+  };
+
+  const handleUndoSkipBusy = async (event: BusyEvent, dateStr: string) => {
+    try {
+      await api.undoSkipBusyEvent(event.id, dateStr);
+      setBusyExceptions((prev) =>
+        prev.filter((e) => !(e.busyEventId === event.id && e.occurrenceDate === dateStr))
+      );
+      await fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Không thể hoàn tác trạng thái nghỉ sự kiện');
     }
   };
 
@@ -979,52 +1066,13 @@ export const TimetablePage: React.FC = () => {
 
   // Filter items for a specific day with rich recurrence engine
   const getItemsForDay = (dayOfWeek: number, dateStr: string) => {
-    const currentDayDate = new Date(dateStr + 'T00:00:00');
     const dayEntries = timetableEntries.filter((e) => e.dayOfWeek === dayOfWeek);
-
-    const dayEvents = busyEvents.filter((b) => {
-      if (b.recurrenceRule) {
-        const rule = b.recurrenceRule;
-        const start = new Date(b.startsAt);
-
-        // Check UNTIL date if present
-        const untilMatch = rule.match(/UNTIL=(\d{4})(\d{2})(\d{2})/);
-        if (untilMatch) {
-          const untilDate = new Date(Number(untilMatch[1]), Number(untilMatch[2]) - 1, Number(untilMatch[3]), 23, 59, 59);
-          if (currentDayDate > untilDate) return false;
-        }
-
-        // Check not before start date
-        const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-        if (currentDayDate < startDay) return false;
-
-        if (rule.includes('FREQ=DAILY')) return true;
-
-        if (rule.includes('FREQ=WEEKLY')) {
-          if (rule.includes('INTERVAL=2')) {
-            const diffMs = currentDayDate.getTime() - startDay.getTime();
-            const diffWeeks = Math.floor(diffMs / (7 * 86400000));
-            if (diffWeeks % 2 !== 0) return false;
-          }
-
-          const jsDayMap: Record<number, string> = { 1: 'MO', 2: 'TU', 3: 'WE', 4: 'TH', 5: 'FR', 6: 'SA', 7: 'SU' };
-          const target = jsDayMap[dayOfWeek];
-          const byDayMatch = rule.match(/BYDAY=([A-Z,]+)/);
-          if (byDayMatch) {
-            const days = byDayMatch[1].split(',');
-            return days.includes(target);
-          }
-          return false;
-        }
-
-        if (rule.includes('FREQ=MONTHLY')) {
-          return currentDayDate.getDate() === start.getDate();
-        }
-      }
-      return b.startsAt.startsWith(dateStr);
+    const dayEvents = busyEvents.filter((b) => doesEventOccurOnLocalDate(b, dateStr, 'Asia/Ho_Chi_Minh'));
+    const dayTasks = tasks.filter((t) => {
+      if (!t.scheduledStartAt) return false;
+      const taskDate = formatDateVN(new Date(t.scheduledStartAt));
+      return taskDate === dateStr;
     });
-
-    const dayTasks = tasks.filter((t) => t.scheduledStartAt && t.scheduledStartAt.startsWith(dateStr));
 
     return { dayEntries, dayEvents, dayTasks };
   };
@@ -1950,65 +1998,103 @@ export const TimetablePage: React.FC = () => {
 
                         {dayEvents.length > 0 ? (
                           <div className="space-y-2.5">
-                            {dayEvents.map((evt) => (
-                              <div key={evt.id} className="p-3.5 rounded-2xl bg-[#101A13] border border-amber-900/30 hover:border-amber-700/50 space-y-1.5 relative group shadow-sm">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-xs font-bold text-[#F3FAF5]">{evt.title}</span>
-                                    {evt.isFixed && (
-                                      <span className="text-[9px] font-black bg-amber-950/80 text-amber-300 border border-amber-700/50 px-1.5 py-0.5 rounded flex items-center gap-0.5" title="Sự kiện cố định không dời lịch">
-                                        <Lock className="w-2.5 h-2.5" />
-                                        <span>Cố định</span>
+                            {dayEvents.map((evt) => {
+                              const isSkipped = isBusyEventSkipped(evt.id, selectedDayInfo.dateStr);
+                              return (
+                                <div
+                                  key={evt.id}
+                                  className={`p-3.5 rounded-2xl bg-[#101A13] border space-y-1.5 relative group shadow-sm transition-all ${
+                                    isSkipped
+                                      ? 'opacity-70 saturate-50 border-dashed border-amber-600/60'
+                                      : 'border-amber-900/30 hover:border-amber-700/50'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className={`text-xs font-bold ${isSkipped ? 'line-through text-[#A9B8AE]' : 'text-[#F3FAF5]'}`}>
+                                        {evt.title}
                                       </span>
-                                    )}
-                                    {evt.type === 'club' && (
-                                      <span className="text-[9px] font-black bg-indigo-950/80 text-indigo-300 border border-indigo-700/50 px-1.5 py-0.5 rounded">
-                                        CLB
-                                      </span>
-                                    )}
+                                      {isSkipped && (
+                                        <span className="text-[10px] font-black bg-amber-950/90 text-amber-300 border border-amber-600/60 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                          <CalendarOff className="w-2.5 h-2.5 text-amber-400" />
+                                          <span>Đã nghỉ lần này</span>
+                                        </span>
+                                      )}
+                                      {evt.isFixed && !isSkipped && (
+                                        <span className="text-[9px] font-black bg-amber-950/80 text-amber-300 border border-amber-700/50 px-1.5 py-0.5 rounded flex items-center gap-0.5" title="Sự kiện cố định không dời lịch">
+                                          <Lock className="w-2.5 h-2.5" />
+                                          <span>Cố định</span>
+                                        </span>
+                                      )}
+                                      {evt.type === 'club' && !isSkipped && (
+                                        <span className="text-[9px] font-black bg-indigo-950/80 text-indigo-300 border border-indigo-700/50 px-1.5 py-0.5 rounded">
+                                          CLB
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {isSkipped ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUndoSkipBusy(evt, selectedDayInfo.dateStr)}
+                                          className="px-2 py-1 text-[11px] font-bold text-amber-300 hover:text-white bg-amber-950/80 hover:bg-amber-900 border border-amber-700/60 rounded-lg flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
+                                          title="Hoàn tác trạng thái nghỉ sự kiện này"
+                                        >
+                                          <Undo2 className="w-3 h-3 text-amber-400" />
+                                          <span>Hoàn tác</span>
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenSkipBusyModal(evt, selectedDayInfo)}
+                                          className="p-1.5 text-amber-400 hover:text-amber-200 bg-amber-950/60 hover:bg-amber-900/80 rounded-lg border border-amber-800/60 cursor-pointer transition-colors"
+                                          title="Nghỉ tạm lần này / Nghỉ tuần này"
+                                        >
+                                          <CalendarOff className="w-3.5 h-3.5 text-amber-400" />
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditEvent(evt)}
+                                        className="p-1.5 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-lg border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                                        title="Sửa lịch bận"
+                                      >
+                                        <Edit2 className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteBusyEvent(evt.id, evt.title)}
+                                        className="p-1.5 text-[#A9B8AE] hover:text-rose-400 bg-[#050806] rounded-lg border border-[rgba(34,197,94,0.15)] cursor-pointer"
+                                        title="Xóa vĩnh viễn lịch bận này"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </button>
+                                    </div>
                                   </div>
-                                  <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                      type="button"
-                                      onClick={() => openEditEvent(evt)}
-                                      className="p-1 text-[#A9B8AE] hover:text-[#86EFAC] bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
-                                      title="Sửa lịch bận"
-                                    >
-                                      <Edit2 className="w-3 h-3" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteBusyEvent(evt.id, evt.title)}
-                                      className="p-1 text-[#A9B8AE] hover:text-rose-400 bg-[#050806] rounded-md border border-[rgba(34,197,94,0.15)] cursor-pointer"
-                                      title="Xóa lịch bận này"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </button>
+                                  <div className="flex items-center gap-1.5 text-xs text-[#A9B8AE]">
+                                    <Clock className="w-3 h-3 text-[#22C55E]" />
+                                    <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
                                   </div>
+                                  {evt.location && (
+                                    <div className="text-[11px] text-[#86EFAC] flex items-center gap-1">
+                                      <MapPin className="w-3 h-3 text-[#22C55E]" />
+                                      <span>{evt.location}</span>
+                                    </div>
+                                  )}
+                                  {(evt.commuteBeforeMinutes || evt.commuteAfterMinutes) ? (
+                                    <div className="text-[10px] text-[#A9B8AE] flex items-center gap-1">
+                                      <Car className="w-3 h-3 text-amber-400" />
+                                      <span>Di chuyển: Trước {evt.commuteBeforeMinutes || 0}p • Sau {evt.commuteAfterMinutes || 0}p</span>
+                                    </div>
+                                  ) : null}
+                                  {evt.recurrenceRule && (
+                                    <div className="text-[10px] text-amber-400/90 font-semibold">
+                                      • Lặp lại: {evt.recurrenceRule.includes('WEEKLY') ? 'Hàng tuần' : evt.recurrenceRule.includes('DAILY') ? 'Hàng ngày' : 'Định kỳ'}
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="flex items-center gap-1.5 text-xs text-[#A9B8AE]">
-                                  <Clock className="w-3 h-3 text-[#22C55E]" />
-                                  <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
-                                </div>
-                                {evt.location && (
-                                  <div className="text-[11px] text-[#86EFAC] flex items-center gap-1">
-                                    <MapPin className="w-3 h-3 text-[#22C55E]" />
-                                    <span>{evt.location}</span>
-                                  </div>
-                                )}
-                                {(evt.commuteBeforeMinutes || evt.commuteAfterMinutes) ? (
-                                  <div className="text-[10px] text-[#A9B8AE] flex items-center gap-1">
-                                    <Car className="w-3 h-3 text-amber-400" />
-                                    <span>Di chuyển: Trước {evt.commuteBeforeMinutes || 0}p • Sau {evt.commuteAfterMinutes || 0}p</span>
-                                  </div>
-                                ) : null}
-                                {evt.recurrenceRule && (
-                                  <div className="text-[10px] text-amber-400/90 font-semibold">
-                                    • Lặp lại: {evt.recurrenceRule.includes('WEEKLY') ? 'Hàng tuần' : evt.recurrenceRule.includes('DAILY') ? 'Hàng ngày' : 'Định kỳ'}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         ) : (
                           <div className="p-8 text-center text-xs text-[#A9B8AE] border border-dashed border-[rgba(34,197,94,0.15)] rounded-2xl">
@@ -2116,64 +2202,102 @@ export const TimetablePage: React.FC = () => {
                     {/* Day Content */}
                     <div className="space-y-2 flex-1">
                       {/* Busy Events */}
-                      {dayEvents.map((evt) => (
-                        <div
-                          key={evt.id}
-                          onClick={(ev) => {
-                            ev.stopPropagation();
-                            openEditEvent(evt);
-                          }}
-                          className="p-2.5 rounded-xl bg-amber-950/30 hover:bg-amber-950/50 border border-amber-800/40 hover:border-amber-700/60 text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm"
-                          title="Bấm để chỉnh sửa lịch bận này"
-                        >
-                          <div className="flex items-center justify-between gap-1">
-                            <div className="font-bold text-amber-200 truncate pr-1 flex items-center gap-1">
-                              <span>{evt.title}</span>
-                              {evt.isFixed && <Lock className="w-2.5 h-2.5 text-amber-400 shrink-0" />}
+                      {dayEvents.map((evt) => {
+                        const isSkipped = isBusyEventSkipped(evt.id, day.dateStr);
+                        return (
+                          <div
+                            key={evt.id}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              openEditEvent(evt);
+                            }}
+                            className={`p-2.5 rounded-xl border text-[11px] space-y-1 relative group cursor-pointer transition-all shadow-sm ${
+                              isSkipped
+                                ? 'opacity-70 saturate-50 border-dashed border-amber-600/60 bg-amber-950/20'
+                                : 'bg-amber-950/30 hover:bg-amber-950/50 border-amber-800/40 hover:border-amber-700/60'
+                            }`}
+                            title={isSkipped ? 'Sự kiện này đã đánh dấu nghỉ lần này' : 'Bấm để chỉnh sửa lịch bận này'}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="font-bold text-amber-200 truncate pr-1 flex items-center gap-1">
+                                <span className={isSkipped ? 'line-through text-[#A9B8AE]' : ''}>{evt.title}</span>
+                                {evt.isFixed && !isSkipped && <Lock className="w-2.5 h-2.5 text-amber-400 shrink-0" />}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {isSkipped ? (
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      handleUndoSkipBusy(evt, day.dateStr);
+                                    }}
+                                    className="px-1.5 py-0.5 text-[9px] font-bold text-amber-300 hover:text-white bg-amber-950/80 hover:bg-amber-900 border border-amber-700/60 rounded-md transition-colors cursor-pointer"
+                                    title="Hoàn tác trạng thái nghỉ"
+                                  >
+                                    <Undo2 className="w-2.5 h-2.5" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      handleOpenSkipBusyModal(evt, day);
+                                    }}
+                                    className="p-1 text-amber-400 hover:text-amber-200 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-800/60 rounded-md transition-colors cursor-pointer"
+                                    title="Nghỉ tạm lần này"
+                                  >
+                                    <CalendarOff className="w-3 h-3 text-amber-400" />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    openEditEvent(evt);
+                                  }}
+                                  className="p-1 text-amber-400 hover:text-amber-200 bg-[#050806] rounded-md border border-amber-900/40 transition-colors cursor-pointer"
+                                  title="Chỉnh sửa lịch bận"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    handleDeleteBusyEvent(evt.id, evt.title);
+                                  }}
+                                  className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
+                                  title="Xóa vĩnh viễn lịch bận này"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={(ev) => {
-                                  ev.stopPropagation();
-                                  openEditEvent(evt);
-                                }}
-                                className="p-1 text-amber-400 hover:text-amber-200 bg-[#050806] rounded-md border border-amber-900/40 transition-colors cursor-pointer"
-                                title="Chỉnh sửa lịch bận"
-                              >
-                                <Edit2 className="w-3 h-3" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(ev) => {
-                                  ev.stopPropagation();
-                                  handleDeleteBusyEvent(evt.id, evt.title);
-                                }}
-                                className="p-1 text-rose-400 hover:text-rose-200 bg-rose-950/70 hover:bg-rose-900 border border-rose-800/60 rounded-md transition-colors cursor-pointer"
-                                title="Xóa lịch bận này"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                            {isSkipped && (
+                              <div className="text-[9px] font-black text-amber-400 flex items-center gap-1">
+                                <CalendarOff className="w-2.5 h-2.5" />
+                                <span>Đã nghỉ lần này</span>
+                              </div>
+                            )}
+                            <div className="text-amber-400/80 text-[10px] flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-amber-400" />
+                              <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
                             </div>
+                            {evt.location && (
+                              <div className="text-[10px] text-[#86EFAC] truncate flex items-center gap-1">
+                                <MapPin className="w-2.5 h-2.5 text-[#22C55E]" />
+                                <span>{evt.location}</span>
+                              </div>
+                            )}
+                            {(evt.commuteBeforeMinutes || evt.commuteAfterMinutes) ? (
+                              <div className="text-[9px] text-[#A9B8AE] flex items-center gap-1">
+                                <Car className="w-2.5 h-2.5 text-amber-400" />
+                                <span>{evt.commuteBeforeMinutes || 0}p trước • {evt.commuteAfterMinutes || 0}p sau</span>
+                              </div>
+                            ) : null}
                           </div>
-                          <div className="text-amber-400/80 text-[10px] flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-amber-400" />
-                            <span>{formatTimeVN(evt.startsAt)} – {formatTimeVN(evt.endsAt)}</span>
-                          </div>
-                          {evt.location && (
-                            <div className="text-[10px] text-[#86EFAC] truncate flex items-center gap-1">
-                              <MapPin className="w-2.5 h-2.5 text-[#22C55E]" />
-                              <span>{evt.location}</span>
-                            </div>
-                          )}
-                          {(evt.commuteBeforeMinutes || evt.commuteAfterMinutes) ? (
-                            <div className="text-[9px] text-[#A9B8AE] flex items-center gap-1">
-                              <Car className="w-2.5 h-2.5 text-amber-400" />
-                              <span>{evt.commuteBeforeMinutes || 0}p trước • {evt.commuteAfterMinutes || 0}p sau</span>
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
+                        );
+                      })}
 
                       {/* Tasks */}
                       {dayTasks.map((t) => (
@@ -3191,9 +3315,9 @@ export const TimetablePage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Xác nhận Nghỉ tuần này */}
+      {/* Modal: Xác nhận Nghỉ tuần này (Bảng 1) */}
       {skipModal.isOpen && skipModal.entry && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Xác nhận nghỉ tuần này">
           <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.35)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-5 text-[#F3FAF5]">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-amber-950/80 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
@@ -3259,6 +3383,80 @@ export const TimetablePage: React.FC = () => {
               >
                 <CalendarOff className="w-3.5 h-3.5" />
                 <span>{skipModal.isSubmitting ? 'Đang cập nhật...' : 'Xác nhận nghỉ tuần này'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Xác nhận Nghỉ tạm lần này (Bảng 2 - Thời gian biểu) */}
+      {skipBusyModal.isOpen && skipBusyModal.event && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Xác nhận nghỉ tạm sự kiện này">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.35)] p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-5 text-[#F3FAF5]">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-950/80 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
+                <CalendarOff className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-[#F3FAF5]">Xác nhận nghỉ tạm lần này</h3>
+                <p className="text-xs text-amber-300 font-bold">Chỉ hủy đúng buổi/sự kiện của ngày này</p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.18)] space-y-2.5 text-xs">
+              <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                <span className="text-[#A9B8AE]">Sự kiện / Việc bận:</span>
+                <span className="font-extrabold text-[#F3FAF5]">{skipBusyModal.event.title}</span>
+              </div>
+              <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                <span className="text-[#A9B8AE]">Thứ & Ngày:</span>
+                <span className="font-bold text-[#86EFAC]">
+                  {skipBusyModal.dayLabel} ({skipBusyModal.formattedDate})
+                </span>
+              </div>
+              <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                <span className="text-[#A9B8AE]">Khung giờ:</span>
+                <span className="font-bold text-[#F3FAF5]">{skipBusyModal.timeRange}</span>
+              </div>
+              {skipBusyModal.event.location && (
+                <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.1)]">
+                  <span className="text-[#A9B8AE]">Địa điểm:</span>
+                  <span className="font-bold text-[#F3FAF5]">{skipBusyModal.event.location}</span>
+                </div>
+              )}
+              <div className="text-[11px] text-[#A9B8AE] leading-relaxed pt-1">
+                ℹ️ Buổi học thêm / việc bận này sẽ được đánh dấu nghỉ tạm lần này. Khung giờ này sẽ được giải phóng làm thời gian rảnh cho Jami sắp xếp kế hoạch ôn tập & chuẩn bị ngày mai. Lịch lặp lại định kỳ các ngày/tuần sau vẫn được giữ nguyên.
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-[#A9B8AE] block">Lý do nghỉ (Tùy chọn):</label>
+              <input
+                type="text"
+                placeholder="VD: Nghỉ học thêm hôm nay, được nghỉ đột xuất..."
+                value={skipBusyModal.reason}
+                onChange={(e) => setSkipBusyModal((prev) => ({ ...prev, reason: e.target.value }))}
+                className="w-full bg-[#101A13] border border-[rgba(34,197,94,0.2)] rounded-xl px-3 py-2 text-xs text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={skipBusyModal.isSubmitting}
+                onClick={() => setSkipBusyModal((prev) => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2.5 text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                disabled={skipBusyModal.isSubmitting}
+                onClick={handleConfirmSkipBusy}
+                className="flex items-center gap-1.5 px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-[#050806] text-xs font-black rounded-xl shadow-lg shadow-amber-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <CalendarOff className="w-3.5 h-3.5" />
+                <span>{skipBusyModal.isSubmitting ? 'Đang cập nhật...' : 'Xác nhận nghỉ tạm'}</span>
               </button>
             </div>
           </div>

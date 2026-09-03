@@ -5,6 +5,8 @@ import {
   ExecutionGuideSchema,
   QuizDraftSchema,
   JamiResponseSchema,
+  TomorrowPlanAiSuggestionsResponseSchema,
+  MistakeSimilarQuestionSchema,
 } from '../../shared/schemas';
 import { z } from 'zod';
 
@@ -1067,6 +1069,196 @@ Hãy chấm điểm và nhận xét khách quan. Trả về JSON:
         : 'Đã ghi nhận minh chứng hoàn thành bài tập. Em có thể bổ sung thêm chi tiết để đạt điểm tối đa nhé.',
       strengths: ['Đã nộp đầy đủ kết quả thực hiện', 'Bám sát yêu cầu nhiệm vụ'],
       missingPoints: isGood ? [] : ['Nên bổ sung thêm tóm tắt các bước giải chi tiết'],
+    };
+  }
+
+  /**
+   * AI enrichment for tomorrow preparation plan items.
+   * AI provides smart suggestions, summaries, and concise reasons.
+   */
+  public static async generateTomorrowPlanSuggestions(context: {
+    tomorrowSubjects: Array<{ id: string; title: string; subjectName?: string }>;
+    todayCheckins: Array<{
+      id: string;
+      subjectName?: string;
+      learnedContent?: string;
+      homework?: string;
+      reflection?: string;
+      understandingLevel?: string;
+    }>;
+    dueTasks: Array<{ id: string; title: string; subjectName?: string; priority: string }>;
+    upcomingExams: Array<{ id: string; title: string; subjectName?: string; examAt: string }>;
+    energyLevel: string;
+    maxMinutes: number;
+  }): Promise<z.infer<typeof TomorrowPlanAiSuggestionsResponseSchema>['suggestions']> {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const prompt = `Bạn là Jami - Trợ lý học tập AI. Hãy phân tích dữ liệu học sinh để đề xuất các mục chuẩn bị cho ngày mai (tổng thời gian tối đa ${context.maxMinutes} phút, mức năng lượng: ${context.energyLevel}):
+
+Dữ liệu học tập:
+1. Môn học ngày mai: ${JSON.stringify(context.tomorrowSubjects)}
+2. Ghi chú & Check-in hôm nay: ${JSON.stringify(context.todayCheckins)}
+3. Bài tập đến hạn: ${JSON.stringify(context.dueTasks)}
+4. Bài kiểm tra sắp tới: ${JSON.stringify(context.upcomingExams)}
+
+Quy tắc:
+- Ưu tiên: 1. Bài tập phải nộp ngày mai -> 2. Bài kiểm tra sắp tới -> 3. Phần hôm nay chưa hiểu -> 4. Bài tập về nhà -> 5. Xem trước bài ngày mai -> 6. Chuẩn bị sách vở.
+- Mỗi mục có thời lượng từ 10 đến 25 phút (chuẩn bị sách vở 5 phút).
+- Tổng thời lượng không vượt quá ${context.maxMinutes} phút.
+- Trả về đúng JSON theo cấu trúc:
+{
+  "suggestions": [
+    {
+      "subjectId": "id_môn hoặc null",
+      "title": "Tiêu đề cụ thể ngắn gọn",
+      "description": "Hướng dẫn chi tiết bước làm",
+      "reason": "Lý do ngắn gọn",
+      "plannedMinutes": 15,
+      "priority": "high" | "medium" | "low",
+      "sourceType": "due_task" | "exam_review" | "class_checkin_reflection" | "class_checkin_homework" | "tomorrow_subject_preview" | "pack_bag" | "general_review",
+      "sourceId": "id_nguồn nếu có"
+    }
+  ]
+}`;
+
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            {
+              role: 'system',
+              content: 'Bạn là chuyên gia lập kế hoạch học tập cá nhân cho học sinh Việt Nam. Trả về định dạng JSON hợp lệ.',
+            },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const validated = TomorrowPlanAiSuggestionsResponseSchema.safeParse(parsed);
+          if (validated.success && validated.data.suggestions.length > 0) {
+            return validated.data.suggestions;
+          }
+        }
+      } catch (err) {
+        console.warn('[AI Adapter] AI tomorrow plan suggestion generation failed, falling back to rule-based engine', err);
+      }
+    }
+
+    return [];
+  }
+
+  /**
+   * Generate a similar practice question based on an original mistake
+   */
+  public static async generateSimilarMistakeQuestion(context: {
+    subjectName?: string;
+    topic: string;
+    originalQuestion: string;
+    correctAnswer: string;
+    difficulty?: string;
+  }): Promise<z.infer<typeof MistakeSimilarQuestionSchema>> {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const prompt = `Bạn là Jami - Trợ lý luyện đề AI. Hãy tạo 1 câu hỏi tương tự cùng dạng kiến thức để học sinh kiểm tra lại mức độ hiểu bài:
+Môn: ${context.subjectName || 'Học tập'}
+Chủ đề: ${context.topic}
+Câu hỏi gốc: "${context.originalQuestion}"
+Đáp án đúng gốc: "${context.correctAnswer}"
+Độ khó: ${context.difficulty || 'medium'}
+
+Trả về định dạng JSON:
+{
+  "questionText": "Nội dung câu hỏi tương tự mới (thay số hoặc thay tình huống)",
+  "options": ["A. ...", "B. ...", "C. ...", "D. ..."], (nếu là trắc nghiệm, hoặc để trống nếu là tự luận ngắn)
+  "correctAnswer": "Đáp án đúng chính xác",
+  "explanation": "Lời giải chi tiết từng bước",
+  "difficulty": "easy" | "medium" | "hard"
+}`;
+
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            { role: 'system', content: 'Tạo câu hỏi luyện tập tương tự chuẩn GDPT 2018. Trả về JSON.' },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const validated = MistakeSimilarQuestionSchema.safeParse(parsed);
+          if (validated.success) {
+            return validated.data;
+          }
+        }
+      } catch (err) {
+        console.warn('[AI Adapter] Generate similar mistake question failed, falling back', err);
+      }
+    }
+
+    // Fallback similar question
+    return {
+      questionText: `[Câu hỏi tương tự] Dựa trên chủ đề ${context.topic}: Vận dụng kiến thức tương tự câu "${context.originalQuestion.slice(0, 80)}..." hãy giải lại bài toán.`,
+      correctAnswer: context.correctAnswer,
+      explanation: `Áp dụng phương pháp giải của chủ đề ${context.topic} để tìm ra kết quả đúng.`,
+      difficulty: (context.difficulty as any) || 'medium',
+    };
+  }
+
+  /**
+   * Explain mistake solution and pinpoint why the mistake happened
+   */
+  public static async explainMistake(context: {
+    questionText: string;
+    selectedAnswer?: string;
+    correctAnswer: string;
+    mistakeReason?: string;
+  }): Promise<{ explanation: string; tips: string[] }> {
+    const client = this.getClient();
+    if (client) {
+      try {
+        const prompt = `Giải thích ngắn gọn cho học sinh về câu hỏi này:
+- Câu hỏi: "${context.questionText}"
+- Đáp án học sinh chọn: "${context.selectedAnswer || 'Chưa chọn'}"
+- Đáp án đúng: "${context.correctAnswer}"
+- Lý do sai: "${context.mistakeReason || 'Khác'}"
+
+Trả về JSON:
+{
+  "explanation": "Giải thích chi tiết các bước làm đúng",
+  "tips": ["Mẹo tránh sai lầm 1", "Mẹo tránh sai lầm 2"]
+}`;
+
+        const completion = await client.chat.completions.create({
+          model: this.getTextModel(),
+          messages: [
+            { role: 'system', content: 'Chuyên gia sư phạm giải thích lỗi sai. Trả về JSON.' },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          return {
+            explanation: parsed.explanation || 'Hãy đọc kỹ lý thuyết và kiểm tra lại từng bước tính toán.',
+            tips: Array.isArray(parsed.tips) ? parsed.tips : ['Đọc kỹ đề bài trước khi chọn đáp án', 'Kiểm tra lại công thức'],
+          };
+        }
+      } catch (err) {
+        console.warn('[AI Adapter] Explain mistake failed, falling back', err);
+      }
+    }
+
+    return {
+      explanation: `Đáp án đúng là "${context.correctAnswer}". Hãy đối chiếu lại lý thuyết và các bước biến đổi để củng cố kiến thức.`,
+      tips: ['Đọc kỹ đề bài', 'Rà soát từng bước tính'],
     };
   }
 }

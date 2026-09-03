@@ -1,6 +1,7 @@
 import React, { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './features/auth/AuthProvider';
+import { ThemeProvider } from './context/ThemeContext';
 import { RequireAuth } from './features/auth/RequireAuth';
 import { GuestOnlyRoute } from './features/auth/GuestOnlyRoute';
 import { AppLayout } from './components/layout/AppLayout';
@@ -21,6 +22,7 @@ const TaskDetailPage = lazy(() => import('./features/tasks/TaskDetailPage').then
 const FocusTimerPage = lazy(() => import('./features/focus/FocusTimerPage').then((m) => ({ default: m.FocusTimerPage })));
 const JamiAssistantPage = lazy(() => import('./features/jami/JamiAssistantPage').then((m) => ({ default: m.JamiAssistantPage })));
 const ExamsPage = lazy(() => import('./features/exams/ExamsPage').then((m) => ({ default: m.ExamsPage })));
+const MistakeNotebookPage = lazy(() => import('./features/mistakes/MistakeNotebookPage').then((m) => ({ default: m.MistakeNotebookPage })));
 const ReportsPage = lazy(() => import('./features/reports/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const MaterialsPage = lazy(() => import('./features/materials/MaterialsPage').then((m) => ({ default: m.MaterialsPage })));
 const NotificationsPage = lazy(() => import('./features/notifications/NotificationsPage').then((m) => ({ default: m.NotificationsPage })));
@@ -42,8 +44,9 @@ const PageLoader = () => (
 export default function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
-        <BrowserRouter>
+      <ThemeProvider>
+        <AuthProvider>
+          <BrowserRouter>
           <Suspense fallback={<PageLoader />}>
           <Routes>
             {/* Public Landing Page */}
@@ -109,6 +112,7 @@ export default function App() {
               <Route path="/focus" element={<FocusTimerPage />} />
               <Route path="/jami" element={<JamiAssistantPage />} />
               <Route path="/exams" element={<ExamsPage />} />
+              <Route path="/mistakes" element={<MistakeNotebookPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/materials" element={<MaterialsPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
@@ -122,6 +126,7 @@ export default function App() {
         </Suspense>
       </BrowserRouter>
     </AuthProvider>
+    </ThemeProvider>
     </ErrorBoundary>
   );
 }

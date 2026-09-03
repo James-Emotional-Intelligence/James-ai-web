@@ -1,6 +1,6 @@
 import { db } from '../db/mysql';
 import { isProduction, isDatabaseRequired } from '../config/env';
-import { TimetableEntry, BusyEvent, AvailabilityRule, SchoolTimetable, TimetableEntryException } from '../../shared/types';
+import { TimetableEntry, BusyEvent, BusyEventException, AvailabilityRule, SchoolTimetable, TimetableEntryException } from '../../shared/types';
 import crypto from 'crypto';
 
 export class TimetableRepository {
@@ -9,6 +9,7 @@ export class TimetableRepository {
   private demoEntries: Map<string, TimetableEntry[]> = new Map();
   private demoExceptions: Map<string, TimetableEntryException[]> = new Map();
   private demoBusyEvents: Map<string, BusyEvent[]> = new Map();
+  private demoBusyExceptions: Map<string, BusyEventException[]> = new Map();
   private demoAvailabilityRules: Map<string, AvailabilityRule[]> = new Map();
 
   private constructor() {}
@@ -807,6 +808,7 @@ export class TimetableRepository {
 
   public async deleteBusyEvent(userId: string, id: string): Promise<boolean> {
     if (db.isHealthy()) {
+      await db.execute('DELETE FROM busy_event_exceptions WHERE busy_event_id = ? AND user_id = ?', [id, userId]);
       const res = await db.execute('DELETE FROM busy_events WHERE id = ? AND user_id = ?', [id, userId]);
       return res?.affectedRows > 0;
     }
@@ -815,10 +817,161 @@ export class TimetableRepository {
       throw new Error('[JAMI Database] Database is unreachable. Cannot delete busy event.');
     }
 
+    const excList = this.demoBusyExceptions.get(userId) || [];
+    this.demoBusyExceptions.set(userId, excList.filter((e) => e.busyEventId !== id));
+
     const list = this.demoBusyEvents.get(userId) || [];
     const filtered = list.filter((e) => e.id !== id);
     this.demoBusyEvents.set(userId, filtered);
     return true;
+  }
+
+  // ==========================================
+  // Busy Event Exceptions CRUD (Nghỉ tạm thời gian biểu)
+  // ==========================================
+
+  public async createBusyEventException(
+    userId: string,
+    busyEventId: string,
+    occurrenceDate: string,
+    reason?: string,
+    exceptionType: 'cancelled' | 'skip' = 'cancelled'
+  ): Promise<BusyEventException> {
+    // 1. Ownership check: verify busy event belongs to user
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        'SELECT id FROM busy_events WHERE id = ? AND user_id = ?',
+        [busyEventId, userId]
+      );
+      if (rows.length === 0) {
+        throw new Error('Sự kiện bận không tồn tại hoặc không thuộc quyền sở hữu của bạn');
+      }
+    } else {
+      const list = this.demoBusyEvents.get(userId) || [];
+      if (!list.some((b) => b.id === busyEventId)) {
+        throw new Error('Sự kiện bận không tồn tại hoặc không thuộc quyền sở hữu của bạn');
+      }
+    }
+
+    const id = 'bexc_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const nowIso = new Date().toISOString();
+    const exc: BusyEventException = {
+      id,
+      userId,
+      busyEventId,
+      occurrenceDate,
+      exceptionType,
+      reason: reason || undefined,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO busy_event_exceptions (id, user_id, busy_event_id, occurrence_date, exception_type, reason, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW(3), NOW(3))
+         ON DUPLICATE KEY UPDATE
+           exception_type = VALUES(exception_type),
+           reason = VALUES(reason),
+           updated_at = NOW(3)`,
+        [id, userId, busyEventId, occurrenceDate, exceptionType, reason || null]
+      );
+    } else {
+      if (isProduction || isDatabaseRequired) {
+        throw new Error('[JAMI Database] Database is unreachable. Cannot record busy event exception.');
+      }
+      const list = this.demoBusyExceptions.get(userId) || [];
+      const existingIdx = list.findIndex((e) => e.busyEventId === busyEventId && e.occurrenceDate === occurrenceDate);
+      if (existingIdx >= 0) {
+        list[existingIdx] = exc;
+      } else {
+        list.push(exc);
+      }
+      this.demoBusyExceptions.set(userId, list);
+    }
+
+    return exc;
+  }
+
+  public async deleteBusyEventException(userId: string, busyEventId: string, occurrenceDate: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      const res = await db.execute(
+        `DELETE FROM busy_event_exceptions WHERE user_id = ? AND busy_event_id = ? AND occurrence_date = ?`,
+        [userId, busyEventId, occurrenceDate]
+      );
+      return (res?.affectedRows || 0) > 0;
+    }
+
+    const list = this.demoBusyExceptions.get(userId) || [];
+    const idx = list.findIndex((e) => e.busyEventId === busyEventId && e.occurrenceDate === occurrenceDate);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      this.demoBusyExceptions.set(userId, list);
+      return true;
+    }
+    return false;
+  }
+
+  public async getBusyEventExceptions(userId: string, fromDate?: string, toDate?: string): Promise<BusyEventException[]> {
+    if (db.isHealthy()) {
+      let query = `
+        SELECT id, user_id, busy_event_id, occurrence_date, exception_type, reason, created_at, updated_at
+        FROM busy_event_exceptions
+        WHERE user_id = ?
+      `;
+      const params: any[] = [userId];
+      if (fromDate) {
+        query += ' AND occurrence_date >= ?';
+        params.push(fromDate);
+      }
+      if (toDate) {
+        query += ' AND occurrence_date <= ?';
+        params.push(toDate);
+      }
+      query += ' ORDER BY occurrence_date ASC';
+
+      const rows = await db.query<any>(query, params);
+      return rows.map((r) => {
+        let occDate = r.occurrence_date;
+        if (occDate instanceof Date) {
+          occDate = occDate.toISOString().split('T')[0];
+        } else if (typeof occDate === 'string') {
+          occDate = occDate.split('T')[0];
+        }
+        return {
+          id: r.id,
+          userId: r.user_id,
+          busyEventId: r.busy_event_id,
+          occurrenceDate: occDate,
+          exceptionType: r.exception_type,
+          reason: r.reason || undefined,
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+          updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
+        };
+      });
+    }
+
+    let list = this.demoBusyExceptions.get(userId) || [];
+    if (fromDate) {
+      list = list.filter((e) => e.occurrenceDate >= fromDate);
+    }
+    if (toDate) {
+      list = list.filter((e) => e.occurrenceDate <= toDate);
+    }
+    return list;
+  }
+
+  public async isBusyEventSkipped(userId: string, busyEventId: string, occurrenceDate: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT id FROM busy_event_exceptions WHERE user_id = ? AND busy_event_id = ? AND occurrence_date = ?`,
+        [userId, busyEventId, occurrenceDate]
+      );
+      return rows.length > 0;
+    }
+
+    const list = this.demoBusyExceptions.get(userId) || [];
+    return list.some((e) => e.busyEventId === busyEventId && e.occurrenceDate === occurrenceDate);
   }
 
   // ==========================================

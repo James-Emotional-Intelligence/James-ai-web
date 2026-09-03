@@ -17,9 +17,23 @@ import {
   Target,
   FileText,
   AlertTriangle,
+  BookX,
+  Undo2,
+  Trash2,
+  Edit3,
+  BookmarkPlus,
 } from 'lucide-react';
 import { api } from '../../lib/api-client';
-import { Exam, Quiz, QuizAttempt, Subject, ExamMilestone } from '../../../shared/types';
+import {
+  Exam,
+  Quiz,
+  QuizAttempt,
+  Subject,
+  ExamMilestone,
+  ExamStudyPlan,
+  ExamStudyPlanItem,
+  ExamStudyPlanReplanProposal,
+} from '../../../shared/types';
 import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
 import confetti from 'canvas-confetti';
 
@@ -29,6 +43,17 @@ export const ExamsPage: React.FC = () => {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Automated Exam Study Plan State (Phần 1)
+  const [selectedExamForPlan, setSelectedExamForPlan] = useState<Exam | null>(null);
+  const [currentStudyPlan, setCurrentStudyPlan] = useState<ExamStudyPlan | null>(null);
+  const [missedProposal, setMissedProposal] = useState<ExamStudyPlanReplanProposal | null>(null);
+  const [isLoadingPlan, setIsLoadingPlan] = useState(false);
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
+  const [isPlanActionLoading, setIsPlanActionLoading] = useState(false);
+  const [planDailyMinutes, setPlanDailyMinutes] = useState(45);
+  const [savedMistakeIds, setSavedMistakeIds] = useState<Record<string, boolean>>({});
+  const [editingPlanItem, setEditingPlanItem] = useState<ExamStudyPlanItem | null>(null);
 
   // Material Quiz Generator Modal
   const [isMaterialQuizModalOpen, setIsMaterialQuizModalOpen] = useState(false);
@@ -62,6 +87,9 @@ export const ExamsPage: React.FC = () => {
   const [newExamImportance, setNewExamImportance] = useState<'low' | 'medium' | 'high' | 'critical'>('high');
   const [newExamTargetScore, setNewExamTargetScore] = useState('8.5');
   const [newExamFormat, setNewExamFormat] = useState<'multiple_choice' | 'essay' | 'combined'>('combined');
+  const [newExamDailyMinutes, setNewExamDailyMinutes] = useState('45');
+  const [newExamStartDate, setNewExamStartDate] = useState('');
+  const [newExamBlackoutDates, setNewExamBlackoutDates] = useState('');
   const [isSavingExam, setIsSavingExam] = useState(false);
   const [examFormError, setExamFormError] = useState<string | null>(null);
 
@@ -225,6 +253,127 @@ export const ExamsPage: React.FC = () => {
       label: `Còn ${diffDays} ngày`,
       badgeClass: 'bg-[#101A13] text-[#86EFAC] border border-[rgba(34,197,94,0.25)]',
     };
+  };
+
+  const handleOpenStudyPlan = async (exam: Exam) => {
+    setSelectedExamForPlan(exam);
+    setIsLoadingPlan(true);
+    setCurrentStudyPlan(null);
+    setMissedProposal(null);
+    try {
+      const [planRes, proposalRes] = await Promise.all([
+        api.getExamStudyPlan(exam.id),
+        api.getExamStudyPlanMissedProposal(exam.id).catch(() => ({ proposal: null })),
+      ]);
+      setCurrentStudyPlan(planRes.plan);
+      setMissedProposal(proposalRes.proposal);
+    } catch (err: any) {
+      console.error('Failed to load study plan:', err);
+    } finally {
+      setIsLoadingPlan(false);
+    }
+  };
+
+  const handleGenerateStudyPlan = async (examId: string) => {
+    setIsGeneratingPlan(true);
+    try {
+      const res = await api.generateExamStudyPlan(examId, {
+        dailyMinutes: planDailyMinutes,
+      });
+      setCurrentStudyPlan(res.plan);
+      confetti({ particleCount: 70, spread: 60 });
+    } catch (err: any) {
+      alert(err.message || 'Không thể tạo kế hoạch ôn tập.');
+    } finally {
+      setIsGeneratingPlan(false);
+    }
+  };
+
+  const handleAcceptStudyPlan = async (planId: string) => {
+    setIsPlanActionLoading(true);
+    try {
+      const res = await api.acceptExamStudyPlan(planId);
+      setCurrentStudyPlan(res.plan);
+      confetti({ particleCount: 100, spread: 70 });
+      alert('Đã chấp nhận kế hoạch ôn tập! Các buổi ôn đã được lên lịch vào Học tập hôm nay.');
+    } catch (err: any) {
+      alert(err.message || 'Không thể chấp nhận kế hoạch.');
+    } finally {
+      setIsPlanActionLoading(false);
+    }
+  };
+
+  const handleConfirmReplan = async (
+    planId: string,
+    action: 'accept' | 'custom_slot' | 'skip_session' | 'keep_as_is'
+  ) => {
+    setIsPlanActionLoading(true);
+    try {
+      const res = await api.confirmExamStudyPlanReplan(planId, { action });
+      setCurrentStudyPlan(res.plan);
+      setMissedProposal(null);
+      alert('Đã cập nhật lại lịch ôn tập thành công!');
+    } catch (err: any) {
+      alert(err.message || 'Không thể sắp xếp lại kế hoạch.');
+    } finally {
+      setIsPlanActionLoading(false);
+    }
+  };
+
+  const handleUndoPlanVersion = async (planId: string) => {
+    setIsPlanActionLoading(true);
+    try {
+      const res = await api.undoExamStudyPlanVersion(planId);
+      if (res.plan) {
+        setCurrentStudyPlan(res.plan);
+        alert('Đã hoàn tác về phiên bản kế hoạch trước đó!');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Không thể hoàn tác phiên bản.');
+    } finally {
+      setIsPlanActionLoading(false);
+    }
+  };
+
+  const handleDeletePlanItem = async (planId: string, itemId: string) => {
+    if (!window.confirm('Bạn có chắc muốn xóa buổi ôn tập này?')) return;
+    try {
+      await api.deleteExamStudyPlanItem(planId, itemId);
+      if (currentStudyPlan) {
+        setCurrentStudyPlan({
+          ...currentStudyPlan,
+          items: currentStudyPlan.items.filter((i) => i.id !== itemId),
+        });
+      }
+    } catch (err: any) {
+      alert(err.message || 'Không thể xóa buổi ôn.');
+    }
+  };
+
+  const handleSaveQuizQuestionToMistakeNotebook = async (
+    questionText: string,
+    selectedAnswer: string,
+    correctAnswer: string,
+    explanation?: string,
+    subjectId?: string,
+    topic?: string
+  ) => {
+    try {
+      await api.createMistake({
+        subjectId,
+        topic: topic || 'Luyện đề kiểm tra',
+        questionText,
+        selectedAnswer,
+        correctAnswer,
+        correctExplanation: explanation,
+        mistakeReason: 'calculation_error',
+        sourceType: 'quiz',
+      });
+      setSavedMistakeIds((prev) => ({ ...prev, [questionText]: true }));
+      alert('Đã lưu câu hỏi vào Sổ lỗi sai cá nhân thành công!');
+    } catch (err: any) {
+      alert(err.message || 'Không thể lưu câu hỏi vào Sổ lỗi sai.');
+    }
   };
 
   const handleCreateQuizFromMaterial = async (res: SelectedFileResult) => {
@@ -584,9 +733,33 @@ export const ExamsPage: React.FC = () => {
                           </strong>
                         </div>
                         {!fb.isCorrect && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-[#A9B8AE]">Đáp án chính xác:</span>
-                            <strong className="text-[#86EFAC]">{fb.correctAnswer}</strong>
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[#A9B8AE]">Đáp án chính xác:</span>
+                              <strong className="text-[#86EFAC]">{fb.correctAnswer}</strong>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSaveQuizQuestionToMistakeNotebook(
+                                  q?.prompt || `Câu hỏi ${idx + 1}`,
+                                  fb.userAnswer || '',
+                                  fb.correctAnswer || '',
+                                  fb.explanation,
+                                  activeQuiz.subjectId,
+                                  activeQuiz.subjectName
+                                )
+                              }
+                              disabled={!!savedMistakeIds[q?.prompt || `Câu hỏi ${idx + 1}`]}
+                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-[11px] font-bold transition disabled:opacity-60 cursor-pointer"
+                            >
+                              <BookmarkPlus className="w-3.5 h-3.5" />
+                              <span>
+                                {savedMistakeIds[q?.prompt || `Câu hỏi ${idx + 1}`]
+                                  ? '✓ Đã lưu vào Sổ lỗi sai'
+                                  : 'Lưu câu này vào Sổ lỗi sai'}
+                              </span>
+                            </button>
                           </div>
                         )}
                         {fb.explanation && (
@@ -707,6 +880,20 @@ export const ExamsPage: React.FC = () => {
                             </button>
                           );
                         })}
+                      </div>
+
+                      <div className="pt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(34,197,94,0.15)]">
+                        <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+                          <BookX className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Kế hoạch ôn tập thích ứng & kết nối Sổ lỗi sai cá nhân</span>
+                        </div>
+                        <button
+                          onClick={() => handleOpenStudyPlan(exam)}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition shadow cursor-pointer shrink-0"
+                        >
+                          <Calendar className="w-3.5 h-3.5" />
+                          <span>Tạo / Xem kế hoạch ôn tập</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1004,6 +1191,31 @@ export const ExamsPage: React.FC = () => {
                 />
               </div>
 
+              <div className="grid grid-cols-2 gap-3 pt-1 border-t border-[rgba(34,197,94,0.15)]">
+                <div>
+                  <label className="block text-xs font-bold text-[#86EFAC] mb-1">Số phút ôn mỗi ngày:</label>
+                  <input
+                    type="number"
+                    min="15"
+                    max="180"
+                    step="5"
+                    value={newExamDailyMinutes}
+                    onChange={(e) => setNewExamDailyMinutes(e.target.value)}
+                    className="w-full text-xs p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#86EFAC] mb-1">Ngày bắt đầu ôn:</label>
+                  <input
+                    type="date"
+                    value={newExamStartDate}
+                    onChange={(e) => setNewExamStartDate(e.target.value)}
+                    className="w-full text-xs p-2.5 border border-[rgba(34,197,94,0.25)] bg-[#050806] text-[#F3FAF5] rounded-xl focus:border-[#22C55E] focus:outline-none"
+                  />
+                </div>
+              </div>
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1021,6 +1233,251 @@ export const ExamsPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Exam Study Plan (Lập kế hoạch ôn kiểm tra tự động) */}
+      {selectedExamForPlan && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0A1810] border border-emerald-500/30 rounded-3xl w-full max-w-3xl max-h-[92vh] overflow-y-auto p-6 md:p-8 space-y-6 shadow-2xl text-white">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-emerald-500/20">
+              <div>
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold mb-2">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  KẾ HOẠCH ÔN TẬP TỰ ĐỘNG THEO SỐ NGÀY
+                </div>
+                <h2 className="text-xl md:text-2xl font-black text-white">{selectedExamForPlan.title}</h2>
+                <div className="text-xs text-zinc-400 mt-1 flex flex-wrap items-center gap-3">
+                  <span>Môn: <strong className="text-emerald-400">{selectedExamForPlan.subjectName}</strong></span>
+                  <span>• Ngày thi: {new Date(selectedExamForPlan.examAt).toLocaleDateString('vi-VN')}</span>
+                  {selectedExamForPlan.targetScore && (
+                    <span>• Điểm mục tiêu: <strong className="text-amber-400">{selectedExamForPlan.targetScore}đ</strong></span>
+                  )}
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSelectedExamForPlan(null)}
+                className="p-2 text-zinc-400 hover:text-white rounded-xl bg-[#060D09] border border-emerald-500/20"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Missed Session Proposal Banner */}
+            {missedProposal && (
+              <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/40 space-y-3">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1 text-xs">
+                    <div className="font-bold text-rose-200">Phát hiện buổi ôn bị bỏ lỡ:</div>
+                    <p className="text-zinc-300 leading-relaxed">{missedProposal.explanation}</p>
+                    <div className="text-rose-300 font-semibold pt-1">
+                      Đề xuất chuyển sang: {missedProposal.suggestedSlot.plannedDate} ({missedProposal.suggestedSlot.startAt} - {missedProposal.suggestedSlot.endAt})
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-rose-500/20">
+                  <button
+                    onClick={() => handleConfirmReplan(missedProposal.planId, 'accept')}
+                    disabled={isPlanActionLoading}
+                    className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold transition shadow"
+                  >
+                    Chấp nhận sắp xếp lại
+                  </button>
+                  <button
+                    onClick={() => handleConfirmReplan(missedProposal.planId, 'skip_session')}
+                    disabled={isPlanActionLoading}
+                    className="px-3.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold"
+                  >
+                    Bỏ qua buổi này
+                  </button>
+                  <button
+                    onClick={() => setMissedProposal(null)}
+                    className="px-3.5 py-1.5 rounded-xl bg-transparent text-zinc-400 hover:text-zinc-200 text-xs"
+                  >
+                    Giữ nguyên kế hoạch
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Plan Content */}
+            {isLoadingPlan ? (
+              <div className="p-12 text-center text-zinc-400 space-y-2">
+                <div className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto" />
+                <p className="text-xs">Đang tải kế hoạch ôn tập...</p>
+              </div>
+            ) : currentStudyPlan ? (
+              <div className="space-y-6">
+                {/* Stats Header */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3 bg-[#060D09] border border-emerald-500/20 rounded-xl">
+                    <div className="text-[11px] text-zinc-400">Trạng thái</div>
+                    <div className="text-sm font-bold text-emerald-400 capitalize mt-0.5">
+                      {currentStudyPlan.status === 'accepted' ? '✓ Đã chấp nhận' : 'Bản nháp đề xuất'}
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-[#060D09] border border-emerald-500/20 rounded-xl">
+                    <div className="text-[11px] text-zinc-400">Tổng buổi ôn</div>
+                    <div className="text-sm font-bold text-white mt-0.5">{currentStudyPlan.items.length} buổi</div>
+                  </div>
+
+                  <div className="p-3 bg-[#060D09] border border-emerald-500/20 rounded-xl">
+                    <div className="text-[11px] text-zinc-400">Tổng thời lượng</div>
+                    <div className="text-sm font-bold text-white mt-0.5">{currentStudyPlan.totalPlannedMinutes || 0} phút</div>
+                  </div>
+
+                  <div className="p-3 bg-[#060D09] border border-emerald-500/20 rounded-xl">
+                    <div className="text-[11px] text-zinc-400">Phiên bản</div>
+                    <div className="text-sm font-bold text-white mt-0.5 flex items-center justify-between">
+                      <span>v{currentStudyPlan.currentVersion}</span>
+                      {currentStudyPlan.currentVersion > 1 && (
+                        <button
+                          onClick={() => handleUndoPlanVersion(currentStudyPlan.id)}
+                          className="text-[11px] text-emerald-400 hover:underline flex items-center gap-1"
+                        >
+                          <Undo2 className="w-3 h-3" /> Hoàn tác
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Day-by-day Timeline */}
+                <div className="space-y-3">
+                  <div className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                    Dòng thời gian các buổi ôn tập:
+                  </div>
+
+                  <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                    {currentStudyPlan.items.map((item, idx) => {
+                      const isCompleted = item.status === 'completed';
+                      const isMissed = item.status === 'missed';
+                      const isSkipped = item.status === 'skipped';
+
+                      return (
+                        <div
+                          key={item.id}
+                          className={`p-4 rounded-2xl border transition text-xs space-y-2 ${
+                            isCompleted
+                              ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-200'
+                              : isMissed
+                              ? 'bg-rose-950/20 border-rose-500/40 text-rose-200'
+                              : isSkipped
+                              ? 'bg-zinc-900/30 border-zinc-800 text-zinc-500 line-through'
+                              : 'bg-[#060D09] border-emerald-500/20 text-zinc-200'
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="w-5 h-5 rounded-full bg-emerald-500/10 text-emerald-400 font-black text-[10px] flex items-center justify-center border border-emerald-500/30">
+                                {idx + 1}
+                              </span>
+                              <span className="font-bold text-white text-xs">{item.plannedDate}</span>
+                              <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[11px]">
+                                {item.startAt} - {item.endAt} ({item.plannedMinutes}p)
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-semibold">
+                                {item.activityType === 'theory_review'
+                                  ? 'Lý thuyết'
+                                  : item.activityType === 'mock_test'
+                                  ? 'Đề thi thử'
+                                  : item.activityType === 'mistake_review'
+                                  ? 'Ôn lỗi sai'
+                                  : item.activityType === 'advanced_practice'
+                                  ? 'Nâng cao'
+                                  : 'Luyện tập'}
+                              </span>
+                              <button
+                                onClick={() => handleDeletePlanItem(currentStudyPlan.id, item.id)}
+                                className="p-1 text-zinc-500 hover:text-rose-400"
+                                title="Xóa buổi này"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="font-semibold text-white pl-7">{item.title}</div>
+                          {item.description && <p className="text-zinc-400 pl-7 text-[11px] leading-relaxed">{item.description}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Plan Action Buttons */}
+                <div className="pt-4 border-t border-emerald-500/15 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleGenerateStudyPlan(selectedExamForPlan.id)}
+                      disabled={isGeneratingPlan}
+                      className="px-4 py-2 rounded-xl bg-[#060D09] border border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-300 text-xs font-bold transition flex items-center gap-1.5"
+                    >
+                      <RotateCcw className={`w-3.5 h-3.5 ${isGeneratingPlan ? 'animate-spin' : ''}`} />
+                      Tạo lại kế hoạch
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {currentStudyPlan.status === 'draft' && (
+                      <button
+                        onClick={() => handleAcceptStudyPlan(currentStudyPlan.id)}
+                        disabled={isPlanActionLoading}
+                        className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black transition shadow-lg shadow-emerald-500/20 flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        Chấp nhận kế hoạch ôn tập
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-8 text-center bg-[#060D09] rounded-2xl border border-emerald-500/20 space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/30">
+                  <Sparkles className="w-6 h-6" />
+                </div>
+                <div className="space-y-1 max-w-md mx-auto">
+                  <h3 className="text-base font-bold text-white">Chưa có kế hoạch ôn tập cho kỳ kiểm tra này</h3>
+                  <p className="text-xs text-zinc-400">
+                    Jami sẽ tự động tính số ngày còn lại, đọc thời khóa biểu, giờ ăn/ngủ và các câu sai trong Sổ lỗi sai để lên lộ trình ôn tối ưu.
+                  </p>
+                </div>
+
+                <div className="max-w-xs mx-auto text-left space-y-2 pt-2">
+                  <label className="text-xs text-zinc-300 font-semibold block">Số phút có thể ôn mỗi ngày:</label>
+                  <select
+                    value={planDailyMinutes}
+                    onChange={(e) => setPlanDailyMinutes(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl bg-[#0A1810] border border-emerald-500/20 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value={30}>30 phút / ngày</option>
+                    <option value={45}>45 phút / ngày (Khuyên dùng)</option>
+                    <option value={60}>60 phút / ngày</option>
+                    <option value={90}>90 phút / ngày</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={() => handleGenerateStudyPlan(selectedExamForPlan.id)}
+                  disabled={isGeneratingPlan}
+                  className="px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black transition shadow-lg shadow-emerald-500/20 flex items-center gap-2 mx-auto"
+                >
+                  {isGeneratingPlan ? <RotateCcw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                  Tạo kế hoạch ôn tập tự động ngay
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

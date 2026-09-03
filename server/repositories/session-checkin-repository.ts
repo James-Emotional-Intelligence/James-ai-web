@@ -79,9 +79,11 @@ export class SessionCheckinRepository {
     userId: string,
     data: {
       timetableEntryId: string;
+      timetableEntryIds?: string[];
       occurrenceDate: string;
       learnedContent?: string | null;
       homework?: string | null;
+      hasNoHomework?: boolean;
       reflection?: string | null;
       understandingLevel?: 'very_easy' | 'normal' | 'hard' | 'not_understood' | null;
       attendanceStatus?: 'attended' | 'absent';
@@ -90,13 +92,18 @@ export class SessionCheckinRepository {
     const id = 'chk_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const nowIso = new Date().toISOString();
 
+    const targetIds = data.timetableEntryIds && data.timetableEntryIds.length > 0
+      ? Array.from(new Set([data.timetableEntryId, ...data.timetableEntryIds]))
+      : [data.timetableEntryId];
+
     const checkin: ClassSessionCheckin = {
       id,
       userId,
       timetableEntryId: data.timetableEntryId,
       occurrenceDate: data.occurrenceDate,
       learnedContent: data.learnedContent || undefined,
-      homework: data.homework || undefined,
+      homework: data.hasNoHomework ? undefined : data.homework || undefined,
+      hasNoHomework: Boolean(data.hasNoHomework),
       reflection: data.reflection || undefined,
       understandingLevel: data.understandingLevel || undefined,
       attendanceStatus: data.attendanceStatus || 'attended',
@@ -106,43 +113,51 @@ export class SessionCheckinRepository {
     };
 
     if (db.isHealthy()) {
-      await db.execute(
-        `INSERT INTO class_session_checkins (
-           id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, reflection,
-           understanding_level, attendance_status, completed_at, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3), NOW(3))
-         ON DUPLICATE KEY UPDATE
-           learned_content = VALUES(learned_content),
-           homework = VALUES(homework),
-           reflection = VALUES(reflection),
-           understanding_level = VALUES(understanding_level),
-           attendance_status = VALUES(attendance_status),
-           completed_at = NOW(3),
-           updated_at = NOW(3)`,
-        [
-          id,
-          userId,
-          data.timetableEntryId,
-          data.occurrenceDate,
-          data.learnedContent || null,
-          data.homework || null,
-          data.reflection || null,
-          data.understandingLevel || null,
-          data.attendanceStatus || 'attended',
-        ]
-      );
+      for (const entryId of targetIds) {
+        const rowId = entryId === data.timetableEntryId ? id : 'chk_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+        await db.execute(
+          `INSERT INTO class_session_checkins (
+             id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, has_no_homework, reflection,
+             understanding_level, attendance_status, completed_at, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3), NOW(3))
+           ON DUPLICATE KEY UPDATE
+             learned_content = VALUES(learned_content),
+             homework = VALUES(homework),
+             has_no_homework = VALUES(has_no_homework),
+             reflection = VALUES(reflection),
+             understanding_level = VALUES(understanding_level),
+             attendance_status = VALUES(attendance_status),
+             completed_at = NOW(3),
+             updated_at = NOW(3)`,
+          [
+            rowId,
+            userId,
+            entryId,
+            data.occurrenceDate,
+            data.learnedContent || null,
+            data.hasNoHomework ? null : data.homework || null,
+            data.hasNoHomework ? 1 : 0,
+            data.reflection || null,
+            data.understandingLevel || null,
+            data.attendanceStatus || 'attended',
+          ]
+        );
+      }
     } else {
       if (isProduction || isDatabaseRequired) {
         throw new Error('[JAMI Database] Database is unreachable. Cannot save session check-in.');
       }
       const list = this.demoCheckins.get(userId) || [];
-      const idx = list.findIndex(
-        (c) => c.timetableEntryId === data.timetableEntryId && c.occurrenceDate === data.occurrenceDate
-      );
-      if (idx >= 0) {
-        list[idx] = { ...list[idx], ...checkin, createdAt: list[idx].createdAt };
-      } else {
-        list.push(checkin);
+      for (const entryId of targetIds) {
+        const itemCheckin = { ...checkin, timetableEntryId: entryId };
+        const idx = list.findIndex(
+          (c) => c.timetableEntryId === entryId && c.occurrenceDate === data.occurrenceDate
+        );
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...itemCheckin, createdAt: list[idx].createdAt };
+        } else {
+          list.push(itemCheckin);
+        }
       }
       this.demoCheckins.set(userId, list);
     }
@@ -150,10 +165,124 @@ export class SessionCheckinRepository {
     return checkin;
   }
 
+  public async getTodayClassesAndLogs(userId: string, timezone = 'Asia/Ho_Chi_Minh'): Promise<{
+    date: string;
+    formattedDate: string;
+    dayOfWeekText: string;
+    classes: import('../../shared/types').TodayLessonLogItem[];
+  }> {
+    const now = new Date();
+    const parts = getLocalDateParts(now, timezone);
+
+    const activeTimetable = await timetableRepo.getActiveTimetable(userId);
+    if (!activeTimetable) {
+      return {
+        date: parts.dateKey,
+        formattedDate: parts.formattedDate,
+        dayOfWeekText: parts.dayOfWeekText,
+        classes: [],
+      };
+    }
+
+    const allEntries = await timetableRepo.getTimetableEntries(userId, activeTimetable.id, parts.dateKey);
+    const todayEntries = allEntries.filter((e) => Number(e.dayOfWeek) === parts.dayOfWeek);
+
+    const exceptions = await timetableRepo.getExceptions(userId, parts.dateKey, parts.dateKey);
+    const exceptionMap = new Map<string, { type: string; reason?: string }>();
+    for (const exc of exceptions) {
+      if (exc.occurrenceDate === parts.dateKey) {
+        exceptionMap.set(exc.timetableEntryId, { type: exc.exceptionType, reason: exc.reason });
+      }
+    }
+
+    const checkins = await this.getCheckins(userId, parts.dateKey, parts.dateKey);
+    const checkinMap = new Map<string, ClassSessionCheckin>();
+    for (const chk of checkins) {
+      checkinMap.set(chk.timetableEntryId, chk);
+    }
+
+    // Sort entries chronologically by period / start time
+    const sorted = [...todayEntries].sort((a, b) => {
+      const pA = a.period || 0;
+      const pB = b.period || 0;
+      if (pA !== pB) return pA - pB;
+      return (a.startLocalTime || '').localeCompare(b.startLocalTime || '');
+    });
+
+    // Merge consecutive entries of the same subject
+    const mergedList: import('../../shared/types').TodayLessonLogItem[] = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      const entry = sorted[i];
+      const exc = exceptionMap.get(entry.id);
+      const isSkipped = exc?.type === 'cancelled' || !!entry.isSkippedThisWeek;
+      const skipReason = exc?.reason || (entry.isSkippedThisWeek ? 'Nghỉ tuần này' : undefined);
+
+      // Check if can merge with previous
+      const prev = mergedList[mergedList.length - 1];
+      const canMergeWithPrev =
+        prev &&
+        prev.subjectName.toLowerCase() === (entry.subjectName || entry.title || '').toLowerCase() &&
+        prev.isSkipped === isSkipped &&
+        (prev.room || '') === (entry.location || entry.room || '');
+
+      if (canMergeWithPrev) {
+        prev.timetableEntryIds.push(entry.id);
+        prev.endTime = entry.endLocalTime || prev.endTime;
+        const startPeriod = prev.periodLabel.includes(' - ') ? prev.periodLabel.split(' - ')[0] : prev.periodLabel;
+        prev.periodLabel = `${startPeriod} - Tiết ${entry.period || ''}`;
+
+        // If current entry has checkin and prev doesn't, inherit it
+        const curCheckin = checkinMap.get(entry.id);
+        if (curCheckin && !prev.checkinId) {
+          prev.checkinId = curCheckin.id;
+          prev.attendanceStatus = curCheckin.attendanceStatus;
+          prev.learnedContent = curCheckin.learnedContent;
+          prev.homework = curCheckin.homework;
+          prev.hasNoHomework = curCheckin.hasNoHomework !== undefined ? curCheckin.hasNoHomework : !curCheckin.homework;
+          prev.reflection = curCheckin.reflection;
+          prev.understandingLevel = curCheckin.understandingLevel;
+          prev.savedAt = curCheckin.updatedAt || curCheckin.completedAt;
+        }
+      } else {
+        const curCheckin = checkinMap.get(entry.id);
+        mergedList.push({
+          id: entry.id,
+          timetableEntryId: entry.id,
+          timetableEntryIds: [entry.id],
+          subjectId: entry.subjectId,
+          subjectName: entry.subjectName || entry.title,
+          subjectColor: (entry as any).color || (entry as any).subjectColor,
+          periodLabel: entry.period ? `Tiết ${entry.period}` : 'Tiết học',
+          startTime: entry.startLocalTime || '07:00',
+          endTime: entry.endLocalTime || '07:45',
+          room: entry.location || entry.room,
+          isSkipped,
+          skipReason,
+          attendanceStatus: curCheckin ? curCheckin.attendanceStatus : isSkipped ? 'absent' : 'unconfirmed',
+          learnedContent: curCheckin?.learnedContent,
+          homework: curCheckin?.homework,
+          hasNoHomework: curCheckin ? (curCheckin.hasNoHomework !== undefined ? curCheckin.hasNoHomework : !curCheckin.homework) : false,
+          reflection: curCheckin?.reflection,
+          understandingLevel: curCheckin?.understandingLevel,
+          checkinId: curCheckin?.id,
+          savedAt: curCheckin ? (curCheckin.updatedAt || curCheckin.completedAt) : undefined,
+        });
+      }
+    }
+
+    return {
+      date: parts.dateKey,
+      formattedDate: parts.formattedDate,
+      dayOfWeekText: parts.dayOfWeekText,
+      classes: mergedList,
+    };
+  }
+
   public async getCheckins(userId: string, fromDate?: string, toDate?: string): Promise<ClassSessionCheckin[]> {
     if (db.isHealthy()) {
       let query = `
-        SELECT id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, reflection,
+        SELECT id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, has_no_homework, reflection,
                understanding_level, attendance_status, completed_at, created_at, updated_at
         FROM class_session_checkins
         WHERE user_id = ?
@@ -177,6 +306,7 @@ export class SessionCheckinRepository {
         occurrenceDate: r.occurrence_date,
         learnedContent: r.learned_content || undefined,
         homework: r.homework || undefined,
+        hasNoHomework: Boolean(r.has_no_homework),
         reflection: r.reflection || undefined,
         understandingLevel: r.understanding_level || undefined,
         attendanceStatus: r.attendance_status || 'attended',
@@ -201,11 +331,12 @@ export class SessionCheckinRepository {
     const now = new Date();
     const nowMs = now.getTime();
 
-    // Default lookback to 24h ago if lastActiveAt not recorded, with maximum lookback of 7 days
+    // Default lookback to 24h ago if lastOfflineScanAt / lastActiveAt not recorded, with maximum lookback of 7 days
     const maxLookbackMs = 7 * 24 * 3600 * 1000;
     const defaultLookbackMs = 24 * 3600 * 1000;
-    let startLookbackMs = user?.lastActiveAt
-      ? new Date(user.lastActiveAt).getTime()
+    const checkpointTimestamp = user?.lastOfflineScanAt || user?.lastActiveAt;
+    let startLookbackMs = checkpointTimestamp
+      ? new Date(checkpointTimestamp).getTime()
       : nowMs - defaultLookbackMs;
 
     if (isNaN(startLookbackMs) || startLookbackMs < nowMs - maxLookbackMs) {

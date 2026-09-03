@@ -12,6 +12,7 @@ import {
   Layers,
   ChevronRight,
   Power,
+  BookX,
 } from 'lucide-react';
 import { User, StudentProfile } from '../../../shared/types';
 import { MODULES_CONFIG } from '../../config/modules';
@@ -265,6 +266,14 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
                       <span>Bảng điều khiển Admin</span>
                     </Link>
                   )}
+                  <Link
+                    to="/mistakes"
+                    onClick={() => setIsProfileMenuOpen(false)}
+                    className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold text-emerald-300 hover:text-emerald-200 hover:bg-[#101A13] transition-colors"
+                  >
+                    <BookX className="w-4 h-4 text-emerald-400" />
+                    <span>Sổ lỗi sai cá nhân</span>
+                  </Link>
                   <Link
                     to="/settings"
                     onClick={() => setIsProfileMenuOpen(false)}

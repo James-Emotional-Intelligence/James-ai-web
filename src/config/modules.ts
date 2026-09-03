@@ -8,6 +8,7 @@ import {
   BarChart3,
   FolderArchive,
   Bell,
+  BookX,
 } from 'lucide-react';
 
 export interface ModuleDefinition {
@@ -96,6 +97,16 @@ export const MODULES_CONFIG: ModuleDefinition[] = [
     badgeKey: 'unreadNotificationsCount',
   },
 ];
+
+export const MISTAKE_MODULE: ModuleDefinition = {
+  id: 'mistakes',
+  order: 9,
+  name: 'SỔ LỖI SAI CÁ NHÂN',
+  shortName: 'Sổ lỗi sai',
+  path: '/mistakes',
+  icon: BookX,
+  description: 'Lưu trữ câu sai & ôn tập ngắt quãng 1-3-7-14-30 ngày',
+};
 
 export const PRIMARY_NAV_MODULES = MODULES_CONFIG;
 export const SECONDARY_NAV_MODULES = MODULES_CONFIG.slice(4, 8);

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { User, StudentProfile } from '../../shared/types';
 import { DEMO_USER, DEMO_PROFILE, ADMIN_USER } from '../db/demo-data';
 import { db, DatabaseError } from '../db/mysql';
-import { env, isProduction } from '../config/env';
+import { env, isProduction, isDatabaseRequired } from '../config/env';
 import { DemoRepository } from './demo-repository';
 import { PasswordHasher, PasswordVerificationResult } from '../services/password-hasher';
 
@@ -19,6 +19,8 @@ interface DemoResetToken {
   expiresAt: number;
   usedAt?: number | null;
 }
+
+import { DbSchemaIncompatibleError, DatabaseUnavailableError } from '../errors/app-errors';
 
 export class UserRepository {
   private static instance: UserRepository;
@@ -38,6 +40,29 @@ export class UserRepository {
       UserRepository.instance = new UserRepository();
     }
     return UserRepository.instance;
+  }
+
+  private classifyDbError(err: any): Error {
+    const code = err.code || '';
+    const msg = err.message || '';
+    if (
+      code === 'ER_BAD_FIELD_ERROR' ||
+      code === 'ER_NO_SUCH_TABLE' ||
+      msg.includes('Unknown column') ||
+      msg.includes("doesn't exist")
+    ) {
+      return new DbSchemaIncompatibleError(`Cơ sở dữ liệu chưa đồng bộ lược đồ phiên bản mới nhất (${msg})`);
+    }
+    if (
+      code === 'PROTOCOL_CONNECTION_LOST' ||
+      code === 'ECONNREFUSED' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ER_CON_COUNT_ERROR' ||
+      code === 'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR'
+    ) {
+      return new DatabaseUnavailableError(`Cơ sở dữ liệu đang tạm gián đoạn (${code || msg})`);
+    }
+    return new DatabaseUnavailableError(`Lỗi truy vấn cơ sở dữ liệu (${msg})`);
   }
 
   private seedDemoUserMemory() {
@@ -195,9 +220,19 @@ export class UserRepository {
           this.userCache.set(r.id, { user: userObj, cachedAt: Date.now() });
           return userObj;
         }
+
+        // Query succeeded and returned 0 rows -> User truly does not exist in DB!
+        if (isProduction || !env.DEMO_LOGIN_ENABLED) {
+          return undefined;
+        }
       } catch (err: any) {
-        console.warn(`[UserRepository] DB query findByEmail warning:`, err.message);
+        console.error(`[UserRepository] DB query findByEmail error:`, err.message);
+        throw this.classifyDbError(err);
       }
+    }
+
+    if (isProduction || isDatabaseRequired) {
+      return undefined;
     }
 
     return this.demoUsers.get(normalizedEmail);
@@ -214,7 +249,7 @@ export class UserRepository {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, last_active_at, created_at
+          `SELECT id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, role, status, last_active_at, last_offline_scan_at, created_at
            FROM users
            WHERE id = ?`,
           [id]
@@ -245,19 +280,28 @@ export class UserRepository {
             role: r.role || 'user',
             status: r.status || 'active',
             lastActiveAt: r.last_active_at ? new Date(r.last_active_at).toISOString() : undefined,
+            lastOfflineScanAt: r.last_offline_scan_at ? new Date(r.last_offline_scan_at).toISOString() : undefined,
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
 
           this.userCache.set(id, { user: userObj, cachedAt: Date.now() });
           return userObj;
         }
+
+        if (isProduction || !env.DEMO_LOGIN_ENABLED) {
+          return undefined;
+        }
       } catch (err: any) {
-        console.warn(`[UserRepository] DB query findById(${id}) warning:`, err.message);
-        if (cached) return cached.user;
+        console.error(`[UserRepository] DB query findById(${id}) error:`, err.message);
+        throw this.classifyDbError(err);
       }
     }
 
     if (cached) return cached.user;
+
+    if (isProduction || isDatabaseRequired) {
+      return undefined;
+    }
 
     for (const u of this.demoUsers.values()) {
       if (u.id === id) return u;
@@ -283,6 +327,27 @@ export class UserRepository {
     for (const u of this.demoUsers.values()) {
       if (u.id === userId) {
         u.lastActiveAt = nowIso;
+      }
+    }
+  }
+
+  public async touchLastOfflineScan(userId: string): Promise<void> {
+    if (!userId) return;
+    const nowIso = new Date().toISOString();
+    if (db.isHealthy()) {
+      try {
+        await db.execute('UPDATE users SET last_offline_scan_at = NOW(3) WHERE id = ?', [userId]);
+      } catch (err: any) {
+        console.warn(`[UserRepository] touchLastOfflineScan(${userId}) warning:`, err.message);
+      }
+    }
+    const cached = this.userCache.get(userId);
+    if (cached && cached.user) {
+      cached.user.lastOfflineScanAt = nowIso;
+    }
+    for (const u of this.demoUsers.values()) {
+      if (u.id === userId) {
+        u.lastOfflineScanAt = nowIso;
       }
     }
   }

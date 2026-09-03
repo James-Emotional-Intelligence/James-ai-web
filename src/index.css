@@ -21,6 +21,37 @@
   --color-focus: #4ADE80;
 }
 
+[data-theme="hai-ba-trung"] {
+  --color-bg: #06130E;
+  --color-bg-soft: #091A14;
+  --color-surface: #0B2118;
+  --color-surface-elevated: #102B20;
+  --color-surface-hover: #163B2C;
+  --color-primary: #19C76F;
+  --color-primary-hover: #26DE81;
+  --color-primary-strong: #118C4E;
+  --color-accent-gold: #D2A84A;
+  --color-accent-gold-light: #E8C66A;
+  --color-accent-crimson: #B83A3A;
+  --color-accent-crimson-hover: #D34A46;
+  --color-ivory: #E9E5DC;
+  --color-text: #F5F4EF;
+  --color-text-muted: #B9C8BE;
+  --color-border: rgba(210, 168, 74, 0.28);
+  --color-focus: #D2A84A;
+}
+
+/* Modal Open Isolation */
+body[data-modal-open="true"] {
+  overflow: hidden !important;
+}
+
+body[data-modal-open="true"] .jami-floating-robot-stage {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
 body {
   font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--color-bg);

@@ -38,6 +38,16 @@ import {
   TaskEvidenceSubmitSchema,
   TimetableExceptionCreateSchema,
   ClassSessionCheckinSubmitSchema,
+  TomorrowPlanGenerateRequestSchema,
+  TomorrowPlanEnergyUpdateRequestSchema,
+  TomorrowPlanItemUpdateRequestSchema,
+  ExamStudyPlanGenerateSchema,
+  ExamStudyPlanItemUpdateSchema,
+  ExamStudyPlanReplanConfirmSchema,
+  MistakeCreateSchema,
+  MistakeUpdateSchema,
+  MistakeReviewSubmitSchema,
+  BusyEventExceptionCreateSchema,
 } from '../../shared/schemas';
 import { env, isProduction, isProductionRuntime, isDatabaseRequired, isDemoMode } from '../config/env';
 import { createRateLimiter } from '../middleware/rate-limit';
@@ -52,6 +62,11 @@ import {
 import { subjectRepo } from '../repositories/subject-repository';
 import { timetableRepo } from '../repositories/timetable-repository';
 import { sessionCheckinRepo } from '../repositories/session-checkin-repository';
+import { tomorrowPlanRepo } from '../repositories/tomorrow-plan-repository';
+import { tomorrowPlanService } from '../services/tomorrow-plan-service';
+import { examStudyPlanRepo } from '../repositories/exam-study-plan-repository';
+import { examStudyPlanService } from '../services/exam-study-plan-service';
+import { mistakeRepo } from '../repositories/mistake-repository';
 import { taskRepo } from '../repositories/task-repository';
 import { focusRepo } from '../repositories/focus-repository';
 import { examRepo } from '../repositories/exam-repository';
@@ -418,13 +433,27 @@ apiRouter.post('/auth/login', authRateLimiter, asyncHandler(async (req: Request,
   try {
     user = await userRepo.findByEmail(email);
   } catch (dbErr: any) {
-    if (isProductionRuntime || isDatabaseRequired) {
+    if (dbErr instanceof DbSchemaIncompatibleError || dbErr.code === 'DB_SCHEMA_INCOMPATIBLE') {
+      return sendError(req, res, 503, 'DB_SCHEMA_INCOMPATIBLE', 'Cơ sở dữ liệu chưa đồng bộ lược đồ phiên bản mới nhất.');
+    }
+    if (dbErr instanceof DatabaseUnavailableError || dbErr.code === 'DATABASE_UNAVAILABLE') {
       return sendError(req, res, 503, 'DATABASE_UNAVAILABLE', 'Hệ thống đăng nhập đang tạm gián đoạn. Vui lòng thử lại sau.');
     }
+    return sendError(req, res, 503, 'DATABASE_UNAVAILABLE', 'Hệ thống đăng nhập đang tạm gián đoạn. Vui lòng thử lại sau.');
   }
 
   if (!user) {
     return sendError(req, res, 401, 'INVALID_CREDENTIALS', 'Email hoặc mật khẩu không chính xác');
+  }
+
+  if (user.passwordScheme === 'legacy_unknown') {
+    return sendError(
+      req,
+      res,
+      400,
+      'PASSWORD_RESET_REQUIRED',
+      'Định dạng mật khẩu cũ cần được cập nhật. Vui lòng sử dụng tính năng Quên mật khẩu để thiết lập mật khẩu mới an toàn.'
+    );
   }
 
   const { isValid, needsRehash } = await userRepo.verifyPassword(
@@ -985,6 +1014,7 @@ apiRouter.get('/timetables', requireAuth, asyncHandler(async (req: Request, res:
   const busyEvents = await timetableRepo.getBusyEvents(userId, from, to);
   const availabilityRules = await timetableRepo.getAvailabilityRules(userId);
   const exceptions = await timetableRepo.getExceptions(userId, from, to);
+  const busyExceptions = await timetableRepo.getBusyEventExceptions(userId, from, to);
 
   res.json({
     timetables,
@@ -993,6 +1023,7 @@ apiRouter.get('/timetables', requireAuth, asyncHandler(async (req: Request, res:
     busyEvents,
     availabilityRules,
     exceptions,
+    busyExceptions,
   });
 }));
 
@@ -1097,6 +1128,19 @@ apiRouter.get('/timetables/missed-sessions', requireAuth, asyncHandler(async (re
   res.json({ missedSessions });
 }));
 
+apiRouter.post('/timetables/dismiss-missed-sessions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  await userRepo.touchLastOfflineScan(userId);
+  res.json({ success: true });
+}));
+
+apiRouter.get('/timetables/today-lesson-logs', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const user = (req as any).user;
+  const data = await sessionCheckinRepo.getTodayClassesAndLogs(userId, user?.timezone || 'Asia/Ho_Chi_Minh');
+  res.json(data);
+}));
+
 apiRouter.post('/timetables/session-checkins', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parseResult = ClassSessionCheckinSubmitSchema.safeParse(req.body);
@@ -1106,23 +1150,55 @@ apiRouter.post('/timetables/session-checkins', requireAuth, asyncHandler(async (
   const data = parseResult.data;
   const checkin = await sessionCheckinRepo.createOrUpdateCheckin(userId, data);
 
-  let createdTask: any = null;
-  if (data.createTaskForHomework && data.homework && data.homework.trim() && data.attendanceStatus === 'attended') {
+  let task: any = null;
+  const stableSource = `homework_${data.timetableEntryId}_${data.occurrenceDate}`;
+
+  // Find existing task if any
+  const userTasks = await taskRepo.getByUserId(userId);
+  const existingTask = userTasks.find((t) => t.source === stableSource || (data.taskId && t.id === data.taskId));
+
+  if (data.createTaskForHomework && data.homework && data.homework.trim() && data.attendanceStatus === 'attended' && !data.hasNoHomework) {
     const entry = await timetableRepo.getEntryById(userId, data.timetableEntryId);
-    const title = `BTVN: ${entry?.subjectName ? `${entry.subjectName} - ` : ''}${data.homework.slice(0, 80)}`;
-    createdTask = await taskRepo.create(userId, {
-      title,
-      subjectId: entry?.subjectId,
-      subjectName: entry?.subjectName,
-      status: 'pending',
-      priority: 'high',
-      estimatedMinutes: 45,
-      dueAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
-      objective: `Bài tập về nhà buổi học ngày ${data.occurrenceDate}:\n${data.homework}`,
-    });
+    const subjectName = entry?.subjectName || entry?.title || 'Môn học';
+    const title = `BTVN: ${subjectName} - ${data.homework.slice(0, 80)}`;
+    const dueAt = data.dueAt || new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    const estimatedMinutes = data.estimatedMinutes || 45;
+
+    if (existingTask) {
+      task = await taskRepo.update(userId, existingTask.id, {
+        title,
+        subjectId: entry?.subjectId || existingTask.subjectId,
+        subjectName: subjectName || existingTask.subjectName,
+        dueAt,
+        estimatedMinutes,
+        objective: `Bài tập về nhà buổi học ngày ${data.occurrenceDate}:\n${data.homework}`,
+      });
+    } else {
+      task = await taskRepo.create(userId, {
+        title,
+        subjectId: entry?.subjectId,
+        subjectName,
+        status: 'pending',
+        priority: 'high',
+        estimatedMinutes,
+        dueAt,
+        source: stableSource,
+        objective: `Bài tập về nhà buổi học ngày ${data.occurrenceDate}:\n${data.homework}`,
+      });
+    }
+  } else if (existingTask && (data.hasNoHomework || !data.homework?.trim() || data.attendanceStatus === 'absent')) {
+    // If the task was auto-generated from this checkin and is still pending, cancel/delete it so no orphan task remains
+    if (existingTask.source === stableSource && existingTask.status === 'pending') {
+      await taskRepo.delete(userId, existingTask.id);
+      task = null;
+    } else {
+      task = existingTask;
+    }
+  } else if (existingTask) {
+    task = existingTask;
   }
 
-  res.status(201).json({ success: true, checkin, createdTask });
+  res.status(201).json({ success: true, checkin, task, createdTask: task });
 }));
 
 apiRouter.get('/timetables/session-checkins', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -1137,6 +1213,325 @@ apiRouter.post('/users/heartbeat', requireAuth, asyncHandler(async (req: Request
   const userId = (req as any).userId;
   await userRepo.touchLastActive(userId);
   res.json({ success: true });
+}));
+
+// ==========================================
+// Tomorrow Preparation Plan ("Jami chuẩn bị ngày mai")
+// ==========================================
+
+apiRouter.get('/tomorrow-plan/overview', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const user = await userRepo.findById(userId);
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+
+  const overview = await tomorrowPlanService.getPlanOverview(userId, userTimezone);
+  res.json(overview);
+}));
+
+apiRouter.get('/tomorrow-plan/current', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const user = await userRepo.findById(userId);
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+
+  const dates = tomorrowPlanService.getPlanDates(userTimezone);
+  const plan = await tomorrowPlanRepo.getPlanByDate(userId, dates.planDate);
+  res.json({ plan });
+}));
+
+apiRouter.post('/tomorrow-plan/generate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = TomorrowPlanGenerateRequestSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+
+  const user = await userRepo.findById(userId);
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+
+  const plan = await tomorrowPlanService.generatePlan(userId, {
+    energyLevel: parseResult.data.energyLevel,
+    customAvailableMinutes: parseResult.data.customAvailableMinutes,
+    timezone: userTimezone,
+  });
+
+  res.status(201).json({ plan });
+}));
+
+apiRouter.patch('/tomorrow-plan/:id/energy', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const planId = req.params.id;
+  const parseResult = TomorrowPlanEnergyUpdateRequestSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Mức năng lượng không hợp lệ');
+  }
+
+  const user = await userRepo.findById(userId);
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+
+  const plan = await tomorrowPlanService.updateEnergyAndRegenerate(userId, planId, parseResult.data.energyLevel, userTimezone);
+  res.json({ plan });
+}));
+
+apiRouter.post('/tomorrow-plan/:id/accept', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const planId = req.params.id;
+  const plan = await tomorrowPlanService.acceptPlan(userId, planId);
+  res.json({ success: true, plan });
+}));
+
+apiRouter.post('/tomorrow-plan/:id/dismiss', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const planId = req.params.id;
+  const success = await tomorrowPlanService.dismissPlan(userId, planId);
+  res.json({ success });
+}));
+
+apiRouter.patch('/tomorrow-plan/:id/items/:itemId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { id: planId, itemId } = req.params;
+  const parseResult = TomorrowPlanItemUpdateRequestSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+
+  const item = await tomorrowPlanService.updateItem(userId, planId, itemId, parseResult.data);
+  res.json({ item });
+}));
+
+apiRouter.delete('/tomorrow-plan/:id/items/:itemId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { id: planId, itemId } = req.params;
+  const success = await tomorrowPlanService.deleteItem(userId, planId, itemId);
+  res.json({ success });
+}));
+
+apiRouter.post('/tomorrow-plan/:id/items/:itemId/complete', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { id: planId, itemId } = req.params;
+  const item = await tomorrowPlanService.completeItem(userId, planId, itemId);
+  res.json({ item });
+}));
+
+// ==========================================
+// Exam Study Planner ("Lập kế hoạch ôn kiểm tra tự động")
+// ==========================================
+
+apiRouter.get('/exams/:id/study-plan', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const examId = req.params.id;
+  const plan = await examStudyPlanRepo.getPlanByExamId(userId, examId);
+  res.json({ plan });
+}));
+
+apiRouter.post('/exams/:id/study-plan/generate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const examId = req.params.id;
+  const parseResult = ExamStudyPlanGenerateSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+
+  const user = await userRepo.findById(userId);
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+
+  const plan = await examStudyPlanService.generatePlanForExam(userId, examId, {
+    startDate: parseResult.data.startDate,
+    dailyMinutes: parseResult.data.dailyMinutes,
+    blackoutDates: parseResult.data.blackoutDates,
+    timezone: userTimezone,
+  });
+
+  res.status(201).json({ plan });
+}));
+
+apiRouter.post('/exams/study-plans/:planId/accept', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const planId = req.params.planId;
+  const plan = await examStudyPlanService.acceptPlan(userId, planId);
+  res.json({ success: true, plan });
+}));
+
+apiRouter.post('/exams/study-plans/:planId/dismiss', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const planId = req.params.planId;
+  const success = await examStudyPlanService.dismissPlan(userId, planId);
+  res.json({ success });
+}));
+
+apiRouter.get('/exams/:id/study-plan/missed-proposal', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const examId = req.params.id;
+  const user = await userRepo.findById(userId);
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+
+  const proposal = await examStudyPlanService.detectMissedSessions(userId, examId, userTimezone);
+  res.json({ proposal });
+}));
+
+apiRouter.post('/exams/study-plans/:planId/replan-confirm', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const planId = req.params.planId;
+  const parseResult = ExamStudyPlanReplanConfirmSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+
+  const user = await userRepo.findById(userId);
+  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
+
+  const plan = await examStudyPlanService.confirmReplan(
+    userId,
+    planId,
+    parseResult.data.action,
+    parseResult.data.customSlot,
+    userTimezone
+  );
+
+  res.json({ success: true, plan });
+}));
+
+apiRouter.post('/exams/study-plans/:planId/undo', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const planId = req.params.planId;
+  const plan = await examStudyPlanService.undoPlanVersion(userId, planId);
+  res.json({ success: true, plan });
+}));
+
+apiRouter.patch('/exams/study-plans/:planId/items/:itemId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { planId, itemId } = req.params;
+  const parseResult = ExamStudyPlanItemUpdateSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+
+  const item = await examStudyPlanRepo.updatePlanItem(userId, planId, itemId, parseResult.data);
+  res.json({ item });
+}));
+
+apiRouter.delete('/exams/study-plans/:planId/items/:itemId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { planId, itemId } = req.params;
+  const success = await examStudyPlanRepo.deletePlanItem(userId, planId, itemId);
+  res.json({ success });
+}));
+
+apiRouter.post('/exams/study-plans/:planId/items/:itemId/complete', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { planId, itemId } = req.params;
+  const item = await examStudyPlanService.completePlanItem(userId, planId, itemId);
+  res.json({ item });
+}));
+
+// ==========================================
+// Mistake Notebook ("Sổ lỗi sai cá nhân")
+// ==========================================
+
+apiRouter.get('/mistakes', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { subjectId, topic, status, difficulty, dueOnly, search } = req.query as any;
+
+  const mistakes = await mistakeRepo.getByUserId(userId, {
+    subjectId,
+    topic,
+    status,
+    difficulty,
+    dueOnly: dueOnly === 'true' || dueOnly === true,
+    search,
+  });
+
+  res.json({ mistakes });
+}));
+
+apiRouter.post('/mistakes', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = MistakeCreateSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+
+  const mistake = await mistakeRepo.create(userId, parseResult.data);
+  res.status(201).json({ success: true, mistake });
+}));
+
+apiRouter.get('/mistakes/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const mistake = await mistakeRepo.getById(userId, req.params.id);
+  if (!mistake) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy mục lỗi sai.');
+  }
+  res.json({ mistake });
+}));
+
+apiRouter.patch('/mistakes/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = MistakeUpdateSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu không hợp lệ');
+  }
+
+  const mistake = await mistakeRepo.update(userId, req.params.id, parseResult.data);
+  res.json({ success: true, mistake });
+}));
+
+apiRouter.delete('/mistakes/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await mistakeRepo.delete(userId, req.params.id);
+  res.json({ success });
+}));
+
+apiRouter.post('/mistakes/:id/review', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = MistakeReviewSubmitSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Vui lòng nhập câu trả lời');
+  }
+
+  const mistake = await mistakeRepo.getById(userId, req.params.id);
+  if (!mistake) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy mục lỗi sai.');
+  }
+
+  // Evaluate correctness (case-insensitive trim or exact match)
+  const isCorrect = parseResult.data.answer.trim().toLowerCase() === mistake.correctAnswer.trim().toLowerCase();
+
+  const result = await mistakeRepo.recordReviewAttempt(userId, req.params.id, parseResult.data.answer, isCorrect);
+  res.json({ success: true, isCorrect, entry: result.entry, attempt: result.attempt });
+}));
+
+apiRouter.post('/mistakes/:id/similar', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const mistake = await mistakeRepo.getById(userId, req.params.id);
+  if (!mistake) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy mục lỗi sai.');
+  }
+
+  const similarQuestion = await AiAdapter.generateSimilarMistakeQuestion({
+    subjectName: mistake.subjectName,
+    topic: mistake.topic,
+    originalQuestion: mistake.questionText,
+    correctAnswer: mistake.correctAnswer,
+    difficulty: mistake.difficulty,
+  });
+
+  res.json({ similarQuestion });
+}));
+
+apiRouter.post('/mistakes/:id/explain', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const mistake = await mistakeRepo.getById(userId, req.params.id);
+  if (!mistake) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Không tìm thấy mục lỗi sai.');
+  }
+
+  const explanation = await AiAdapter.explainMistake({
+    questionText: mistake.questionText,
+    selectedAnswer: mistake.selectedAnswer,
+    correctAnswer: mistake.correctAnswer,
+    mistakeReason: mistake.mistakeReason,
+  });
+
+  res.json(explanation);
 }));
 
 // Timetable OCR Import from Image (Preview)
@@ -1285,6 +1680,89 @@ apiRouter.get('/busy-events', requireAuth, asyncHandler(async (req: Request, res
   const { from, to } = req.query as { from?: string; to?: string };
   const events = await timetableRepo.getBusyEvents(userId, from, to);
   res.json({ events });
+}));
+
+// Busy Event Exceptions routes (must place static /exceptions before /:id)
+apiRouter.get('/busy-events/exceptions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { from, to } = req.query as { from?: string; to?: string };
+  const exceptions = await timetableRepo.getBusyEventExceptions(userId, from, to);
+  res.json({ exceptions });
+}));
+
+apiRouter.get('/timetables/busy-events/exceptions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { from, to } = req.query as { from?: string; to?: string };
+  const exceptions = await timetableRepo.getBusyEventExceptions(userId, from, to);
+  res.json({ exceptions });
+}));
+
+apiRouter.post('/busy-events/:id/exceptions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = BusyEventExceptionCreateSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu ngoại lệ không hợp lệ');
+  }
+
+  const { occurrenceDate, reason, exceptionType } = parseResult.data;
+  try {
+    const exception = await timetableRepo.createBusyEventException(
+      userId,
+      req.params.id,
+      occurrenceDate,
+      reason,
+      exceptionType
+    );
+    res.status(201).json({ success: true, exception });
+  } catch (err: any) {
+    if (err.message?.includes('không tồn tại')) {
+      return sendError(req, res, 404, 'BUSY_EVENT_NOT_FOUND', err.message);
+    }
+    throw err;
+  }
+}));
+
+apiRouter.post('/timetables/busy-events/:id/exceptions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parseResult = BusyEventExceptionCreateSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu ngoại lệ không hợp lệ');
+  }
+
+  const { occurrenceDate, reason, exceptionType } = parseResult.data;
+  try {
+    const exception = await timetableRepo.createBusyEventException(
+      userId,
+      req.params.id,
+      occurrenceDate,
+      reason,
+      exceptionType
+    );
+    res.status(201).json({ success: true, exception });
+  } catch (err: any) {
+    if (err.message?.includes('không tồn tại')) {
+      return sendError(req, res, 404, 'BUSY_EVENT_NOT_FOUND', err.message);
+    }
+    throw err;
+  }
+}));
+
+apiRouter.delete('/busy-events/:id/exceptions/:occurrenceDate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await timetableRepo.deleteBusyEventException(userId, req.params.id, req.params.occurrenceDate);
+  if (!success) {
+    return sendError(req, res, 404, 'EXCEPTION_NOT_FOUND', 'Không tìm thấy ngoại lệ sự kiện bận cần xóa');
+  }
+  res.json({ success: true, message: 'Đã hoàn tác nghỉ sự kiện bận' });
+}));
+
+apiRouter.delete('/timetables/busy-events/:id/exceptions/:occurrenceDate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await timetableRepo.deleteBusyEventException(userId, req.params.id, req.params.occurrenceDate);
+  if (!success) {
+    return sendError(req, res, 404, 'EXCEPTION_NOT_FOUND', 'Không tìm thấy ngoại lệ sự kiện bận cần xóa');
+  }
+  res.json({ success: true, message: 'Đã hoàn tác nghỉ sự kiện bận' });
 }));
 
 apiRouter.post('/busy-events', requireAuth, asyncHandler(async (req: Request, res: Response) => {

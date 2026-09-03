@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useVoiceJami } from '../../context/VoiceJamiContext';
+import { useTheme } from '../../context/ThemeContext';
 import { JamiState, RobotVisualState, RobotDisplayMode, mapJamiStateToVisual } from './robot-types';
 import { PremiumFaceMode } from './premium/jami-premium-geometry';
 import { JamiRobotSvg } from './JamiRobotSvg';
@@ -68,6 +69,12 @@ export const RobotJami: React.FC<RobotJamiProps> = ({
   const voiceContext = useVoiceJami();
   const systemReducedMotion = useReducedMotion();
   const effectiveReducedMotion = propReducedMotion || !!systemReducedMotion;
+
+  let isHaiBaTrung = false;
+  try {
+    const themeContext = useTheme();
+    isHaiBaTrung = themeContext?.isHaiBaTrung || false;
+  } catch {}
 
   const robotRef = useRef<HTMLDivElement | null>(null);
   const [isHovered, setIsHovered] = useState(false);
@@ -366,6 +373,16 @@ export const RobotJami: React.FC<RobotJamiProps> = ({
         >
           <badge.icon className="w-3 h-3 text-[#050806]" />
         </div>
+
+        {/* Hai Ba Trung Theme Subtle Accent Badge */}
+        {isHaiBaTrung && (
+          <div
+            className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 rounded-full bg-[#102B20] border border-[#D2A84A] text-[#E8C66A] shadow-md ring-2 ring-[#06130E] z-20 text-[10px] font-black pointer-events-none"
+            title="Chủ đề Hai Bà Trưng"
+          >
+            <span>⚔️</span>
+          </div>
+        )}
       </div>
 
       {/* Mini Control Modal / Panel */}

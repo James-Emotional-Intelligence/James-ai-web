@@ -26,6 +26,7 @@ export const JamiFloatingRobotStage: React.FC<JamiFloatingRobotStageProps> = ({
 }) => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [dragVelocity, setDragVelocity] = useState({ vx: 0, vy: 0 });
 
   const x = useMotionValue(0);
@@ -43,6 +44,23 @@ export const JamiFloatingRobotStage: React.FC<JamiFloatingRobotStageProps> = ({
 
   const lastPosRef = useRef<{ x: number; y: number; time: number }>({ x: 0, y: 0, time: 0 });
   const lastVelocityUpdateRef = useRef<number>(0);
+
+  // Check if any modal is currently open to hide floating elements
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const checkModal = () => {
+      const hasModal = document.body.getAttribute('data-modal-open') === 'true';
+      setIsModalOpen(hasModal);
+    };
+
+    checkModal();
+
+    const observer = new MutationObserver(checkModal);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['data-modal-open'] });
+
+    return () => observer.disconnect();
+  }, []);
 
   // Initialize position on client mount
   useEffect(() => {
@@ -196,15 +214,16 @@ export const JamiFloatingRobotStage: React.FC<JamiFloatingRobotStageProps> = ({
 
   return (
     <motion.div
-      className={`fixed top-0 left-0 z-40 touch-none select-none ${className || ''}`}
+      className={`fixed top-0 left-0 z-40 touch-none select-none jami-floating-robot-stage transition-opacity duration-200 ${className || ''}`}
+      aria-hidden={isModalOpen ? true : undefined}
       style={{
         x,
         y,
         width: robotWidth,
         height: robotHeight,
         cursor: isDragging ? 'grabbing' : 'grab',
-        opacity: isInitialized ? 1 : 0,
-        pointerEvents: isInitialized ? 'auto' : 'none',
+        opacity: isInitialized && !isModalOpen ? 1 : 0,
+        pointerEvents: isInitialized && !isModalOpen ? 'auto' : 'none',
       }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

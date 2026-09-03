@@ -3,6 +3,7 @@ import { timetableRepo } from '../repositories/timetable-repository';
 import { taskRepo } from '../repositories/task-repository';
 import { examRepo } from '../repositories/exam-repository';
 import { userRepo } from '../repositories/user-repository';
+import { tomorrowPlanRepo } from '../repositories/tomorrow-plan-repository';
 import { Notification, NotificationPreferences } from '../../shared/types';
 import { db } from '../db/mysql';
 
@@ -440,7 +441,46 @@ export class NotificationSchedulerService {
       }
     }
 
-    // 4. Batch idempotent creation in MySQL / Repository
+    // 4. Evening Tomorrow Preparation Plan Notification
+    try {
+      const eveningHourFormatter = new Intl.DateTimeFormat('en-GB', {
+        timeZone: timezone,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      const eveningHour = parseInt(eveningHourFormatter.format(now).split(':')[0], 10);
+      const planDateFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      const planDate = planDateFormatter.format(now);
+
+      // Between 18:00 and 21:30
+      if (eveningHour >= 18 && eveningHour <= 21) {
+        scannedCount++;
+        const existingPlan = await tomorrowPlanRepo.getPlanByDate(userId, planDate);
+        if (!existingPlan || (existingPlan.status !== 'dismissed' && existingPlan.status !== 'expired')) {
+          const dedupeKey = `tomorrow_plan_${userId}_${planDate}`;
+          notificationsToCreate.push({
+            userId,
+            type: 'system',
+            title: 'Jami đã chuẩn bị kế hoạch học cho ngày mai.',
+            body: 'Hãy xem kế hoạch ngắn để ôn lại kiến thức và chuẩn bị bài học ngày mai nhẹ nhàng hơn nhé!',
+            actionUrl: '/today',
+            scheduledFor: now.toISOString(),
+            deliveredAt: deliveryTime,
+            dedupeKey,
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[NotificationScheduler] Error scanning tomorrow plan for ${userId}:`, err.message);
+    }
+
+    // 5. Batch idempotent creation in MySQL / Repository
     const createdCount = await notificationRepo.createManyIdempotent(userId, notificationsToCreate);
     const dedupedCount = notificationsToCreate.length - createdCount;
 

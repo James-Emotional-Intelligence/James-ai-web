@@ -7,6 +7,7 @@ import {
   TimetableEntry,
   SchoolTimetable,
   BusyEvent,
+  BusyEventException,
   AvailabilityRule,
   Exam,
   StudyTask,
@@ -29,6 +30,15 @@ import {
   TimetableEntryException,
   ClassSessionCheckin,
   MissedClassSession,
+  TomorrowPreparationPlan,
+  TomorrowPreparationItem,
+  TomorrowPlanOverviewInfo,
+  ExamStudyPlan,
+  ExamStudyPlanItem,
+  ExamStudyPlanReplanProposal,
+  MistakeNotebookEntry,
+  MistakeReviewAttempt,
+  TodayLessonLogItem,
 } from '../../shared/types';
 import { z } from 'zod';
 import { LoginRequestSchema, RegisterRequestSchema } from '../../shared/schemas';
@@ -264,6 +274,7 @@ export const api = {
       busyEvents: BusyEvent[];
       availabilityRules: AvailabilityRule[];
       exceptions?: TimetableEntryException[];
+      busyExceptions?: BusyEventException[];
     }>(`/timetables${query}`);
   },
   createTimetable: (data: Partial<SchoolTimetable>) =>
@@ -303,20 +314,44 @@ export const api = {
     return fetchJson<{ exceptions: TimetableEntryException[] }>(`/timetables/exceptions${query}`);
   },
 
+  // Busy Event Exceptions (Nghỉ tạm thời gian biểu)
+  skipBusyEventThisWeek: (busyEventId: string, occurrenceDate: string, reason?: string) =>
+    fetchJson<{ success: boolean; exception: BusyEventException }>(`/busy-events/${busyEventId}/exceptions`, {
+      method: 'POST',
+      body: JSON.stringify({ occurrenceDate, reason, exceptionType: 'cancelled' }),
+    }),
+  undoSkipBusyEvent: (busyEventId: string, occurrenceDate: string) =>
+    fetchJson<{ success: boolean }>(`/busy-events/${busyEventId}/exceptions/${occurrenceDate}`, {
+      method: 'DELETE',
+    }),
+  getBusyEventExceptions: (params?: { from?: string; to?: string }) => {
+    const query = params ? `?${new URLSearchParams(params as any).toString()}` : '';
+    return fetchJson<{ exceptions: BusyEventException[] }>(`/busy-events/exceptions${query}`);
+  },
+
   // Offline Missed Sessions & Check-ins
   getMissedClassSessions: () =>
     fetchJson<{ missedSessions: MissedClassSession[] }>('/timetables/missed-sessions'),
+  dismissMissedSessions: () =>
+    fetchJson<{ success: boolean }>('/timetables/dismiss-missed-sessions', { method: 'POST' }),
+  getTodayLessonLogs: () =>
+    fetchJson<{ date: string; formattedDate: string; dayOfWeekText: string; classes: TodayLessonLogItem[] }>('/timetables/today-lesson-logs'),
   submitSessionCheckin: (data: {
     timetableEntryId: string;
+    timetableEntryIds?: string[];
     occurrenceDate: string;
     learnedContent?: string;
     homework?: string;
+    hasNoHomework?: boolean;
     reflection?: string;
     understandingLevel?: string;
     attendanceStatus?: 'attended' | 'absent';
     createTaskForHomework?: boolean;
+    dueAt?: string;
+    estimatedMinutes?: number;
+    taskId?: string;
   }) =>
-    fetchJson<{ success: boolean; checkin: ClassSessionCheckin; createdTask?: StudyTask }>('/timetables/session-checkins', {
+    fetchJson<{ success: boolean; checkin: ClassSessionCheckin; createdTask?: StudyTask; task?: StudyTask }>('/timetables/session-checkins', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -326,6 +361,145 @@ export const api = {
   },
   sendHeartbeat: () =>
     fetchJson<{ success: boolean }>('/users/heartbeat', { method: 'POST' }),
+
+  // Tomorrow Preparation Plan ("Jami chuẩn bị ngày mai")
+  getTomorrowPlanOverview: () =>
+    fetchJson<TomorrowPlanOverviewInfo>('/tomorrow-plan/overview'),
+  getTomorrowPlanCurrent: () =>
+    fetchJson<{ plan: TomorrowPreparationPlan | null }>('/tomorrow-plan/current'),
+  generateTomorrowPlan: (data?: { energyLevel?: string; customAvailableMinutes?: number }) =>
+    fetchJson<{ plan: TomorrowPreparationPlan }>('/tomorrow-plan/generate', {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    }),
+  updateTomorrowPlanEnergy: (planId: string, energyLevel: string) =>
+    fetchJson<{ plan: TomorrowPreparationPlan }>(`/tomorrow-plan/${planId}/energy`, {
+      method: 'PATCH',
+      body: JSON.stringify({ energyLevel }),
+    }),
+  acceptTomorrowPlan: (planId: string) =>
+    fetchJson<{ success: boolean; plan: TomorrowPreparationPlan }>(`/tomorrow-plan/${planId}/accept`, {
+      method: 'POST',
+    }),
+  dismissTomorrowPlan: (planId: string) =>
+    fetchJson<{ success: boolean }>(`/tomorrow-plan/${planId}/dismiss`, {
+      method: 'POST',
+    }),
+  updateTomorrowPlanItem: (planId: string, itemId: string, data: Partial<TomorrowPreparationItem>) =>
+    fetchJson<{ item: TomorrowPreparationItem }>(`/tomorrow-plan/${planId}/items/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteTomorrowPlanItem: (planId: string, itemId: string) =>
+    fetchJson<{ success: boolean }>(`/tomorrow-plan/${planId}/items/${itemId}`, {
+      method: 'DELETE',
+    }),
+  completeTomorrowPlanItem: (planId: string, itemId: string) =>
+    fetchJson<{ item: TomorrowPreparationItem }>(`/tomorrow-plan/${planId}/items/${itemId}/complete`, {
+      method: 'POST',
+    }),
+
+  // Exam Study Planner ("Lập kế hoạch ôn kiểm tra tự động")
+  getExamStudyPlan: (examId: string) =>
+    fetchJson<{ plan: ExamStudyPlan | null }>(`/exams/${examId}/study-plan`),
+  generateExamStudyPlan: (
+    examId: string,
+    data?: { startDate?: string; dailyMinutes?: number; blackoutDates?: string[] }
+  ) =>
+    fetchJson<{ plan: ExamStudyPlan }>(`/exams/${examId}/study-plan/generate`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    }),
+  acceptExamStudyPlan: (planId: string) =>
+    fetchJson<{ success: boolean; plan: ExamStudyPlan }>(`/exams/study-plans/${planId}/accept`, {
+      method: 'POST',
+    }),
+  dismissExamStudyPlan: (planId: string) =>
+    fetchJson<{ success: boolean }>(`/exams/study-plans/${planId}/dismiss`, {
+      method: 'POST',
+    }),
+  getExamStudyPlanMissedProposal: (examId: string) =>
+    fetchJson<{ proposal: ExamStudyPlanReplanProposal | null }>(`/exams/${examId}/study-plan/missed-proposal`),
+  confirmExamStudyPlanReplan: (
+    planId: string,
+    data: { action: 'accept' | 'custom_slot' | 'skip_session' | 'keep_as_is'; customSlot?: any }
+  ) =>
+    fetchJson<{ success: boolean; plan: ExamStudyPlan }>(`/exams/study-plans/${planId}/replan-confirm`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  undoExamStudyPlanVersion: (planId: string) =>
+    fetchJson<{ success: boolean; plan: ExamStudyPlan }>(`/exams/study-plans/${planId}/undo`, {
+      method: 'POST',
+    }),
+  updateExamStudyPlanItem: (planId: string, itemId: string, data: Partial<ExamStudyPlanItem>) =>
+    fetchJson<{ item: ExamStudyPlanItem }>(`/exams/study-plans/${planId}/items/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteExamStudyPlanItem: (planId: string, itemId: string) =>
+    fetchJson<{ success: boolean }>(`/exams/study-plans/${planId}/items/${itemId}`, {
+      method: 'DELETE',
+    }),
+  completeExamStudyPlanItem: (planId: string, itemId: string) =>
+    fetchJson<{ item: ExamStudyPlanItem }>(`/exams/study-plans/${planId}/items/${itemId}/complete`, {
+      method: 'POST',
+    }),
+
+  // Mistake Notebook ("Sổ lỗi sai cá nhân")
+  getMistakes: (filters?: {
+    subjectId?: string;
+    topic?: string;
+    status?: string;
+    difficulty?: string;
+    dueOnly?: boolean;
+    search?: string;
+  }) => {
+    const query = filters ? `?${new URLSearchParams(filters as any).toString()}` : '';
+    return fetchJson<{ mistakes: MistakeNotebookEntry[] }>(`/mistakes${query}`);
+  },
+  createMistake: (data: Partial<MistakeNotebookEntry>) =>
+    fetchJson<{ success: boolean; mistake: MistakeNotebookEntry }>('/mistakes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getMistake: (id: string) =>
+    fetchJson<{ mistake: MistakeNotebookEntry }>(`/mistakes/${id}`),
+  updateMistake: (id: string, data: Partial<MistakeNotebookEntry>) =>
+    fetchJson<{ success: boolean; mistake: MistakeNotebookEntry }>(`/mistakes/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteMistake: (id: string) =>
+    fetchJson<{ success: boolean }>(`/mistakes/${id}`, {
+      method: 'DELETE',
+    }),
+  reviewMistake: (id: string, answer: string) =>
+    fetchJson<{
+      success: boolean;
+      isCorrect: boolean;
+      entry: MistakeNotebookEntry;
+      attempt: MistakeReviewAttempt;
+    }>(`/mistakes/${id}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ answer }),
+    }),
+  getSimilarMistakeQuestion: (id: string) =>
+    fetchJson<{
+      similarQuestion: {
+        questionText: string;
+        options?: string[];
+        correctAnswer: string;
+        explanation: string;
+        difficulty: string;
+      };
+    }>(`/mistakes/${id}/similar`, {
+      method: 'POST',
+    }),
+  explainMistake: (id: string) =>
+    fetchJson<{ explanation: string; tips: string[] }>(`/mistakes/${id}/explain`, {
+      method: 'POST',
+    }),
   importTimetableOcr: (imageBase64: string, mimeType?: string) =>
     fetchJson<{
       success: boolean;

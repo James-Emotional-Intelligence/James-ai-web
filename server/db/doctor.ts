@@ -40,7 +40,9 @@ const REQUIRED_TABLES = [
   'subjects',
   'school_timetables',
   'school_timetable_entries',
+  'timetable_entry_exceptions',
   'busy_events',
+  'busy_event_exceptions',
   'availability_rules',
   'exams',
   'exam_topics',
@@ -63,6 +65,13 @@ const REQUIRED_TABLES = [
   'jami_messages',
   'schedule_proposals',
   'execution_checklist_items',
+  'tomorrow_preparation_plans',
+  'tomorrow_preparation_items',
+  'exam_study_plans',
+  'exam_study_plan_items',
+  'exam_study_plan_versions',
+  'mistake_notebook_entries',
+  'mistake_review_attempts',
 ];
 
 export async function runDbDoctor(): Promise<DoctorReport> {
@@ -157,13 +166,25 @@ export async function runDbDoctor(): Promise<DoctorReport> {
         `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'`
       );
       const userColNames = new Set(userCols.map((c) => c.COLUMN_NAME.toLowerCase()));
-      const hasSalt = userColNames.has('password_salt');
-      const hasEmail = userColNames.has('email');
-      const hasHash = userColNames.has('password_hash');
+      const requiredUserCols = [
+        'id',
+        'email',
+        'password_hash',
+        'password_salt',
+        'password_scheme',
+        'display_name',
+        'preferred_name',
+        'timezone',
+        'role',
+        'status',
+        'last_active_at',
+        'created_at',
+      ];
+      const missingUserCols = requiredUserCols.filter((c) => !userColNames.has(c));
       checks.push({
-        name: 'User Password Columns',
-        passed: hasSalt && hasEmail && hasHash,
-        details: hasSalt ? 'email, password_hash, password_salt verified' : 'password_salt missing in users table',
+        name: 'User Auth Columns Integrity',
+        passed: missingUserCols.length === 0,
+        details: missingUserCols.length === 0 ? 'All 12 user runtime columns verified' : `Missing: ${missingUserCols.join(', ')}`,
       });
     }
 
@@ -172,13 +193,26 @@ export async function runDbDoctor(): Promise<DoctorReport> {
         `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_sessions'`
       );
       const sessionColNames = new Set(sessionCols.map((c) => c.COLUMN_NAME.toLowerCase()));
-      const hasTokenHash = sessionColNames.has('token_hash');
-      const hasExpires = sessionColNames.has('expires_at');
-      const hasRevoked = sessionColNames.has('revoked_at');
+      const requiredSessionCols = ['token_hash', 'user_id', 'expires_at', 'revoked_at', 'is_demo', 'user_agent', 'ip_address'];
+      const missingSessionCols = requiredSessionCols.filter((c) => !sessionColNames.has(c));
       checks.push({
         name: 'Auth Sessions Schema Integrity',
-        passed: hasTokenHash && hasExpires && hasRevoked,
-        details: hasTokenHash ? 'token_hash, expires_at, revoked_at verified' : 'auth_sessions columns incomplete',
+        passed: missingSessionCols.length === 0,
+        details: missingSessionCols.length === 0 ? 'token_hash, user_id, expires_at, revoked_at, is_demo, user_agent, ip_address verified' : `Missing: ${missingSessionCols.join(', ')}`,
+      });
+    }
+
+    if (existingTables.has('busy_event_exceptions')) {
+      const excCols = await db.query<any>(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'busy_event_exceptions'`
+      );
+      const excColNames = new Set(excCols.map((c) => c.COLUMN_NAME.toLowerCase()));
+      const requiredExcCols = ['id', 'user_id', 'busy_event_id', 'occurrence_date', 'exception_type'];
+      const missingExcCols = requiredExcCols.filter((c) => !excColNames.has(c));
+      checks.push({
+        name: 'Busy Event Exceptions Schema Integrity',
+        passed: missingExcCols.length === 0,
+        details: missingExcCols.length === 0 ? 'id, user_id, busy_event_id, occurrence_date, exception_type verified' : `Missing: ${missingExcCols.join(', ')}`,
       });
     }
 

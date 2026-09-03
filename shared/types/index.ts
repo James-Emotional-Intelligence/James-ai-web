@@ -11,6 +11,7 @@ export interface User {
   role?: 'user' | 'admin';
   status: 'active' | 'inactive' | 'banned' | 'deleted';
   lastActiveAt?: string;
+  lastOfflineScanAt?: string;
   createdAt: string;
 }
 
@@ -101,6 +102,7 @@ export interface ClassSessionCheckin {
   occurrenceDate: string; // "YYYY-MM-DD"
   learnedContent?: string;
   homework?: string;
+  hasNoHomework?: boolean;
   reflection?: string;
   understandingLevel?: UnderstandingLevel;
   attendanceStatus: SessionAttendanceStatus;
@@ -123,10 +125,99 @@ export interface MissedClassSession {
   room?: string;
 }
 
+export interface TodayLessonLogItem {
+  id: string;
+  timetableEntryId: string;
+  timetableEntryIds: string[];
+  subjectId?: string;
+  subjectName: string;
+  subjectColor?: string;
+  periodLabel: string;
+  startTime: string;
+  endTime: string;
+  room?: string;
+  isSkipped: boolean;
+  skipReason?: string;
+  attendanceStatus: 'attended' | 'absent' | 'unconfirmed';
+  learnedContent?: string;
+  homework?: string;
+  hasNoHomework?: boolean;
+  homeworkDueAt?: string;
+  homeworkEstimatedMinutes?: number;
+  reflection?: string;
+  understandingLevel?: 'very_easy' | 'normal' | 'hard' | 'not_understood';
+  checkinId?: string;
+  linkedTaskId?: string;
+  savedAt?: string;
+}
+
+export type TomorrowPlanEnergyLevel = 'high' | 'normal' | 'low' | 'due_only' | 'skip';
+export type TomorrowPlanStatus = 'draft' | 'accepted' | 'in_progress' | 'completed' | 'dismissed' | 'expired' | 'empty';
+export type TomorrowPlanItemSource =
+  | 'due_task'
+  | 'exam_review'
+  | 'class_checkin_reflection'
+  | 'class_checkin_homework'
+  | 'tomorrow_subject_preview'
+  | 'pack_bag'
+  | 'general_review';
+export type TomorrowPlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'skipped';
+
+export interface TomorrowPreparationItem {
+  id: string;
+  planId: string;
+  subjectId?: string;
+  subjectName?: string;
+  subjectColor?: string;
+  title: string;
+  description?: string;
+  reason?: string;
+  sourceType: TomorrowPlanItemSource;
+  sourceId?: string;
+  priority: 'high' | 'medium' | 'low';
+  plannedMinutes: number;
+  startAt: string; // "19:30"
+  endAt: string;   // "19:50"
+  status: TomorrowPlanItemStatus;
+  sortOrder: number;
+  taskId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TomorrowPreparationPlan {
+  id: string;
+  userId: string;
+  planDate: string;   // "YYYY-MM-DD"
+  targetDate: string; // "YYYY-MM-DD"
+  availableStart: string; // "19:00"
+  availableEnd: string;   // "22:00"
+  energyLevel: TomorrowPlanEnergyLevel;
+  totalMinutes: number;
+  status: TomorrowPlanStatus;
+  generatedAt: string;
+  acceptedAt?: string;
+  completedAt?: string;
+  items: TomorrowPreparationItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TomorrowPlanOverviewInfo {
+  hasPlan: boolean;
+  plan?: TomorrowPreparationPlan;
+  isEvening: boolean;
+  availableFreeMinutes: number;
+  tomorrowSubjectsCount: number;
+  tomorrowSubjects: string[];
+  bannerMessage?: string;
+}
+
 export interface BusyEvent {
   id: string;
   userId: string;
   type: 'extra_class' | 'club' | 'personal' | 'meal' | 'sleep' | 'commute';
+  eventType?: 'extra_class' | 'club' | 'personal' | 'meal' | 'sleep' | 'commute';
   title: string;
   startsAt: string; // ISO String
   endsAt: string;   // ISO String
@@ -139,6 +230,17 @@ export interface BusyEvent {
   subjectId?: string;
   subjectName?: string;
   source?: string;
+}
+
+export interface BusyEventException {
+  id: string;
+  userId: string;
+  busyEventId: string;
+  occurrenceDate: string; // "YYYY-MM-DD"
+  exceptionType: 'cancelled' | 'skip';
+  reason?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AvailabilityRule {
@@ -185,9 +287,143 @@ export interface Exam {
   scopeText: string;
   topics: ExamTopic[];
   milestones?: ExamMilestone[];
+  dailyMinutes?: number;
+  startDate?: string;
+  blackoutDates?: string[];
   status?: 'upcoming' | 'completed' | 'cancelled';
   createdAt?: string;
   updatedAt?: string;
+}
+
+// ==========================================
+// Exam Study Planner & Spaced Repetition Mistakes
+// ==========================================
+
+export type ExamPlanActivityType =
+  | 'theory_review'
+  | 'basic_practice'
+  | 'medium_practice'
+  | 'advanced_practice'
+  | 'mistake_review'
+  | 'mock_test'
+  | 'light_revision';
+
+export type ExamPlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'missed' | 'skipped';
+
+export interface ExamStudyPlanItem {
+  id: string;
+  planId: string;
+  subjectId?: string;
+  subjectName?: string;
+  title: string;
+  description?: string;
+  activityType: ExamPlanActivityType;
+  sourceType: 'exam_scope' | 'mistake_notebook' | 'weak_topic' | 'mock_test';
+  sourceId?: string;
+  priority: 'high' | 'medium' | 'low';
+  plannedDate: string; // "YYYY-MM-DD"
+  startAt: string;     // "HH:mm"
+  endAt: string;       // "HH:mm"
+  plannedMinutes: number;
+  status: ExamPlanItemStatus;
+  completedAt?: string;
+  sortOrder: number;
+  taskId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExamStudyPlanVersion {
+  id: string;
+  planId: string;
+  versionNumber: number;
+  snapshotJson: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface ExamStudyPlan {
+  id: string;
+  userId: string;
+  examId: string;
+  examTitle?: string;
+  subjectId?: string;
+  subjectName?: string;
+  startDate: string;  // "YYYY-MM-DD"
+  targetDate: string; // "YYYY-MM-DD"
+  dailyMinutes: number;
+  status: 'draft' | 'accepted' | 'in_progress' | 'completed' | 'dismissed' | 'expired';
+  currentVersion: number;
+  generatedAt: string;
+  acceptedAt?: string;
+  completedAt?: string;
+  items: ExamStudyPlanItem[];
+  relatedMistakeCount?: number;
+  daysRemaining?: number;
+  totalPlannedMinutes?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExamStudyPlanReplanProposal {
+  planId: string;
+  examTitle: string;
+  missedSession: ExamStudyPlanItem;
+  suggestedSlot: {
+    plannedDate: string;
+    startAt: string;
+    endAt: string;
+  };
+  explanation: string;
+}
+
+export type MistakeReason =
+  | 'knowledge_gap'
+  | 'misread_question'
+  | 'calculation_error'
+  | 'wrong_choice'
+  | 'time_pressure'
+  | 'not_learned_yet'
+  | 'other';
+
+export type MistakeStatus = 'new' | 'reviewing' | 'needs_retry' | 'mastered';
+export type MistakeDifficulty = 'easy' | 'medium' | 'hard';
+export type MistakeSourceType = 'quiz' | 'exam_mock' | 'manual' | 'class_exercise';
+
+export interface MistakeNotebookEntry {
+  id: string;
+  userId: string;
+  subjectId?: string;
+  subjectName?: string;
+  topic: string;
+  questionText: string;
+  questionDataJson?: string;
+  selectedAnswer?: string;
+  correctAnswer: string;
+  mistakeReason: MistakeReason;
+  correctExplanation?: string;
+  difficulty: MistakeDifficulty;
+  sourceType: MistakeSourceType;
+  sourceId?: string;
+  firstMistakeAt: string;
+  lastReviewedAt?: string;
+  nextReviewAt: string;
+  reviewCount: number;
+  correctStreak: number;
+  status: MistakeStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MistakeReviewAttempt {
+  id: string;
+  mistakeEntryId: string;
+  userId: string;
+  answer: string;
+  isCorrect: boolean;
+  reviewedAt: string;
+  nextReviewAt: string;
+  createdAt: string;
 }
 
 export interface ExecutionStep {

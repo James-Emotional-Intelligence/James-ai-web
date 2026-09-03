@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" fill="none">
+  <defs>
+    <radialGradient id="statueGlow" cx="50%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#E8C66A" stop-opacity="0.35"/>
+      <stop offset="60%" stop-color="#19C76F" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#06130E" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldBronze" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF2B2"/>
+      <stop offset="35%" stop-color="#E8C66A"/>
+      <stop offset="70%" stop-color="#D2A84A"/>
+      <stop offset="100%" stop-color="#8C6721"/>
+    </linearGradient>
+    <linearGradient id="elephantGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4B6354"/>
+      <stop offset="50%" stop-color="#2D4235"/>
+      <stop offset="100%" stop-color="#1A2920"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Ambient Glow Behind Statue -->
+  <circle cx="200" cy="240" r="180" fill="url(#statueGlow)" />
+
+  <!-- Elephant / Mount Silhouette Base -->
+  <path d="M70 420 C60 360 90 320 140 300 C180 290 220 300 260 320 C310 340 340 380 330 430 C270 440 130 440 70 420 Z" fill="url(#elephantGradient)" opacity="0.85" />
+  <path d="M120 330 C90 350 70 390 60 440 C80 445 110 445 130 435 C135 390 140 360 150 330 Z" fill="url(#elephantGradient)" />
+  <path d="M280 330 C310 350 330 390 340 440 C320 445 290 445 270 435 C265 390 260 360 250 330 Z" fill="url(#elephantGradient)" />
+
+  <!-- Hai Ba Trung Heroic Silhouettes with Swords & Banners -->
+  <!-- Sister 1 (Front/Center) -->
+  <g transform="translate(140, 110)">
+    <!-- Flowing Cape / Sash -->
+    <path d="M30 60 C-10 90 -20 160 -10 200 C10 180 30 140 40 100 Z" fill="url(#goldBronze)" opacity="0.7" />
+    <!-- Armor & Robe -->
+    <path d="M40 50 C25 80 25 140 35 180 C50 185 70 185 85 180 C95 140 95 80 80 50 Z" fill="url(#goldBronze)" />
+    <!-- Heroic Head & Helmet / Crown -->
+    <circle cx="60" cy="30" r="16" fill="url(#goldBronze)" />
+    <path d="M48 24 C60 10 72 24 72 24 L60 2 Z" fill="#E8C66A" />
+    <!-- Raised Sword / Banner -->
+    <path d="M75 55 L110 10 L115 12 L80 60 Z" fill="#FFF2B2" />
+    <polygon points="108,12 118,5 114,16" fill="#FFF" />
+  </g>
+
+  <!-- Sister 2 (Standing proudly beside) -->
+  <g transform="translate(190, 125)">
+    <!-- Flowing Cape -->
+    <path d="M40 60 C80 90 90 160 80 200 C60 180 40 140 30 100 Z" fill="url(#goldBronze)" opacity="0.6" />
+    <!-- Armor -->
+    <path d="M30 50 C20 80 20 130 30 170 C45 175 60 175 75 170 C85 130 85 80 70 50 Z" fill="url(#goldBronze)" />
+    <!-- Head & Headdress -->
+    <circle cx="50" cy="32" r="15" fill="url(#goldBronze)" />
+    <path d="M40 26 C50 14 60 26 60 26 L50 6 Z" fill="#E8C66A" />
+  </g>
+
+  <!-- Traditional Bronze Drum (Trống Đồng) Star Motif Underneath -->
+  <g transform="translate(200, 440) scale(0.6)" opacity="0.4" stroke="#D2A84A" stroke-width="1.5">
+    <circle cx="0" cy="0" r="80" />
+    <circle cx="0" cy="0" r="65" />
+    <circle cx="0" cy="0" r="45" />
+    <polygon points="0,-45 11,-15 42,-15 17,4 26,34 0,16 -26,34 -17,4 -42,-15 -11,-15" fill="#D2A84A" opacity="0.3" />
+  </g>
+</svg>

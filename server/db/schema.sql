@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
   id VARCHAR(36) PRIMARY KEY,
   email VARCHAR(255) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  password_salt VARCHAR(255) NULL,
+  password_scheme VARCHAR(50) NULL DEFAULT 'scrypt',
   display_name VARCHAR(100) NOT NULL,
   preferred_name VARCHAR(50) NOT NULL,
   locale VARCHAR(10) DEFAULT 'vi-VN',
@@ -16,8 +18,26 @@ CREATE TABLE IF NOT EXISTS users (
   age_band VARCHAR(20) DEFAULT '14-17',
   role VARCHAR(20) DEFAULT 'user',
   status VARCHAR(20) DEFAULT 'active',
+  last_active_at DATETIME(3) NULL,
   created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_users_last_active (last_active_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 1.1 auth_sessions
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id VARCHAR(36) PRIMARY KEY,
+  token_hash VARCHAR(64) NOT NULL UNIQUE,
+  user_id VARCHAR(36) NOT NULL,
+  is_demo BOOLEAN DEFAULT FALSE,
+  expires_at DATETIME(3) NOT NULL,
+  revoked_at DATETIME(3) NULL,
+  user_agent VARCHAR(500) NULL,
+  ip_address VARCHAR(45) NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_auth_sessions_user (user_id),
+  INDEX idx_auth_sessions_lookup (token_hash, revoked_at, expires_at),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 2. refresh_sessions
@@ -114,6 +134,23 @@ CREATE TABLE IF NOT EXISTS busy_events (
   updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   INDEX idx_user_time (user_id, starts_at, ends_at),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 8.1 busy_event_exceptions (Nghỉ tạm thời gian biểu)
+CREATE TABLE IF NOT EXISTS busy_event_exceptions (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  busy_event_id VARCHAR(36) NOT NULL,
+  occurrence_date DATE NOT NULL,
+  exception_type VARCHAR(20) NOT NULL DEFAULT 'cancelled',
+  reason VARCHAR(255) NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uniq_busy_event_occurrence (busy_event_id, occurrence_date),
+  INDEX idx_busy_exceptions_user_date (user_id, occurrence_date),
+  INDEX idx_busy_exceptions_event (busy_event_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (busy_event_id) REFERENCES busy_events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 9. availability_rules

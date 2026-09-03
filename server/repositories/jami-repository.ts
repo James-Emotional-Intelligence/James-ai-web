@@ -402,7 +402,7 @@ export class JamiRepository {
   public async getPreferences(userId: string): Promise<JamiPreferences> {
     if (db.isHealthy()) {
       const rows = await db.query<any>(
-        `SELECT user_id, voice_enabled, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled
+        `SELECT user_id, voice_enabled, sound_effects, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled
          FROM jami_preferences
          WHERE user_id = ?`,
         [userId]
@@ -413,7 +413,7 @@ export class JamiRepository {
         return {
           userId: r.user_id,
           voiceEnabled: Boolean(r.voice_enabled),
-          soundEffects: true,
+          soundEffects: r.sound_effects !== null && r.sound_effects !== undefined ? Boolean(r.sound_effects) : true,
           selectedVoice: r.selected_voice || 'vi-VN-Standard-A',
           animationEnabled: Boolean(r.animation_enabled),
           responseLength: r.response_length || 'balanced',
@@ -447,10 +447,11 @@ export class JamiRepository {
 
     if (db.isHealthy()) {
       await db.execute(
-        `INSERT INTO jami_preferences (user_id, voice_enabled, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO jami_preferences (user_id, voice_enabled, sound_effects, selected_voice, animation_enabled, response_length, preferred_address, memory_enabled)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            voice_enabled = VALUES(voice_enabled),
+           sound_effects = VALUES(sound_effects),
            selected_voice = VALUES(selected_voice),
            animation_enabled = VALUES(animation_enabled),
            response_length = VALUES(response_length),
@@ -459,6 +460,7 @@ export class JamiRepository {
         [
           userId,
           updated.voiceEnabled ? 1 : 0,
+          updated.soundEffects ? 1 : 0,
           updated.selectedVoice,
           updated.animationEnabled ? 1 : 0,
           updated.responseLength,

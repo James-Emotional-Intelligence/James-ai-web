@@ -13,6 +13,8 @@ import {
   Send,
   AlertTriangle,
   Flame,
+  ArrowLeft,
+  Sparkles,
 } from 'lucide-react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
@@ -27,7 +29,15 @@ export const FocusTimerPage: React.FC = () => {
   const navigate = useNavigate();
 
   const queryTaskId = searchParams.get('taskId') || undefined;
-  const queryMinutes = searchParams.get('minutes') ? parseInt(searchParams.get('minutes')!, 10) : undefined;
+  const queryPlanItemId = searchParams.get('planItemId') || undefined;
+  const queryPlanId = searchParams.get('planId') || undefined;
+  const queryTitle = searchParams.get('title') || searchParams.get('taskTitle') || undefined;
+  const querySubject = searchParams.get('subject') || searchParams.get('subjectName') || undefined;
+  const querySubjectId = searchParams.get('subjectId') || undefined;
+  const rawMinutes = searchParams.get('minutes') || searchParams.get('duration');
+  const rawReturnTo = searchParams.get('returnTo');
+  const returnTo = rawReturnTo && rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '/today';
+  const queryMinutes = rawMinutes ? parseInt(rawMinutes, 10) : undefined;
 
   const initialMode: TimerMode =
     queryMinutes === 15 ? '15' : queryMinutes === 25 ? '25' : queryMinutes === 45 ? '45' : queryMinutes === 60 ? '60' : queryMinutes ? 'custom' : '45';
@@ -43,7 +53,7 @@ export const FocusTimerPage: React.FC = () => {
   const [secondsRemaining, setSecondsRemaining] = useState<number>(initialTotalSeconds);
   const [timerState, setTimerState] = useState<'ready' | 'running' | 'paused' | 'break' | 'completed' | 'abandoned'>('ready');
   const [pauseCount, setPauseCount] = useState(0);
-  const [sessionNotes, setSessionNotes] = useState('');
+  const [sessionNotes, setSessionNotes] = useState<string>(queryTitle || (querySubject ? `Tập trung môn ${querySubject}` : ''));
   const [isMuted, setIsMuted] = useState(false);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
 
@@ -52,6 +62,8 @@ export const FocusTimerPage: React.FC = () => {
   const [linkedTask, setLinkedTask] = useState<StudyTask | null>(null);
   const [tasksList, setTasksList] = useState<StudyTask[]>([]);
   const [isActionLoading, setIsActionLoading] = useState(false);
+
+  const isPlanItemCompletedRef = useRef(false);
 
   // Timestamp-based truth
   const targetEndTimeRef = useRef<number | null>(null);
@@ -323,6 +335,21 @@ export const FocusTimerPage: React.FC = () => {
     setActiveSessionId(null);
   };
 
+  const completePlanItemHelper = useCallback(async () => {
+    if (!queryPlanItemId || isPlanItemCompletedRef.current) return;
+    if (!queryPlanId) {
+      console.warn('[FocusTimer] Missing queryPlanId for planItemId:', queryPlanItemId);
+      return;
+    }
+    try {
+      await api.completeTomorrowPlanItem(queryPlanId, queryPlanItemId);
+      isPlanItemCompletedRef.current = true;
+    } catch (err: any) {
+      console.error('[FocusTimer] completeTomorrowPlanItem failed:', err);
+      setSyncWarning(err.message || 'Không thể cập nhật trạng thái mục kế hoạch chuẩn bị.');
+    }
+  }, [queryPlanId, queryPlanItemId]);
+
   const handleCompleteEarly = async () => {
     if (isActionLoading) return;
     setIsActionLoading(true);
@@ -331,6 +358,7 @@ export const FocusTimerPage: React.FC = () => {
     if (activeSessionId) {
       try {
         await api.completeFocusSession(activeSessionId, sessionNotes || 'Hoàn tất sớm theo yêu cầu');
+        await completePlanItemHelper();
         setTimerState('completed');
         confetti({ particleCount: 90, spread: 60 });
         playTone();
@@ -341,6 +369,7 @@ export const FocusTimerPage: React.FC = () => {
         setIsActionLoading(false);
       }
     } else {
+      await completePlanItemHelper();
       setTimerState('completed');
       confetti({ particleCount: 90, spread: 60 });
       playTone();
@@ -378,9 +407,14 @@ export const FocusTimerPage: React.FC = () => {
             // Transition to break
             if (activeSessionId) {
               api.completeFocusSession(activeSessionId, sessionNotes || 'Hoàn thành phiên tập trung')
-                .then(() => notifyOtherTabs())
+                .then(async () => {
+                  await completePlanItemHelper();
+                  notifyOtherTabs();
+                })
                 .catch(() => {});
               setActiveSessionId(null);
+            } else {
+              completePlanItemHelper();
             }
             setPhase('break');
             const breakSecs = getPhaseDurationSeconds(mode, 'break', customMinutes, customBreakMinutes);
@@ -399,7 +433,7 @@ export const FocusTimerPage: React.FC = () => {
       }, 500);
     }
     return () => clearInterval(interval);
-  }, [timerState, phase, mode, activeSessionId, sessionNotes, customMinutes, customBreakMinutes, playTone, getPhaseDurationSeconds]);
+  }, [timerState, phase, mode, activeSessionId, sessionNotes, customMinutes, customBreakMinutes, completePlanItemHelper, playTone, getPhaseDurationSeconds]);
 
   const mins = Math.floor(secondsRemaining / 60);
   const secs = secondsRemaining % 60;
@@ -407,12 +441,25 @@ export const FocusTimerPage: React.FC = () => {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* Top Banner */}
-      <div className="text-center space-y-1.5">
+      {/* Top Bar with Back Button */}
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => navigate(returnTo)}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#101A13] hover:bg-[#142319] border border-[rgba(34,197,94,0.25)] text-xs font-bold text-[#86EFAC] hover:text-[#F3FAF5] transition-all cursor-pointer shadow-sm"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Quay lại trang trước</span>
+        </button>
+
         <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#101A13] border border-[rgba(34,197,94,0.3)] text-xs font-bold text-[#86EFAC]">
           <Clock className="w-3.5 h-3.5 text-[#22C55E]" />
           <span>Hẹn Giờ Tập Trung</span>
         </div>
+      </div>
+
+      {/* Top Banner */}
+      <div className="text-center space-y-1.5">
         <h1 className="text-2xl sm:text-3xl font-black text-[#F3FAF5] tracking-wide">
           Không Gian Tự Học & Tập Trung Cao Độ
         </h1>
@@ -421,15 +468,44 @@ export const FocusTimerPage: React.FC = () => {
         </p>
       </div>
 
+      {/* Linked Tomorrow Plan Item Banner */}
+      {queryPlanItemId && (
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-[#0C1F16] via-[#10291B] to-[#0A1A10] border-2 border-[#22C55E]/40 flex items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#14532D] border border-[#22C55E]/40 flex items-center justify-center text-[#86EFAC] shrink-0">
+              <Sparkles className="w-5 h-5 text-[#22C55E]" />
+            </div>
+            <div>
+              <div className="inline-flex items-center gap-1 text-[10px] font-black text-[#86EFAC] uppercase tracking-wider">
+                <span>Kế Hoạch Chuẩn Bị Tối Nay</span>
+                {querySubject && <span className="text-[#F3FAF5]">• {querySubject}</span>}
+              </div>
+              <div className="text-xs sm:text-sm font-black text-[#F3FAF5]">
+                {queryTitle || 'Mục chuẩn bị bài'}
+              </div>
+              <div className="text-[11px] text-[#A9B8AE]">
+                Thời lượng đề xuất: {queryMinutes || 25} phút
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate(returnTo)}
+            className="text-xs text-[#86EFAC] hover:underline font-bold shrink-0"
+          >
+            Đổi mục khác
+          </button>
+        </div>
+      )}
+
       {/* Linked Task Banner */}
-      {linkedTask && (
+      {linkedTask && !queryPlanItemId && (
         <div className="p-4 rounded-2xl bg-[#101A13] border border-[#22C55E]/30 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <BookOpen className="w-5 h-5 text-[#22C55E] shrink-0" />
             <div>
               <div className="text-xs font-black text-[#F3FAF5]">{linkedTask.title}</div>
               <div className="text-[11px] text-[#A9B8AE]">
-                Môn: {linkedTask.subjectName || 'Tự học'} • Ước tính: {linkedTask.estimatedMinutes} phút
+                Môn: {linkedTask.subjectName || querySubject || 'Tự học'} • Ước tính: {linkedTask.estimatedMinutes} phút
               </div>
             </div>
           </div>
@@ -454,23 +530,38 @@ export const FocusTimerPage: React.FC = () => {
       <div className="bg-[#0B120D] p-3 rounded-2xl border border-[rgba(34,197,94,0.2)] flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2 text-[#86EFAC] font-bold">
           <BookOpen className="w-4 h-4 text-[#22C55E]" />
-          <span>Liên kết nhiệm vụ:</span>
+          <span>Liên kết nhiệm vụ / Kế hoạch:</span>
         </div>
         <select
-          value={linkedTaskId || ''}
+          value={linkedTaskId || (queryPlanItemId ? `plan_${queryPlanItemId}` : '')}
           onChange={(e) => {
             const val = e.target.value || undefined;
-            setLinkedTaskId(val);
-            if (!val) setLinkedTask(null);
+            if (val && val.startsWith('plan_')) {
+              setLinkedTaskId(undefined);
+              setLinkedTask(null);
+            } else {
+              setLinkedTaskId(val);
+              if (!val) setLinkedTask(null);
+            }
           }}
           className="bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] rounded-xl px-3 py-1.5 text-xs font-bold focus:outline-none focus:border-[#22C55E] cursor-pointer [&>option]:bg-[#101A13] [&>option]:text-[#F3FAF5] max-w-xs md:max-w-md truncate"
         >
+          {queryPlanItemId && (
+            <option value={`plan_${queryPlanItemId}`}>
+              🎯 [Kế hoạch tối nay] {querySubject ? `${querySubject} - ` : ''}{queryTitle || 'Mục chuẩn bị'} ({queryMinutes || 25}p)
+            </option>
+          )}
           <option value="">-- Tập trung tự do (không liên kết bài tập) --</option>
           {tasksList.map((t) => (
             <option key={t.id} value={t.id}>
               [{t.subjectName || 'Môn học'}] {t.title} ({t.estimatedMinutes}p)
             </option>
           ))}
+          {linkedTaskId && !tasksList.some((t) => t.id === linkedTaskId) && (
+            <option value={linkedTaskId}>
+              [{linkedTask?.subjectName || querySubject || 'Nhiệm vụ'}] {linkedTask?.title || queryTitle || linkedTaskId} ({linkedTask?.estimatedMinutes || queryMinutes || 25}p)
+            </option>
+          )}
         </select>
       </div>
 

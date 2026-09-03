@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" fill="none">
+  <defs>
+    <linearGradient id="skyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#081E15"/>
+      <stop offset="60%" stop-color="#0B2B1E"/>
+      <stop offset="100%" stop-color="#06130E"/>
+    </linearGradient>
+    <linearGradient id="monumentGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF5C2"/>
+      <stop offset="40%" stop-color="#E8C66A"/>
+      <stop offset="80%" stop-color="#B88A2E"/>
+      <stop offset="100%" stop-color="#5C410F"/>
+    </linearGradient>
+    <radialGradient id="sunGlow" cx="65%" cy="35%" r="40%">
+      <stop offset="0%" stop-color="#E8C66A" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#081E15" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Campus Courtyard Background -->
+  <rect width="800" height="500" fill="url(#skyGrad)"/>
+  <circle cx="520" cy="180" r="260" fill="url(#sunGlow)"/>
+
+  <!-- Ancient Trees & Courtyard Architecture Silhouette -->
+  <path d="M0 500 L0 380 Q100 350 220 370 Q350 390 500 360 Q650 340 800 380 L800 500 Z" fill="#040D09"/>
+  <!-- Trees Left -->
+  <path d="M40 380 C30 310 70 260 110 240 C160 210 190 270 200 370 Z" fill="#071911" opacity="0.8"/>
+  <path d="M120 380 C110 290 160 230 220 220 C270 210 300 290 310 370 Z" fill="#092418" opacity="0.6"/>
+
+  <!-- Monument Pedestal -->
+  <polygon points="440,430 640,430 660,470 420,470" fill="#143324" stroke="#D2A84A" stroke-width="1.5" stroke-opacity="0.4"/>
+  <polygon points="460,390 620,390 640,430 440,430" fill="#1C4531" stroke="#D2A84A" stroke-width="1.5" stroke-opacity="0.6"/>
+
+  <!-- Hai Ba Trung Statue on Pedestal -->
+  <g transform="translate(460, 140) scale(0.65)">
+    <!-- Elephant silhouette base -->
+    <path d="M20 350 C10 280 40 240 90 220 C140 210 180 220 230 250 C270 280 290 320 280 370 Z" fill="#1A3B2B"/>
+    <!-- Figures of Hai Ba Trung -->
+    <path d="M110 90 C90 130 90 200 105 240 C125 245 155 245 175 240 C190 200 190 130 170 90 Z" fill="url(#monumentGold)"/>
+    <circle cx="140" cy="70" r="22" fill="url(#monumentGold)"/>
+    <path d="M125 60 C140 40 155 60 155 60 L140 30 Z" fill="#FFF5C2"/>
+    <!-- Sword -->
+    <path d="M165 95 L215 30 L220 34 L175 105 Z" fill="#FFF5C2"/>
+
+    <!-- Sister 2 -->
+    <path d="M175 110 C160 140 160 190 170 230 C185 235 210 235 225 230 C235 190 235 140 220 110 Z" fill="url(#monumentGold)" opacity="0.9"/>
+    <circle cx="198" cy="85" r="20" fill="url(#monumentGold)"/>
+  </g>
+
+  <!-- Soft Fog & Lighting Gradients -->
+  <rect y="420" width="800" height="80" fill="url(#skyGrad)" opacity="0.6"/>
+</svg>
