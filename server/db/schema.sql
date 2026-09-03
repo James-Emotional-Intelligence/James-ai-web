@@ -565,3 +565,81 @@ CREATE TABLE IF NOT EXISTS data_requests (
   error_code VARCHAR(50) NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 35. book_chapters (Mục lục & Chương sách Sách mềm)
+CREATE TABLE IF NOT EXISTS book_chapters (
+  id VARCHAR(64) PRIMARY KEY,
+  material_id VARCHAR(64) NOT NULL,
+  parent_id VARCHAR(64) NULL,
+  ordinal INT NOT NULL DEFAULT 1,
+  title VARCHAR(255) NOT NULL,
+  start_page INT NOT NULL DEFAULT 1,
+  end_page INT NOT NULL DEFAULT 1,
+  source_anchor VARCHAR(100) NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_chapters_material_ord (material_id, ordinal),
+  FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 36. book_chunks (Đoạn ngữ nghĩa có trích dẫn trang & chương cho RAG/Search)
+CREATE TABLE IF NOT EXISTS book_chunks (
+  id VARCHAR(64) PRIMARY KEY,
+  material_id VARCHAR(64) NOT NULL,
+  chapter_id VARCHAR(64) NULL,
+  ordinal INT NOT NULL DEFAULT 1,
+  text MEDIUMTEXT NOT NULL,
+  page_start INT NOT NULL DEFAULT 1,
+  page_end INT NOT NULL DEFAULT 1,
+  token_count INT DEFAULT 0,
+  content_hash VARCHAR(64) NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_book_chunks_mat_ord (material_id, ordinal),
+  INDEX idx_book_chunks_chapter (chapter_id),
+  FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 37. book_progress (Tiến độ đọc sách cá nhân)
+CREATE TABLE IF NOT EXISTS book_progress (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  material_id VARCHAR(64) NOT NULL,
+  chapter_id VARCHAR(64) NULL,
+  page INT NOT NULL DEFAULT 1,
+  percentage DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_book_progress_user_mat (user_id, material_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 38. book_bookmarks (Dấu trang)
+CREATE TABLE IF NOT EXISTS book_bookmarks (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  material_id VARCHAR(64) NOT NULL,
+  chapter_id VARCHAR(64) NULL,
+  page INT NOT NULL DEFAULT 1,
+  title VARCHAR(255) NOT NULL,
+  source_anchor VARCHAR(100) NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_bookmarks_user_mat (user_id, material_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 39. book_highlights (Tô sáng & Ghi chú trang sách)
+CREATE TABLE IF NOT EXISTS book_highlights (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  material_id VARCHAR(64) NOT NULL,
+  chapter_id VARCHAR(64) NULL,
+  page INT NOT NULL DEFAULT 1,
+  selected_text TEXT NOT NULL,
+  note TEXT NULL,
+  color VARCHAR(30) DEFAULT 'yellow',
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_highlights_user_mat (user_id, material_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

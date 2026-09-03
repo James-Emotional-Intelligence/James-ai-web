@@ -48,6 +48,11 @@ import {
   MistakeUpdateSchema,
   MistakeReviewSubmitSchema,
   BusyEventExceptionCreateSchema,
+  BookUploadIntentSchema,
+  BookProgressUpdateSchema,
+  BookBookmarkCreateSchema,
+  BookHighlightCreateSchema,
+  BookStudyAidRequestSchema,
 } from '../../shared/schemas';
 import { env, isProduction, isProductionRuntime, isDatabaseRequired, isDemoMode } from '../config/env';
 import { createRateLimiter } from '../middleware/rate-limit';
@@ -68,6 +73,10 @@ import { examStudyPlanRepo } from '../repositories/exam-study-plan-repository';
 import { examStudyPlanService } from '../services/exam-study-plan-service';
 import { mistakeRepo } from '../repositories/mistake-repository';
 import { taskRepo } from '../repositories/task-repository';
+import { bookRepo } from '../repositories/book-repository';
+import { bookParserService } from '../services/book-parser-service';
+import { bookStudyAidService } from '../services/book-study-aid-service';
+import { materialWorker } from '../services/material-worker-service';
 import { focusRepo } from '../repositories/focus-repository';
 import { examRepo } from '../repositories/exam-repository';
 import { quizRepo } from '../repositories/quiz-repository';
@@ -210,19 +219,21 @@ apiRouter.get('/health/ready', asyncHandler(async (req: Request, res: Response) 
   const doctor = await runDbDoctor();
   const isHealthy = doctor.status === 'healthy';
 
-  if (!isHealthy) {
+  if (!isHealthy && isProduction) {
     return res.status(503).json({
       status: 'unhealthy',
       database: doctor.status,
-      details: doctor,
+      timestamp: new Date().toISOString(),
     });
   }
 
   res.json({
     status: 'ready',
-    mode: AiAdapter.isConfigured() ? 'production_openai' : 'demo_mode',
+    mode: env.APP_MODE,
     database: doctor.status,
-    details: doctor,
+    aiConfigured: AiAdapter.isConfigured(),
+    storageConfigured: Boolean(env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID),
+    timestamp: new Date().toISOString(),
   });
 }));
 
@@ -2693,6 +2704,205 @@ apiRouter.delete('/materials/:id', requireAuth, asyncHandler(async (req: Request
   res.json({ success });
 }));
 
+// ==========================================
+// Sách Mềm (Soft Books) Subsystem Routes
+// ==========================================
+
+apiRouter.post('/materials/books/upload-intent', requireAuth, createRateLimiter(60000, 20, 'book_upload', { useUserId: true }), asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parsed = BookUploadIntentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: { code: 'VALIDATION_ERROR', message: 'Thông tin sách không hợp lệ.', details: parsed.error.issues },
+    });
+  }
+
+  const intent = await bookRepo.createBookUploadIntent(userId, parsed.data);
+  res.json(intent);
+}));
+
+apiRouter.post('/materials/books/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { sizeBytes, sha256, detectedMime } = req.body || {};
+  const ok = await bookRepo.finalizeUpload(userId, req.params.id, {
+    sizeBytes: Number(sizeBytes) || 0,
+    sha256,
+    detectedMime,
+  });
+  if (!ok) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm để hoàn tất tải lên.' } });
+  }
+
+  // Trigger background job poll immediately
+  materialWorker.pollJobs().catch(() => {});
+
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  res.json({ success: true, book });
+}));
+
+apiRouter.get('/materials/books', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { search, subjectId, status, limit, offset } = req.query;
+  const result = await bookRepo.getBooksByUserId(userId, {
+    search: search ? String(search) : undefined,
+    subjectId: subjectId ? String(subjectId) : undefined,
+    status: status ? String(status) : undefined,
+    limit: limit ? Number(limit) : undefined,
+    offset: offset ? Number(offset) : undefined,
+  });
+  res.json(result);
+}));
+
+apiRouter.get('/materials/books/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
+  const progress = await bookRepo.getProgress(userId, req.params.id);
+  res.json({ book, progress });
+}));
+
+apiRouter.delete('/materials/books/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await bookRepo.deleteBook(userId, req.params.id);
+  res.json({ success });
+}));
+
+apiRouter.get('/materials/books/:id/status', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
+  res.json({
+    status: book.processingStatus,
+    progress: book.processingProgress,
+    pageCount: book.pageCount,
+    chapterCount: book.chapterCount,
+    errorMessage: book.errorMessage,
+  });
+}));
+
+apiRouter.post('/materials/books/:id/retry-processing', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await materialWorker.retryJob(userId, req.params.id);
+  if (!success) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách để xử lý lại.' } });
+  }
+  materialWorker.pollJobs().catch(() => {});
+  res.json({ success: true, message: 'Đã đưa sách vào hàng đợi xử lý lại.' });
+}));
+
+apiRouter.get('/materials/books/:id/chapters', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
+  const chapters = await bookRepo.getChapters(req.params.id);
+  res.json({ chapters });
+}));
+
+apiRouter.get('/materials/books/:id/read', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
+  const page = Number(req.query.page) || 1;
+  const chapterId = req.query.chapterId ? String(req.query.chapterId) : undefined;
+  const chunks = await bookRepo.getChunks(req.params.id, { chapterId, startPage: page, endPage: page });
+  res.json({ page, chunks, pageCount: book.pageCount || 1 });
+}));
+
+apiRouter.get('/materials/books/:id/search', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const q = String(req.query.q || '').trim();
+  if (!q) {
+    return res.json({ results: [] });
+  }
+  const chapterId = req.query.chapterId ? String(req.query.chapterId) : undefined;
+  const page = req.query.page ? Number(req.query.page) : undefined;
+  const results = await bookRepo.searchChunks(userId, req.params.id, q, chapterId, page);
+  res.json({ results });
+}));
+
+apiRouter.get('/materials/books/:id/progress', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const progress = await bookRepo.getProgress(userId, req.params.id);
+  res.json({ progress });
+}));
+
+apiRouter.put('/materials/books/:id/progress', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parsed = BookProgressUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
+  }
+  const progress = await bookRepo.saveProgress(userId, req.params.id, parsed.data.page, parsed.data.chapterId || undefined, parsed.data.percentage);
+  res.json({ progress });
+}));
+
+apiRouter.get('/materials/books/:id/bookmarks', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const bookmarks = await bookRepo.getBookmarks(userId, req.params.id);
+  res.json({ bookmarks });
+}));
+
+apiRouter.post('/materials/books/:id/bookmarks', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parsed = BookBookmarkCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
+  }
+  const bookmark = await bookRepo.createBookmark(userId, req.params.id, parsed.data);
+  res.json({ bookmark });
+}));
+
+apiRouter.delete('/materials/books/:id/bookmarks/:bookmarkId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await bookRepo.deleteBookmark(userId, req.params.bookmarkId);
+  res.json({ success });
+}));
+
+apiRouter.get('/materials/books/:id/highlights', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const highlights = await bookRepo.getHighlights(userId, req.params.id);
+  res.json({ highlights });
+}));
+
+apiRouter.post('/materials/books/:id/highlights', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parsed = BookHighlightCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
+  }
+  const highlight = await bookRepo.createHighlight(userId, req.params.id, parsed.data as any);
+  res.json({ highlight });
+}));
+
+apiRouter.delete('/materials/books/:id/highlights/:highlightId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const success = await bookRepo.deleteHighlight(userId, req.params.highlightId);
+  res.json({ success });
+}));
+
+apiRouter.post(
+  '/materials/books/:id/study-aids',
+  requireAuth,
+  createRateLimiter(60000, 10, 'book_study_aid', { useUserId: true, maxConcurrency: 3, dailyQuota: 100 }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = (req as any).userId;
+    const parsed = BookStudyAidRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
+    }
+    const result = await bookStudyAidService.generateStudyAid(userId, req.params.id, parsed.data);
+    res.json(result);
+  })
+);
+
 // Outlines Subsystem Routes (6.2)
 apiRouter.get('/outlines', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
@@ -3159,6 +3369,26 @@ apiRouter.post('/jami/voice/log', requireAuth, asyncHandler(async (req: Request,
 apiRouter.post('/jami/realtime/client-secret', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const result = await voiceSessionService.createRealtimeClientSecret(userId);
+  res.json(result);
+}));
+
+apiRouter.post('/jami/realtime/calls', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const sdpOffer = req.body?.sdpOffer || req.body?.sdp || (typeof req.body === 'string' ? req.body : '');
+  if (!sdpOffer) {
+    return sendError(req, res, 400, 'INVALID_SDP', 'Thiếu nội dung SDP offer');
+  }
+  const result = await voiceSessionService.exchangeRealtimeSdp(userId, sdpOffer);
+  res.json(result);
+}));
+
+apiRouter.post('/voice/realtime/calls', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const sdpOffer = req.body?.sdpOffer || req.body?.sdp || (typeof req.body === 'string' ? req.body : '');
+  if (!sdpOffer) {
+    return sendError(req, res, 400, 'INVALID_SDP', 'Thiếu nội dung SDP offer');
+  }
+  const result = await voiceSessionService.exchangeRealtimeSdp(userId, sdpOffer);
   res.json(result);
 }));
 

@@ -77,7 +77,7 @@ const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
   OPENAI_TEXT_MODEL: z.string().default('gpt-4o-mini'),
-  OPENAI_REALTIME_MODEL: z.string().default('gpt-4o-realtime-preview'),
+  OPENAI_REALTIME_MODEL: z.string().default('gpt-realtime'),
   OPENAI_TRANSCRIBE_MODEL: z.string().default('whisper-1'),
   OPENAI_VOICE: z.string().default('alloy'),
 
@@ -88,6 +88,15 @@ const EnvSchema = z.object({
   R2_BUCKET_NAME: z.string().default('jami-materials'),
   R2_ENDPOINT: z.string().optional(),
   R2_PUBLIC_URL: z.string().optional(),
+
+  // Soft Books (Sách Mềm) Limits & Quotas
+  BOOK_MAX_UPLOAD_MB: z.preprocess((val) => (val ? Number(val) : 100), z.number().default(100)),
+  BOOK_STORAGE_QUOTA_MB: z.preprocess((val) => (val ? Number(val) : 1000), z.number().default(1000)),
+  BOOK_MAX_PAGES: z.preprocess((val) => (val ? Number(val) : 1500), z.number().default(1500)),
+  BOOK_MAX_UNCOMPRESSED_MB: z.preprocess((val) => (val ? Number(val) : 500), z.number().default(500)),
+  BOOK_MAX_ZIP_ENTRIES: z.preprocess((val) => (val ? Number(val) : 10000), z.number().default(10000)),
+  AI_DAILY_QUOTA: z.preprocess((val) => (val ? Number(val) : 100), z.number().default(100)),
+  AI_MAX_CONCURRENCY_PER_USER: z.preprocess((val) => (val ? Number(val) : 3), z.number().default(3)),
 });
 
 export type EnvConfig = z.infer<typeof EnvSchema>;
@@ -101,48 +110,63 @@ export function parseEnv(): EnvConfig {
 
   const parsed = result.data;
   const isProdRuntime = parsed.NODE_ENV === 'production';
-  const isDbRequired = parsed.APP_MODE === 'production' && parsed.NODE_ENV !== 'test';
+  const effectiveProduction = isProdRuntime || parsed.APP_MODE === 'production';
   const isLocalhost = parsed.APP_BASE_URL.includes('localhost') || parsed.APP_BASE_URL.includes('127.0.0.1');
 
-  if (isDbRequired && parsed.NODE_ENV !== 'test') {
-    const missing: string[] = [];
-    if (!parsed.AIVEN_MYSQL_HOST) missing.push('AIVEN_MYSQL_HOST');
-    if (!parsed.AIVEN_APP_USER) missing.push('AIVEN_APP_USER');
-    if (!parsed.AIVEN_APP_PASSWORD) missing.push('AIVEN_APP_PASSWORD');
-
-    if (missing.length > 0) {
-      throw new Error(`[JAMI Config ERROR] Database-required mode (APP_MODE=production) requires valid Aiven MySQL credentials. Missing: ${missing.join(', ')}`);
-    }
-
-    const hasCa = Boolean(parsed.AIVEN_CA_CERT || parsed.AIVEN_CA_CERT_PATH);
-    if (parsed.AIVEN_MYSQL_HOST && !hasCa && isProdRuntime) {
-      throw new Error('[JAMI Config ERROR: CONFIG_AIVEN_CA_MISSING] Production environment connecting to Aiven MySQL requires AIVEN_CA_CERT or AIVEN_CA_CERT_PATH.');
-    }
-  }
-
-  if (isProdRuntime) {
+  if (effectiveProduction && parsed.NODE_ENV !== 'test') {
+    // 1. Mandatory Strong Session Secret
     if (
       !parsed.SESSION_SECRET ||
       parsed.SESSION_SECRET === 'jami-ai-production-secret-key-32-chars-min' ||
       parsed.SESSION_SECRET.length < 32
     ) {
-      throw new Error('[JAMI Config ERROR] SESSION_SECRET must be set to a secure random string of at least 32 characters in Production runtime.');
+      throw new Error('[JAMI Config ERROR] SESSION_SECRET must be set to a secure random string of at least 32 characters in Production mode.');
     }
 
-    if (parsed.COOKIE_SECURE === undefined) {
-      parsed.COOKIE_SECURE = !isLocalhost;
-    } else if (parsed.COOKIE_SECURE === false) {
-      if (!isLocalhost) {
-        throw new Error('[JAMI Config ERROR] COOKIE_SECURE must be true in Production mode on non-localhost origins.');
-      } else {
-        console.warn('[JAMI Config WARNING] COOKIE_SECURE is false in Production mode on localhost. Ensure COOKIE_SECURE=true when deploying to live HTTPS.');
+    // 2. Mandatory Strong Internal Cron Secret
+    if (
+      !parsed.INTERNAL_CRON_SECRET ||
+      parsed.INTERNAL_CRON_SECRET === 'jami-cron-internal-secret-key-32-chars' ||
+      parsed.INTERNAL_CRON_SECRET.length < 32
+    ) {
+      throw new Error('[JAMI Config ERROR] INTERNAL_CRON_SECRET must be set to a secure random string of at least 32 characters in Production mode.');
+    }
+
+    // 3. Mandatory HTTPS Base URL (unless explicit localhost test run)
+    if (!isLocalhost && !parsed.APP_BASE_URL.startsWith('https://')) {
+      throw new Error('[JAMI Config ERROR] APP_BASE_URL must use HTTPS in Production mode on live domains.');
+    }
+
+    // 4. Database configuration validation
+    if (parsed.APP_MODE === 'production') {
+      const missing: string[] = [];
+      if (!parsed.AIVEN_MYSQL_HOST) missing.push('AIVEN_MYSQL_HOST');
+      if (!parsed.AIVEN_APP_USER) missing.push('AIVEN_APP_USER');
+      if (!parsed.AIVEN_APP_PASSWORD) missing.push('AIVEN_APP_PASSWORD');
+
+      if (missing.length > 0) {
+        throw new Error(`[JAMI Config ERROR] Production mode requires valid Aiven MySQL credentials. Missing: ${missing.join(', ')}`);
+      }
+
+      const hasCa = Boolean(parsed.AIVEN_CA_CERT || parsed.AIVEN_CA_CERT_PATH);
+      if (parsed.AIVEN_MYSQL_HOST && !hasCa && isProdRuntime) {
+        throw new Error('[JAMI Config ERROR: CONFIG_AIVEN_CA_MISSING] Production environment connecting to Aiven MySQL requires AIVEN_CA_CERT or AIVEN_CA_CERT_PATH.');
       }
     }
 
+    // 5. Cookie Secure Check
+    if (parsed.COOKIE_SECURE === undefined) {
+      parsed.COOKIE_SECURE = !isLocalhost;
+    } else if (parsed.COOKIE_SECURE === false && !isLocalhost) {
+      throw new Error('[JAMI Config ERROR] COOKIE_SECURE must be true in Production mode on non-localhost origins.');
+    }
+
+    // 6. CORS wildcard prohibition in production
     if (parsed.CORS_ALLOWED_ORIGINS && parsed.CORS_ALLOWED_ORIGINS.includes('*')) {
       throw new Error('[JAMI Config ERROR] CORS_ALLOWED_ORIGINS cannot contain wildcard "*" in Production mode.');
     }
 
+    // 7. Password Reset SMTP Check
     if (parsed.PASSWORD_RESET_ENABLED && (!parsed.SMTP_HOST || !parsed.SMTP_USER)) {
       throw new Error('[JAMI Config ERROR] PASSWORD_RESET_ENABLED=true in production requires SMTP configuration (SMTP_HOST, SMTP_USER).');
     }
@@ -155,7 +179,7 @@ export function parseEnv(): EnvConfig {
 
   // Determine DEMO_LOGIN_ENABLED default
   if (parsed.DEMO_LOGIN_ENABLED === undefined) {
-    parsed.DEMO_LOGIN_ENABLED = !isProdRuntime && !isDbRequired;
+    parsed.DEMO_LOGIN_ENABLED = !isProdRuntime && parsed.APP_MODE !== 'production';
   }
 
   return parsed;
@@ -164,6 +188,8 @@ export function parseEnv(): EnvConfig {
 export const env = parseEnv();
 
 export const isProductionRuntime = env.NODE_ENV === 'production';
+export const effectiveProduction = isProductionRuntime || env.APP_MODE === 'production';
 export const isDatabaseRequired = env.APP_MODE === 'production' && env.NODE_ENV !== 'test';
 export const isDemoMode = (env.APP_MODE === 'demo' || env.NODE_ENV === 'test') && env.DEMO_LOGIN_ENABLED === true && !isProductionRuntime;
-export const isProduction = isProductionRuntime || isDatabaseRequired;
+export const isProduction = effectiveProduction && env.NODE_ENV !== 'test';
+

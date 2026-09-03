@@ -25,6 +25,7 @@ const ExamsPage = lazy(() => import('./features/exams/ExamsPage').then((m) => ({
 const MistakeNotebookPage = lazy(() => import('./features/mistakes/MistakeNotebookPage').then((m) => ({ default: m.MistakeNotebookPage })));
 const ReportsPage = lazy(() => import('./features/reports/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const MaterialsPage = lazy(() => import('./features/materials/MaterialsPage').then((m) => ({ default: m.MaterialsPage })));
+const BookReaderPage = lazy(() => import('./features/materials/BookReaderPage').then((m) => ({ default: m.BookReaderPage })));
 const NotificationsPage = lazy(() => import('./features/notifications/NotificationsPage').then((m) => ({ default: m.NotificationsPage })));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const OnboardingPage = lazy(() => import('./features/onboarding/OnboardingPage').then((m) => ({ default: m.OnboardingPage })));
@@ -115,6 +116,7 @@ export default function App() {
               <Route path="/mistakes" element={<MistakeNotebookPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/materials" element={<MaterialsPage />} />
+              <Route path="/materials/books/:id" element={<BookReaderPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/admin" element={<AdminUsersPage />} />

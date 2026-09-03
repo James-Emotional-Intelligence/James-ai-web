@@ -29,7 +29,7 @@ export class AiAdapter {
   }
 
   public static getRealtimeModel(): string {
-    return process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview';
+    return process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
   }
 
   public static getTranscribeModel(): string {

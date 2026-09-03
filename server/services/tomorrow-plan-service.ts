@@ -561,7 +561,9 @@ export class TomorrowPlanService {
 
     // Place selected candidates into timeline slots with 5m breaks
     let currentSlotIndex = 0;
-    let slotCursor = freeSlots.length > 0 ? freeSlots[0].startMinutes : timeToMinutes('19:30');
+    const currentNowMinutes = dates.currentHour * 60 + dates.currentMinute;
+    let slotCursor = freeSlots.length > 0 ? freeSlots[0].startMinutes : Math.max(currentNowMinutes, timeToMinutes('19:30'));
+    slotCursor = Math.ceil(slotCursor / 5) * 5;
 
     const finalItems: Array<Omit<TomorrowPreparationItem, 'id' | 'planId' | 'createdAt' | 'updatedAt'>> = [];
 

@@ -40,6 +40,63 @@ export class VoiceSessionService {
   }
 
   /**
+   * Exchanges WebRTC SDP offer with OpenAI Realtime API /v1/realtime/calls
+   */
+  public async exchangeRealtimeSdp(
+    userId: string,
+    sdpOffer: string
+  ): Promise<{
+    mode: 'openai_realtime' | 'demo_fallback';
+    sdpAnswer?: string;
+    model?: string;
+    message?: string;
+  }> {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!AiAdapter.isConfigured() || !apiKey) {
+      return {
+        mode: 'demo_fallback',
+        message: 'OpenAI API chưa được cấu hình. Đang kích hoạt chế độ Giọng nói của trình duyệt.',
+      };
+    }
+
+    try {
+      const model = AiAdapter.getRealtimeModel();
+      const response = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(model)}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/sdp',
+          'OpenAI-Safety-Identifier': this.generateSafetyIdentifier(userId),
+        },
+        body: sdpOffer,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn('[VoiceSessionService] OpenAI Realtime WebRTC calls failed:', response.status, errorText);
+        return {
+          mode: 'demo_fallback',
+          message: 'Không thể thiết lập WebRTC với OpenAI Realtime. Đang chuyển sang Giọng nói trình duyệt.',
+        };
+      }
+
+      const sdpAnswer = await response.text();
+      return {
+        mode: 'openai_realtime',
+        sdpAnswer,
+        model,
+        message: 'WebRTC kết nối thành công với OpenAI Realtime.',
+      };
+    } catch (err: any) {
+      console.warn('[VoiceSessionService] OpenAI Realtime WebRTC exchange error:', err.message);
+      return {
+        mode: 'demo_fallback',
+        message: 'Lỗi mạng khi kết nối OpenAI Realtime WebRTC. Sử dụng Giọng nói của trình duyệt.',
+      };
+    }
+  }
+
+  /**
    * Creates an ephemeral client secret from OpenAI Realtime API
    */
   public async createRealtimeClientSecret(userId: string): Promise<{

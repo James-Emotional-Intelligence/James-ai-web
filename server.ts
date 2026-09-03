@@ -9,6 +9,8 @@ import { Migrator } from './server/db/migrator';
 import { DemoRepository } from './server/repositories/demo-repository';
 import { env, isProduction } from './server/config/env';
 
+import { materialWorker } from './server/services/material-worker-service';
+
 async function startServer() {
   const app = createApp();
   const PORT = env.PORT || 3000;
@@ -33,6 +35,8 @@ async function startServer() {
       }
       await UserRepository.getInstance().syncWithMySQL();
       console.log('[JAMI AI] MySQL Database fully integrated and active.');
+      // Start background durable worker for processing learning materials & soft books
+      materialWorker.start();
     } else {
       if (isProduction) {
         throw new Error('[JAMI AI Startup] Failed to connect to MySQL database in Production mode.');

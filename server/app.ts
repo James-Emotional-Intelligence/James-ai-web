@@ -26,38 +26,76 @@ export function createApp() {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-XSS-Protection', '0');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Vary', 'Origin');
     next();
   });
+
+  // Build canonical set of allowed origins
+  const getAllowedOrigins = (): Set<string> => {
+    const set = new Set<string>();
+    try {
+      if (env.APP_BASE_URL) {
+        set.add(new URL(env.APP_BASE_URL).origin);
+      }
+    } catch {}
+
+    if (env.CORS_ALLOWED_ORIGINS) {
+      env.CORS_ALLOWED_ORIGINS.split(',')
+        .map((o) => o.trim())
+        .filter(Boolean)
+        .forEach((o) => {
+          try {
+            set.add(new URL(o).origin);
+          } catch {
+            set.add(o);
+          }
+        });
+    }
+
+    return set;
+  };
+
+  const isOriginAllowed = (origin?: string): boolean => {
+    if (!origin) return false;
+    const allowed = getAllowedOrigins();
+
+    if (allowed.has(origin)) return true;
+
+    // In non-production or test runtime only, allow localhost origins
+    if (!isProduction || env.NODE_ENV === 'test') {
+      if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+        return true;
+      }
+    }
+
+    return false;
+  };
 
   // 3. Strict CORS Middleware with credentials
   app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin;
-    const allowedOrigins = (env.CORS_ALLOWED_ORIGINS || '')
-      .split(',')
-      .map((o) => o.trim())
-      .filter(Boolean);
 
     if (origin) {
-      const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
-      const isPagesDev = origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
-      const isAllowed = !isProduction || isLocalhost || isPagesDev || allowedOrigins.length === 0 || allowedOrigins.includes(origin) || allowedOrigins.includes('*');
-      if (isAllowed) {
+      if (isOriginAllowed(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
-        res.setHeader(
-          'Access-Control-Allow-Methods',
-          'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-        );
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
         res.setHeader(
           'Access-Control-Allow-Headers',
-          'Content-Type, Authorization, X-Requested-With, X-Request-Id, X-CSRF-Token, X-Admin-Key'
+          'Content-Type, Authorization, X-Requested-With, X-Request-Id, X-CSRF-Token, X-Admin-Key, X-Internal-Secret'
         );
         if (req.method === 'OPTIONS') {
           return res.sendStatus(204);
         }
-      } else if (isProduction) {
+      } else {
         if (req.method === 'OPTIONS') {
-          return res.status(403).json({ error: { code: 'CORS_ORIGIN_NOT_ALLOWED', message: 'Forbidden origin' } });
+          return res.status(403).json({
+            error: {
+              code: 'CORS_ORIGIN_NOT_ALLOWED',
+              message: 'Forbidden origin: Origin không được phép truy cập.',
+              requestId: (req as any).requestId,
+            },
+          });
         }
       }
     }
@@ -72,27 +110,31 @@ export function createApp() {
   // 4. CSRF / Same-Origin Verification Middleware for state-mutating requests
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      // Exclude internal routes authenticated via internal secret header
+      const internalSecret = req.headers['x-internal-secret'] || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '');
+      if (req.path.startsWith('/api/v1/internal/') && internalSecret && internalSecret === env.INTERNAL_CRON_SECRET) {
+        return next();
+      }
+
       const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
+
       if (origin) {
-        const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
-        const isPagesDev = origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
-        const allowedOrigins = (env.CORS_ALLOWED_ORIGINS || '')
-          .split(',')
-          .map((o) => o.trim())
-          .filter(Boolean);
-
-        let appBaseOrigin = '';
-        try {
-          appBaseOrigin = new URL(env.APP_BASE_URL).origin;
-        } catch {}
-
-        const isAllowed = !isProduction || isLocalhost || isPagesDev || allowedOrigins.length === 0 || allowedOrigins.includes(origin) || allowedOrigins.includes('*') || (appBaseOrigin && appBaseOrigin === origin);
-
-        if (!isAllowed) {
+        if (!isOriginAllowed(origin)) {
           return res.status(403).json({
             error: {
               code: 'CSRF_ORIGIN_MISMATCH',
               message: 'Yêu cầu không đến từ origin hợp lệ.',
+              requestId: (req as any).requestId,
+            },
+          });
+        }
+      } else if (isProduction && env.NODE_ENV !== 'test') {
+        // In production, require Origin or Referer for mutating browser requests with cookies
+        if (req.cookies && Object.keys(req.cookies).length > 0) {
+          return res.status(403).json({
+            error: {
+              code: 'CSRF_ORIGIN_MISSING',
+              message: 'Yêu cầu thay đổi dữ liệu thiếu tiêu đề Origin/Referer.',
               requestId: (req as any).requestId,
             },
           });

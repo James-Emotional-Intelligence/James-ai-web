@@ -186,20 +186,122 @@ export const TimetableExceptionCreateSchema = z.object({
   reason: z.string().max(255).optional().nullable(),
 });
 
-export const ClassSessionCheckinSubmitSchema = z.object({
-  timetableEntryId: z.string().min(1, { message: 'Mã tiết học không được để trống' }),
-  timetableEntryIds: z.array(z.string()).optional(),
-  occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Định dạng ngày phải là YYYY-MM-DD' }),
-  learnedContent: z.string().max(3000).optional().nullable(),
-  homework: z.string().max(3000).optional().nullable(),
-  hasNoHomework: z.boolean().optional().default(false),
-  reflection: z.string().max(3000).optional().nullable(),
-  understandingLevel: z.enum(['very_easy', 'normal', 'hard', 'not_understood']).optional().nullable(),
-  attendanceStatus: z.enum(['attended', 'absent']).default('attended'),
-  createTaskForHomework: z.boolean().optional().default(false),
-  dueAt: z.string().optional().nullable(),
-  estimatedMinutes: z.coerce.number().int().min(5).max(360).optional().nullable(),
-  taskId: z.string().optional().nullable(),
+export const ClassSessionCheckinSubmitSchema = z
+  .object({
+    timetableEntryId: z.string().min(1, { message: 'Mã tiết học không được để trống' }),
+    timetableEntryIds: z.array(z.string()).optional(),
+    occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Định dạng ngày phải là YYYY-MM-DD' }),
+    learnedContent: z.string().max(3000).optional().nullable(),
+    homework: z.string().max(3000).optional().nullable(),
+    hasNoHomework: z.boolean().optional().default(false),
+    homeworkStatus: z.enum(['unanswered', 'has_homework', 'no_homework']).optional(),
+    reflection: z.string().max(3000).optional().nullable(),
+    understandingLevel: z.enum(['very_easy', 'normal', 'hard', 'not_understood']).optional().nullable(),
+    attendanceStatus: z.enum(['attended', 'absent']).default('attended'),
+    createTaskForHomework: z.boolean().optional().default(false),
+    dueAt: z.string().optional().nullable(),
+    estimatedMinutes: z.coerce.number().int().min(5).max(360).optional().nullable(),
+    taskId: z.string().optional().nullable(),
+  })
+  .superRefine((data, ctx) => {
+    const hasHomeworkText = Boolean(data.homework && data.homework.trim().length > 0);
+    const isNoHomework = data.hasNoHomework === true || data.homeworkStatus === 'no_homework';
+
+    if (isNoHomework && hasHomeworkText) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Không thể vừa tích "Không có BTVN" vừa nhập nội dung BTVN.',
+        path: ['hasNoHomework'],
+      });
+    }
+
+    if (data.createTaskForHomework && (isNoHomework || !hasHomeworkText)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Chỉ có thể tạo nhiệm vụ khi có nội dung BTVN.',
+        path: ['createTaskForHomework'],
+      });
+    }
+
+    if (data.attendanceStatus === 'absent' && data.createTaskForHomework) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Không tạo nhiệm vụ BTVN khi báo nghỉ tiết học.',
+        path: ['createTaskForHomework'],
+      });
+    }
+  });
+
+// ==========================================
+// Soft Books (Sách Mềm) Schemas
+// ==========================================
+
+export const ALLOWED_BOOK_MIME_TYPES = [
+  'application/pdf',
+  'application/epub+zip',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'text/markdown',
+] as const;
+
+export const BookUploadIntentSchema = z.object({
+  title: z.string().trim().min(1, { message: 'Tiêu đề sách không được để trống' }).max(255),
+  subjectId: z.string().min(1, { message: 'Vui lòng chọn môn học cho sách' }),
+  fileName: z.string().trim().min(1, { message: 'Tên tệp không hợp lệ' }),
+  mimeType: z.string().refine(
+    (m) =>
+      ALLOWED_BOOK_MIME_TYPES.includes(m as any) ||
+      m.startsWith('text/') ||
+      m === 'application/zip',
+    { message: 'Định dạng tệp không được hỗ trợ. Vui lòng tải PDF, EPUB, DOCX, TXT hoặc Markdown.' }
+  ),
+  sizeBytes: z.coerce.number().int().min(1).max(104857600, { message: 'Kích thước sách tối đa là 100 MB.' }),
+  rightsConfirmed: z.boolean().refine((val) => val === true, {
+    message: 'Bạn phải xác nhận có quyền sử dụng tệp này cho mục đích học tập cá nhân.',
+  }),
+  rightsTermsVersion: z.string().default('v1.0'),
+  publisher: z.string().trim().max(150).optional().nullable(),
+  editionYear: z.coerce.number().int().min(1900).max(2100).optional().nullable(),
+  language: z.string().default('vi'),
+});
+
+export const BookProgressUpdateSchema = z.object({
+  page: z.coerce.number().int().min(1),
+  chapterId: z.string().optional().nullable(),
+  percentage: z.coerce.number().min(0).max(100).default(0),
+});
+
+export const BookBookmarkCreateSchema = z.object({
+  page: z.coerce.number().int().min(1),
+  chapterId: z.string().optional().nullable(),
+  title: z.string().trim().min(1, { message: 'Tiêu đề dấu trang không được để trống' }).max(255),
+  sourceAnchor: z.string().max(100).optional().nullable(),
+});
+
+export const BookHighlightCreateSchema = z.object({
+  page: z.coerce.number().int().min(1),
+  chapterId: z.string().optional().nullable(),
+  selectedText: z.string().trim().min(1, { message: 'Đoạn văn bản được chọn không được để trống' }),
+  note: z.string().max(2000).optional().nullable(),
+  color: z.enum(['yellow', 'green', 'blue', 'pink', 'purple']).default('yellow'),
+});
+
+export const BookStudyAidRequestSchema = z.object({
+  action: z.enum([
+    'summary',
+    'outline',
+    'flashcards',
+    'quiz',
+    'explain',
+    'study_plan',
+    'send_to_mistake_notebook',
+  ]),
+  chapterId: z.string().optional().nullable(),
+  startPage: z.coerce.number().int().min(1).optional().nullable(),
+  endPage: z.coerce.number().int().min(1).optional().nullable(),
+  conceptToExplain: z.string().optional().nullable(),
+  options: z.record(z.string(), z.any()).optional(),
+  idempotencyKey: z.string().optional().nullable(),
 });
 
 export const BusyEventInputSchema = z

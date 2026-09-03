@@ -547,20 +547,77 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setIsMicActive(true);
       setIsHandsFreeEnabled(true);
 
-      // 2. Check OpenAI Realtime Ephemeral Client Secret
-      try {
-        const sessionRes = await api.getRealtimeClientSecret();
-        if (sessionRes.mode === 'openai_realtime' && sessionRes.clientSecret) {
-          setPrivacyMode('openai_realtime');
-        } else {
-          setPrivacyMode('browser_web_speech');
+      // 2. Attempt Genuine OpenAI Realtime WebRTC Negotiation
+      let webrtcConnected = false;
+      if (typeof RTCPeerConnection !== 'undefined') {
+        try {
+          setState('connecting');
+          const pc = new RTCPeerConnection();
+          peerConnectionRef.current = pc;
+
+          // Remote audio element for AI model speech output
+          const audioEl = document.createElement('audio');
+          audioEl.autoplay = true;
+          remoteAudioElementRef.current = audioEl;
+
+          pc.ontrack = (event) => {
+            if (event.streams && event.streams[0]) {
+              audioEl.srcObject = event.streams[0];
+            }
+          };
+
+          // Add microphone tracks to peer connection
+          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+          // Open data channel for Realtime events
+          const dc = pc.createDataChannel('oai-events');
+          dataChannelRef.current = dc;
+
+          dc.onopen = () => {
+            console.log('[VoiceJami WebRTC] oai-events data channel open');
+          };
+
+          dc.onmessage = (e) => {
+            try {
+              const event = JSON.parse(e.data);
+              if (event.type === 'response.audio_transcript.delta') {
+                setLastReply((prev) => prev + event.delta);
+              }
+            } catch {}
+          };
+
+          // Create local offer
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          if (offer.sdp) {
+            const sdpRes = await api.sendRealtimeSdpOffer(offer.sdp);
+            if (sdpRes.mode === 'openai_realtime' && sdpRes.sdpAnswer) {
+              await pc.setRemoteDescription({ type: 'answer', sdp: sdpRes.sdpAnswer });
+              setPrivacyMode('openai_realtime');
+              webrtcConnected = true;
+              setState('armed');
+            }
+          }
+        } catch (webrtcErr) {
+          console.warn('[VoiceJami WebRTC] WebRTC connection could not be established, falling back to Browser Web Speech:', webrtcErr);
+          if (peerConnectionRef.current) {
+            try {
+              peerConnectionRef.current.close();
+            } catch {}
+            peerConnectionRef.current = null;
+          }
         }
-      } catch {
+      }
+
+      if (!webrtcConnected) {
         setPrivacyMode('browser_web_speech');
       }
 
       // 3. Play greeting sound & initialize wake detection
-      const greeting = 'Jami đã bật chế độ rảnh tay. Bạn chỉ cần gọi "Jami ơi" là Jami sẽ lắng nghe!';
+      const greeting = webrtcConnected
+        ? 'Jami đã kết nối trực tiếp với OpenAI Realtime. Bạn có thể trò chuyện trực tiếp hoặc nói "Jami ơi"!'
+        : 'Jami đã bật chế độ rảnh tay (Giọng nói của trình duyệt). Bạn chỉ cần gọi "Jami ơi" là Jami sẽ lắng nghe!';
       setLastReply(greeting);
       setState('speaking');
 

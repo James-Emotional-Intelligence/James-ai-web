@@ -656,19 +656,119 @@ export interface Material {
   subjectId: string;
   subjectName?: string;
   title: string;
-  type: 'pdf' | 'image' | 'notes';
+  type: 'pdf' | 'image' | 'notes' | 'docx' | 'epub' | 'txt';
+  materialKind?: 'document' | 'book';
+  originalFilename?: string;
+  detectedMime?: string;
+  publisher?: string;
+  editionYear?: number;
+  language?: string;
+  coverObjectKey?: string;
+  pageCount?: number;
+  chapterCount?: number;
+  processingProgress?: number;
+  rightsConfirmedAt?: string;
+  rightsTermsVersion?: string;
   fileName?: string;
   r2ObjectKey?: string;
   mimeType?: string;
   sizeBytes: number;
   sha256?: string;
-  processingStatus: 'uploading' | 'queued' | 'processing' | 'ready' | 'error';
+  processingStatus: 'uploading' | 'queued' | 'processing' | 'ready' | 'needs_ocr' | 'error';
   summary?: string;
   summaryJson?: StructuredMaterialSummary;
   contentText?: string;
   errorMessage?: string;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface BookChapter {
+  id: string;
+  materialId: string;
+  parentId?: string;
+  ordinal: number;
+  title: string;
+  startPage: number;
+  endPage: number;
+  sourceAnchor?: string;
+  children?: BookChapter[];
+  createdAt?: string;
+}
+
+export interface BookChunk {
+  id: string;
+  materialId: string;
+  chapterId?: string;
+  chapterTitle?: string;
+  ordinal: number;
+  text: string;
+  pageStart: number;
+  pageEnd: number;
+  tokenCount: number;
+  contentHash?: string;
+  createdAt?: string;
+}
+
+export interface BookProgress {
+  id?: string;
+  userId: string;
+  materialId: string;
+  chapterId?: string;
+  page: number;
+  percentage: number;
+  updatedAt?: string;
+}
+
+export interface BookBookmark {
+  id: string;
+  userId: string;
+  materialId: string;
+  chapterId?: string;
+  page: number;
+  title: string;
+  sourceAnchor?: string;
+  createdAt: string;
+}
+
+export interface BookHighlight {
+  id: string;
+  userId: string;
+  materialId: string;
+  chapterId?: string;
+  page: number;
+  selectedText: string;
+  note?: string;
+  color: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookStudyAidRequest {
+  action: 'summary' | 'outline' | 'flashcards' | 'quiz' | 'explain' | 'study_plan' | 'send_to_mistake_notebook';
+  chapterId?: string;
+  startPage?: number;
+  endPage?: number;
+  conceptToExplain?: string;
+  options?: any;
+  idempotencyKey?: string;
+}
+
+export interface BookStudyCitation {
+  bookTitle: string;
+  chapterTitle?: string;
+  pageStart?: number;
+  pageEnd?: number;
+  excerpt?: string;
+  anchor?: string;
+}
+
+export interface BookStudyAidResult {
+  action: string;
+  title: string;
+  contentMarkdown: string;
+  structuredData?: any;
+  citations: BookStudyCitation[];
 }
 
 export interface OutlineVersion {

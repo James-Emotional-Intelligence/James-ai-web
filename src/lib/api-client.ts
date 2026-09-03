@@ -39,6 +39,13 @@ import {
   MistakeNotebookEntry,
   MistakeReviewAttempt,
   TodayLessonLogItem,
+  BookChapter,
+  BookChunk,
+  BookProgress,
+  BookBookmark,
+  BookHighlight,
+  BookStudyAidRequest,
+  BookStudyAidResult,
 } from '../../shared/types';
 import { z } from 'zod';
 import { LoginRequestSchema, RegisterRequestSchema } from '../../shared/schemas';
@@ -816,10 +823,104 @@ export const api = {
     }),
   deleteMaterial: (id: string) => fetchJson<{ success: boolean }>(`/materials/${id}`, { method: 'DELETE' }),
 
+  // Sách Mềm (Soft Books) API
+  getBooks: (params?: { search?: string; subjectId?: string; status?: string; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.subjectId) query.set('subjectId', params.subjectId);
+    if (params?.status) query.set('status', params.status);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.offset) query.set('offset', String(params.offset));
+    const qs = query.toString();
+    return fetchJson<{ books: LearningMaterial[]; total: number }>(`/materials/books${qs ? `?${qs}` : ''}`);
+  },
+  getBook: (id: string) => fetchJson<{ book: LearningMaterial; progress?: BookProgress }>(`/materials/books/${id}`),
+  createBookUploadIntent: (data: {
+    title: string;
+    subjectId: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    rightsConfirmed: boolean;
+    rightsTermsVersion?: string;
+    publisher?: string;
+    editionYear?: number;
+    language?: string;
+  }) =>
+    fetchJson<{ book: LearningMaterial; uploadUrl: string; r2ObjectKey: string }>('/materials/books/upload-intent', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  finalizeBookUpload: (id: string, data: { sizeBytes: number; sha256?: string; detectedMime?: string }) =>
+    fetchJson<{ success: boolean; book: LearningMaterial }>(`/materials/books/${id}/finalize`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteBook: (id: string) => fetchJson<{ success: boolean }>(`/materials/books/${id}`, { method: 'DELETE' }),
+  getBookStatus: (id: string) =>
+    fetchJson<{ status: string; progress: number; pageCount: number; chapterCount: number; errorMessage?: string }>(
+      `/materials/books/${id}/status`
+    ),
+  retryBookProcessing: (id: string) =>
+    fetchJson<{ success: boolean; message: string }>(`/materials/books/${id}/retry-processing`, { method: 'POST' }),
+  getBookChapters: (id: string) => fetchJson<{ chapters: BookChapter[] }>(`/materials/books/${id}/chapters`),
+  readBookPage: (id: string, page: number, chapterId?: string) =>
+    fetchJson<{ page: number; chunks: BookChunk[]; pageCount: number }>(
+      `/materials/books/${id}/read?page=${page}${chapterId ? `&chapterId=${encodeURIComponent(chapterId)}` : ''}`
+    ),
+  searchBook: (id: string, query: string, chapterId?: string, page?: number) => {
+    const qParams = new URLSearchParams();
+    qParams.set('q', query);
+    if (chapterId) qParams.set('chapterId', chapterId);
+    if (page) qParams.set('page', String(page));
+    return fetchJson<{ results: Array<{ chunk: BookChunk; score: number; snippet: string }> }>(
+      `/materials/books/${id}/search?${qParams.toString()}`
+    );
+  },
+  getBookProgress: (id: string) => fetchJson<{ progress: BookProgress | null }>(`/materials/books/${id}/progress`),
+  saveBookProgress: (id: string, page: number, chapterId?: string, percentage?: number) =>
+    fetchJson<{ progress: BookProgress }>(`/materials/books/${id}/progress`, {
+      method: 'PUT',
+      body: JSON.stringify({ page, chapterId, percentage: percentage || 0 }),
+    }),
+  getBookmarks: (id: string) => fetchJson<{ bookmarks: BookBookmark[] }>(`/materials/books/${id}/bookmarks`),
+  createBookmark: (id: string, data: { page: number; title: string; chapterId?: string; sourceAnchor?: string }) =>
+    fetchJson<{ bookmark: BookBookmark }>(`/materials/books/${id}/bookmarks`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteBookmark: (id: string, bookmarkId: string) =>
+    fetchJson<{ success: boolean }>(`/materials/books/${id}/bookmarks/${bookmarkId}`, { method: 'DELETE' }),
+  getHighlights: (id: string) => fetchJson<{ highlights: BookHighlight[] }>(`/materials/books/${id}/highlights`),
+  createHighlight: (
+    id: string,
+    data: { page: number; selectedText: string; note?: string; color?: string; chapterId?: string }
+  ) =>
+    fetchJson<{ highlight: BookHighlight }>(`/materials/books/${id}/highlights`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteHighlight: (id: string, highlightId: string) =>
+    fetchJson<{ success: boolean }>(`/materials/books/${id}/highlights/${highlightId}`, { method: 'DELETE' }),
+  generateBookStudyAid: (id: string, data: BookStudyAidRequest) =>
+    fetchJson<BookStudyAidResult>(`/materials/books/${id}/study-aids`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Realtime WebRTC
+  sendRealtimeSdpOffer: (sdpOffer: string) =>
+    fetchJson<{ mode: 'openai_realtime' | 'demo_fallback'; sdpAnswer?: string; model?: string; message?: string }>(
+      '/jami/realtime/calls',
+      {
+        method: 'POST',
+        body: JSON.stringify({ sdpOffer }),
+      }
+    ),
+
   // Outlines (6.2)
   getOutlines: (subjectId?: string) =>
     fetchJson<{ outlines: Outline[] }>(`/outlines${subjectId ? `?subjectId=${encodeURIComponent(subjectId)}` : ''}`),
-  getOutline: (id: string) => fetchJson<{ outline: Outline }>(`/outlines/${id}`),
   createOutline: (data: Partial<Outline>) =>
     fetchJson<{ outline: Outline }>('/outlines', { method: 'POST', body: JSON.stringify(data) }),
   updateOutline: (id: string, data: Partial<Outline>) =>
