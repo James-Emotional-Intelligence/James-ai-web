@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import zlib from 'zlib';
 
 export interface ExtractedBookData {
   pageCount: number;
@@ -23,6 +24,19 @@ export interface ExtractedBookData {
   }>;
   needsOcr?: boolean;
 }
+
+interface ZipEntry {
+  fileName: string;
+  compressionMethod: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  offset: number;
+  getData: () => Buffer;
+}
+
+const BOOK_MAX_ZIP_ENTRIES = 500;
+const BOOK_MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024; // 100MB
+const BOOK_MAX_COMPRESSION_RATIO = 100;
 
 export class BookParserService {
   private static instance: BookParserService;
@@ -89,6 +103,119 @@ export class BookParserService {
   }
 
   /**
+   * Safely reads ZIP entries with Anti-Zip Bomb and Anti-Zip Slip protections
+   */
+  public extractZipEntries(buffer: Buffer): ZipEntry[] {
+    const entries: ZipEntry[] = [];
+    if (buffer.length < 22) return entries;
+
+    // Search for End of Central Directory Record (EOCD) from the end
+    let eocdOffset = -1;
+    const maxSearch = Math.min(buffer.length, 65536 + 22);
+    for (let i = buffer.length - 22; i >= buffer.length - maxSearch; i--) {
+      if (
+        buffer[i] === 0x50 &&
+        buffer[i + 1] === 0x4b &&
+        buffer[i + 2] === 0x05 &&
+        buffer[i + 3] === 0x06
+      ) {
+        eocdOffset = i;
+        break;
+      }
+    }
+
+    if (eocdOffset === -1) {
+      return entries;
+    }
+
+    const totalEntries = buffer.readUInt16LE(eocdOffset + 10);
+    const cdOffset = buffer.readUInt32LE(eocdOffset + 16);
+
+    if (totalEntries > BOOK_MAX_ZIP_ENTRIES) {
+      throw new Error(`Tệp ZIP vượt quá số lượng tệp cho phép (${totalEntries} > ${BOOK_MAX_ZIP_ENTRIES}).`);
+    }
+
+    let cursor = cdOffset;
+    let totalUncompressedSize = 0;
+
+    for (let i = 0; i < totalEntries && cursor < eocdOffset; i++) {
+      if (
+        buffer[cursor] !== 0x50 ||
+        buffer[cursor + 1] !== 0x4b ||
+        buffer[cursor + 2] !== 0x01 ||
+        buffer[cursor + 3] !== 0x02
+      ) {
+        break;
+      }
+
+      const compressionMethod = buffer.readUInt16LE(cursor + 10);
+      const compressedSize = buffer.readUInt32LE(cursor + 20);
+      const uncompressedSize = buffer.readUInt32LE(cursor + 24);
+      const fileNameLen = buffer.readUInt16LE(cursor + 28);
+      const extraFieldLen = buffer.readUInt16LE(cursor + 30);
+      const commentLen = buffer.readUInt16LE(cursor + 32);
+      const localHeaderOffset = buffer.readUInt32LE(cursor + 42);
+
+      const fileName = buffer.toString('utf-8', cursor + 46, cursor + 46 + fileNameLen);
+
+      // Anti-Zip Slip check
+      if (
+        fileName.includes('..') ||
+        fileName.startsWith('/') ||
+        fileName.startsWith('\\') ||
+        fileName.includes('\0')
+      ) {
+        throw new Error(`Phát hiện đường dẫn không hợp lệ trong tệp nén: ${fileName}`);
+      }
+
+      // Anti-Zip Bomb check: ratio & total size
+      if (compressedSize > 1024 && uncompressedSize / compressedSize > BOOK_MAX_COMPRESSION_RATIO) {
+        throw new Error(`Phát hiện tệp có tỷ lệ nén bất thường (nghi vấn zip-bomb): ${fileName}`);
+      }
+
+      totalUncompressedSize += uncompressedSize;
+      if (totalUncompressedSize > BOOK_MAX_UNCOMPRESSED_BYTES) {
+        throw new Error(`Dung lượng giải nén vượt quá giới hạn tối đa (${BOOK_MAX_UNCOMPRESSED_BYTES / (1024 * 1024)}MB).`);
+      }
+
+      const entry: ZipEntry = {
+        fileName,
+        compressionMethod,
+        compressedSize,
+        uncompressedSize,
+        offset: localHeaderOffset,
+        getData: () => {
+          if (localHeaderOffset + 30 > buffer.length) {
+            throw new Error(`Tệp ZIP bị lỗi cấu trúc tại ${fileName}`);
+          }
+          const localFnLen = buffer.readUInt16LE(localHeaderOffset + 26);
+          const localExtraLen = buffer.readUInt16LE(localHeaderOffset + 28);
+          const dataStart = localHeaderOffset + 30 + localFnLen + localExtraLen;
+          const dataEnd = dataStart + compressedSize;
+
+          if (dataEnd > buffer.length) {
+            throw new Error(`Dữ liệu của ${fileName} vượt quá kích thước tệp`);
+          }
+
+          const rawData = buffer.subarray(dataStart, dataEnd);
+          if (compressionMethod === 0) {
+            return rawData;
+          } else if (compressionMethod === 8) {
+            return zlib.inflateRawSync(rawData);
+          } else {
+            throw new Error(`Phương thức nén không hỗ trợ: ${compressionMethod} trong ${fileName}`);
+          }
+        },
+      };
+
+      entries.push(entry);
+      cursor += 46 + fileNameLen + extraFieldLen + commentLen;
+    }
+
+    return entries;
+  }
+
+  /**
    * Parses buffer into structured book chapters, pages, and semantic chunks
    */
   public async parseBookBuffer(
@@ -111,7 +238,7 @@ export class BookParserService {
   }
 
   /**
-   * PDF Parser with Page-Text Density calculation
+   * PDF Parser with Page-Text Density calculation and OCR recommendation
    */
   private async parsePdf(buffer: Buffer, title: string): Promise<ExtractedBookData> {
     const raw = buffer.toString('binary');
@@ -136,7 +263,7 @@ export class BookParserService {
 
     // Check for low-density / scanned PDF
     const textDensityPerPage = fullText.length / estimatedPageCount;
-    const isNeedsOcr = textDensityPerPage < 35 && buffer.length > 100000;
+    const isNeedsOcr = (textDensityPerPage < 35 && buffer.length > 50000) || fullText.length < 50;
 
     // Detect chapters using typical Vietnamese curriculum headings (Chương I, Bài 1, Phần 1)
     const chapters = this.extractChaptersFromText(fullText, estimatedPageCount, title);
@@ -152,21 +279,45 @@ export class BookParserService {
   }
 
   /**
-   * DOCX Parser: Safe XML paragraph extraction, Anti-Zip Bomb & Anti-Zip Slip
+   * DOCX Parser: Safe ZIP extraction of word/document.xml with anti-zip bomb protection
    */
   private async parseDocx(buffer: Buffer, title: string): Promise<ExtractedBookData> {
-    // Basic safe XML string extraction from document.xml stream
-    const raw = buffer.toString('utf-8');
-    const pMatches = raw.match(/<w:p[\s\S]*?<\/w:p>/g) || [];
+    let fullText: string;
 
-    const paragraphs: string[] = [];
-    for (const p of pMatches) {
-      const textNodes = p.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
-      const pText = textNodes.map((t) => t.replace(/<[^>]+>/g, '')).join('').trim();
-      if (pText.length > 0) paragraphs.push(pText);
+    try {
+      const entries = this.extractZipEntries(buffer);
+      const docEntry = entries.find((e) => e.fileName === 'word/document.xml' || e.fileName.endsWith('/document.xml'));
+
+      if (docEntry) {
+        const xmlBuffer = docEntry.getData();
+        const xmlStr = xmlBuffer.toString('utf-8');
+        const pMatches = xmlStr.match(/<w:p[\s\S]*?<\/w:p>/g) || [];
+        const paragraphs: string[] = [];
+
+        for (const p of pMatches) {
+          const textNodes = p.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+          const pText = textNodes.map((t) => t.replace(/<[^>]+>/g, '')).join('').trim();
+          if (pText.length > 0) paragraphs.push(pText);
+        }
+
+        fullText = paragraphs.join('\n\n');
+      } else {
+        const raw = buffer.toString('utf-8');
+        fullText = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    } catch {
+      // Fallback if parsing via zip fails
+      const raw = buffer.toString('utf-8');
+      const pMatches = raw.match(/<w:p[\s\S]*?<\/w:p>/g) || [];
+      const paragraphs: string[] = [];
+      for (const p of pMatches) {
+        const textNodes = p.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+        const pText = textNodes.map((t) => t.replace(/<[^>]+>/g, '')).join('').trim();
+        if (pText.length > 0) paragraphs.push(pText);
+      }
+      fullText = paragraphs.join('\n\n') || raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    const fullText = paragraphs.join('\n\n') || raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     const estimatedPageCount = Math.max(1, Math.ceil(fullText.length / 2500));
     const chapters = this.extractChaptersFromText(fullText, estimatedPageCount, title);
     const chunks = this.createSemanticChunks(fullText, chapters, estimatedPageCount);
@@ -181,20 +332,49 @@ export class BookParserService {
   }
 
   /**
-   * EPUB Parser: Safe XHTML extraction and chapter TOC mapping
+   * EPUB Parser: Safe ZIP extraction of XHTML/HTML files and chapter TOC mapping
    */
   private async parseEpub(buffer: Buffer, title: string): Promise<ExtractedBookData> {
-    const raw = buffer.toString('utf-8');
-    // Strip script and unsafe tags
-    const sanitized = raw
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<iframe[\s\S]*?<\/iframe>/gi, '');
+    let fullText: string;
 
-    const pMatches = sanitized.match(/<p[\s\S]*?<\/p>|<div[\s\S]*?<\/div>|<h[1-6][\s\S]*?<\/h[1-6]>/gi) || [];
-    const textUnits = pMatches.map((node) => node.replace(/<[^>]+>/g, '').trim()).filter(Boolean);
+    try {
+      const entries = this.extractZipEntries(buffer);
+      const htmlEntries = entries
+        .filter((e) => /\.(x?html?|xml)$/i.test(e.fileName) && !e.fileName.includes('container.xml'))
+        .sort((a, b) => a.fileName.localeCompare(b.fileName));
 
-    const fullText = textUnits.join('\n\n') || sanitized.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const sections: string[] = [];
+
+      for (const entry of htmlEntries) {
+        const content = entry.getData().toString('utf-8');
+        const sanitized = content
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<iframe[\s\S]*?<\/iframe>/gi, '');
+
+        const pMatches = sanitized.match(/<p[\s\S]*?<\/p>|<div[\s\S]*?<\/div>|<h[1-6][\s\S]*?<\/h[1-6]>/gi) || [];
+        const textUnits = pMatches.map((node) => node.replace(/<[^>]+>/g, '').trim()).filter(Boolean);
+        const sectionText = textUnits.join('\n\n') || sanitized.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+        if (sectionText) {
+          sections.push(sectionText);
+        }
+      }
+
+      fullText = sections.join('\n\n\n');
+    } catch {
+      // Fallback
+      const raw = buffer.toString('utf-8');
+      const sanitized = raw
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<iframe[\s\S]*?<\/iframe>/gi, '');
+
+      const pMatches = sanitized.match(/<p[\s\S]*?<\/p>|<div[\s\S]*?<\/div>|<h[1-6][\s\S]*?<\/h[1-6]>/gi) || [];
+      const textUnits = pMatches.map((node) => node.replace(/<[^>]+>/g, '').trim()).filter(Boolean);
+      fullText = textUnits.join('\n\n') || sanitized.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
     const estimatedPageCount = Math.max(1, Math.ceil(fullText.length / 2200));
     const chapters = this.extractChaptersFromText(fullText, estimatedPageCount, title);
     const chunks = this.createSemanticChunks(fullText, chapters, estimatedPageCount);

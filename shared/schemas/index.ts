@@ -472,6 +472,22 @@ export const ExamQuizGenerateSchema = z.object({
   title: z.string().max(200).optional(),
 });
 
+export const SubjectQuizGenerateSchema = z.object({
+  subjectId: z.string().max(64).optional(),
+  subjectName: z.string().max(100).optional(),
+  topics: z.array(z.string().max(100)).max(10).optional(),
+  scope: z.string().max(255).optional(),
+  difficulty: z.enum(['easy', 'medium', 'hard']).default('medium'),
+  questionCount: z.coerce.number().int().min(3).max(30).default(5),
+  format: z.enum(['multiple_choice', 'essay', 'combined']).optional(),
+  title: z.string().max(200).optional(),
+});
+
+export const QuizRetakeWrongSchema = z.object({
+  originalQuizId: z.string().min(1, { message: 'Mã đề thi gốc không được để trống' }).max(64),
+  wrongQuestionIds: z.array(z.string().min(1).max(64)).min(1, { message: 'Danh sách câu hỏi sai không được để trống' }).max(50),
+});
+
 export const QuizAttemptSubmitSchema = z.object({
   attemptId: z.string().optional(),
   answers: z.array(z.object({
@@ -485,6 +501,7 @@ export const JamiChatRequestSchema = z.object({
   conversationId: z.string().optional(),
   clientMessageId: z.string().optional(),
   includeAudio: z.boolean().optional().default(false),
+  materialId: z.string().max(64).optional(),
 });
 
 export const JamiConversationCreateSchema = z.object({

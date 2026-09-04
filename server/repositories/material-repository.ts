@@ -1,6 +1,6 @@
 import { db } from '../db/mysql';
 import { Material, StructuredMaterialSummary } from '../../shared/types';
-import { storageService, generateMaterialObjectKey, sanitizeFileName } from '../services/storage-service';
+import { storageService, generateMaterialObjectKey, sanitizeFileName, getSafeExtension } from '../services/storage-service';
 import { SubjectRepository } from './subject-repository';
 import crypto from 'crypto';
 import path from 'path';
@@ -50,7 +50,7 @@ export class MaterialRepository {
           title: r.title,
           type: r.type,
           materialKind: r.material_kind || 'document',
-          storageDriver: (r.storage_driver as any) || (r.r2_object_key ? 'r2' : 'local'),
+          storageDriver: (r.storage_driver as any) || storageService.getActiveDriver(),
           storageKey: r.storage_key || r.r2_object_key || undefined,
           originalFilename: r.original_filename || r.file_name || undefined,
           detectedMime: r.detected_mime || r.mime_type || undefined,
@@ -93,6 +93,8 @@ export class MaterialRepository {
     const id = 'mat_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const sanitizedName = sanitizeFileName(data.fileName);
     const r2ObjectKey = generateMaterialObjectKey(userId, id, sanitizedName);
+    const activeDriver = storageService.getActiveDriver();
+    const safeExt = getSafeExtension(sanitizedName, data.mimeType);
 
     const type: 'pdf' | 'image' | 'notes' = data.mimeType.startsWith('image/') ? 'image' : 'pdf';
 
@@ -100,7 +102,7 @@ export class MaterialRepository {
     if (db.isHealthy()) {
       let subjectExists = false;
       if (resolvedSubjectId) {
-        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ?', [resolvedSubjectId]);
+        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ? AND user_id = ?', [resolvedSubjectId, userId]);
         if (rows.length > 0) {
           subjectExists = true;
         }
@@ -119,6 +121,11 @@ export class MaterialRepository {
       subjectId: resolvedSubjectId,
       title: data.title.trim(),
       type,
+      storageDriver: activeDriver,
+      storageKey: r2ObjectKey,
+      extension: safeExt,
+      originalFilename: sanitizedName,
+      detectedMime: data.mimeType,
       fileName: sanitizedName,
       r2ObjectKey,
       mimeType: data.mimeType,
@@ -130,15 +137,21 @@ export class MaterialRepository {
     if (db.isHealthy()) {
       await db.execute(
         `INSERT INTO learning_materials (
-          id, user_id, subject_id, title, type, file_name, r2_object_key, mime_type,
-          size_bytes, processing_status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', NOW(3), NOW(3))`,
+          id, user_id, subject_id, title, type, storage_driver, storage_key,
+          original_filename, detected_mime, extension, file_name, r2_object_key,
+          mime_type, size_bytes, processing_status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', NOW(3), NOW(3))`,
         [
           material.id,
           userId,
           material.subjectId,
           material.title,
           material.type,
+          activeDriver,
+          r2ObjectKey,
+          sanitizedName,
+          data.mimeType,
+          safeExt,
           material.fileName,
           material.r2ObjectKey,
           material.mimeType,
@@ -175,7 +188,7 @@ export class MaterialRepository {
     if (db.isHealthy()) {
       let subjectExists = false;
       if (resolvedSubjectId) {
-        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ?', [resolvedSubjectId]);
+        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ? AND user_id = ?', [resolvedSubjectId, userId]);
         if (rows.length > 0) {
           subjectExists = true;
         }
@@ -239,7 +252,7 @@ export class MaterialRepository {
     if (db.isHealthy()) {
       let subjectExists = false;
       if (resolvedSubjectId) {
-        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ?', [resolvedSubjectId]);
+        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ? AND user_id = ?', [resolvedSubjectId, userId]);
         if (rows.length > 0) subjectExists = true;
       }
       if (!subjectExists) {

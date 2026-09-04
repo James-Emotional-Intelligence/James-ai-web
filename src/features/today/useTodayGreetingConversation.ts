@@ -6,7 +6,7 @@ import {
   getRandomGreetingQuestion,
 } from './today-greetings';
 
-export type GreetingConversationStatus = 'asking' | 'thinking' | 'replied';
+export type GreetingConversationStatus = 'asking' | 'thinking' | 'replied' | 'error';
 
 export interface UseTodayGreetingConversationResult {
   questionItem: GreetingQuestionItem;
@@ -15,13 +15,15 @@ export interface UseTodayGreetingConversationResult {
   answerText: string;
   setAnswerText: (text: string) => void;
   handleSubmit: (customAnswer?: string) => Promise<void>;
+  handleRetry: () => Promise<void>;
   handleSkipOrDismiss: () => void;
   isThinking: boolean;
   hasReplied: boolean;
+  errorMessage: string | null;
   // Voice Speech Recognition Features
   isListening: boolean;
   startListening: () => void;
-  stopListening: () => void;
+  stopListening: (shouldSubmit?: boolean) => void;
   speechError: string | null;
   isSpeechSupported: boolean;
 }
@@ -41,11 +43,20 @@ export function useTodayGreetingConversation(
   const [answerText, setAnswerText] = useState<string>('');
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const voiceContext = useVoiceJami();
+  const voiceContextRef = useRef(voiceContext);
+  voiceContextRef.current = voiceContext;
+
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const speechRecognitionRef = useRef<any>(null);
   const hasSpokenQuestionRef = useRef(false);
+  const submittedRef = useRef(false);
+  const currentTranscriptRef = useRef('');
+  const lastSubmittedAnswerRef = useRef('');
+  const requestSeqRef = useRef(0);
+  const isMountedRef = useRef(true);
 
   const isSpeechSupported = typeof window !== 'undefined' &&
     Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
@@ -58,61 +69,46 @@ export function useTodayGreetingConversation(
     }
   }, []);
 
-  // Stop speech recognition utility
-  const stopListening = useCallback(() => {
-    if (speechRecognitionRef.current) {
-      try {
-        speechRecognitionRef.current.stop();
-      } catch {
-        // Ignore stop error
-      }
-      speechRecognitionRef.current = null;
-    }
-    setIsListening(false);
-  }, []);
-
   // Speak initial question ONLY when isReady is true (all page data has loaded)
   useEffect(() => {
     if (!isReady) return;
-    if (!hasSpokenQuestionRef.current && voiceContext?.speak) {
+    if (!hasSpokenQuestionRef.current && voiceContextRef.current?.speak) {
       hasSpokenQuestionRef.current = true;
       try {
-        voiceContext.speak(questionItem.question);
-      } catch {
-        // Autoplay may be blocked by browser until user gesture
-      }
+        voiceContextRef.current.speak(questionItem.question);
+      } catch {}
     }
-  }, [isReady, questionItem.question, voiceContext]);
+  }, [isReady, questionItem.question]);
 
-  // Set 12-second timeout for fallback reply ONLY after isReady is true
+  // Set 12-second timeout for fallback reply ONLY when not typing and not listening
   useEffect(() => {
-    if (!isReady || status !== 'asking' || isListening) {
+    if (!isReady || status !== 'asking' || isListening || answerText.trim() !== '') {
       clearFallbackTimer();
       return;
     }
 
     timerRef.current = setTimeout(() => {
+      if (!isMountedRef.current) return;
       // If user hasn't answered, transition to fallback reply
       setStatus('replied');
       setDisplayMessage(questionItem.fallbackReply);
-      if (voiceContext?.speak) {
+      if (voiceContextRef.current?.speak) {
         try {
-          voiceContext.speak(questionItem.fallbackReply);
-        } catch {
-          // Ignore audio error
-        }
+          voiceContextRef.current.speak(questionItem.fallbackReply);
+        } catch {}
       }
     }, 12000);
 
     return () => {
       clearFallbackTimer();
     };
-  }, [isReady, status, isListening, questionItem.fallbackReply, clearFallbackTimer, voiceContext]);
+  }, [isReady, status, isListening, answerText, questionItem.fallbackReply, clearFallbackTimer]);
 
   const handleSubmit = useCallback(
     async (customAnswer?: string) => {
-      stopListening();
       clearFallbackTimer();
+      setSpeechError(null);
+      setErrorMessage(null);
 
       const textToSend = typeof customAnswer === 'string' ? customAnswer : answerText;
       const trimmed = textToSend.trim();
@@ -121,44 +117,80 @@ export function useTodayGreetingConversation(
         // If empty, show fallback reply
         setStatus('replied');
         setDisplayMessage(questionItem.fallbackReply);
-        if (voiceContext?.speak) {
-          voiceContext.speak(questionItem.fallbackReply);
+        if (voiceContextRef.current?.speak) {
+          voiceContextRef.current.speak(questionItem.fallbackReply);
         }
         return;
       }
 
+      lastSubmittedAnswerRef.current = trimmed;
+      submittedRef.current = true;
       setStatus('thinking');
+      const currentReqId = ++requestSeqRef.current;
 
       try {
         const response = await api.sendJamiChat(
-          `[Lời chào tương tác đầu ngày]\nCâu hỏi: "${questionItem.question}"\nHọc sinh (${studentName}) trả lời bằng giọng nói: "${trimmed}"\nHãy phản hồi học sinh bằng 1-2 câu tiếng Việt ngắn gọn, ấm áp, khích lệ và truyền cảm hứng.`
+          `[Lời chào tương tác đầu ngày]\nCâu hỏi: "${questionItem.question}"\nHọc sinh (${studentName}) phản hồi: "${trimmed}"\nHãy phản hồi học sinh bằng 1-2 câu tiếng Việt ngắn gọn, ấm áp, khích lệ và truyền cảm hứng.`
         );
+
+        if (!isMountedRef.current || requestSeqRef.current !== currentReqId) {
+          return;
+        }
 
         const reply = response.replyMessage?.text?.trim() || questionItem.fallbackReply;
         setDisplayMessage(reply);
         setStatus('replied');
-        if (voiceContext?.speak) {
-          voiceContext.speak(reply);
+        setAnswerText('');
+        currentTranscriptRef.current = '';
+
+        if (voiceContextRef.current?.speak) {
+          voiceContextRef.current.speak(reply);
         }
-      } catch {
-        // Graceful fallback if AI request fails or is offline
-        const localReply = `Cảm ơn ${studentName}! Jami đã lắng nghe chia sẻ của cậu. Cùng nỗ lực hết mình cho ngày hôm nay nhé!`;
-        setDisplayMessage(localReply);
-        setStatus('replied');
-        if (voiceContext?.speak) {
-          voiceContext.speak(localReply);
+      } catch (err: any) {
+        if (!isMountedRef.current || requestSeqRef.current !== currentReqId) {
+          return;
         }
+        setStatus('error');
+        setErrorMessage(err.message || 'Không thể kết nối đến Jami AI. Bạn có thể thử lại hoặc tiếp tục vào học.');
       }
     },
-    [answerText, clearFallbackTimer, questionItem.question, questionItem.fallbackReply, stopListening, studentName, voiceContext]
+    [answerText, clearFallbackTimer, questionItem.question, questionItem.fallbackReply, studentName]
   );
+
+  const handleRetry = useCallback(async () => {
+    if (lastSubmittedAnswerRef.current) {
+      await handleSubmit(lastSubmittedAnswerRef.current);
+    } else {
+      setStatus('asking');
+    }
+  }, [handleSubmit]);
+
+  // Stop speech recognition utility
+  const stopListening = useCallback((shouldSubmit = false) => {
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch {}
+      speechRecognitionRef.current = null;
+    }
+    setIsListening(false);
+
+    if (shouldSubmit && !submittedRef.current) {
+      const finalVal = currentTranscriptRef.current || answerText;
+      if (finalVal.trim()) {
+        handleSubmit(finalVal.trim());
+      }
+    }
+  }, [answerText, handleSubmit]);
 
   const startListening = useCallback(() => {
     clearFallbackTimer();
     setSpeechError(null);
+    setErrorMessage(null);
+    submittedRef.current = false;
 
-    if (voiceContext?.isSpeaking) {
-      voiceContext.stopSpeaking();
+    if (voiceContextRef.current?.isSpeaking) {
+      voiceContextRef.current.stopSpeaking();
     }
 
     const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -174,13 +206,14 @@ export function useTodayGreetingConversation(
       recognizer.interimResults = true;
       speechRecognitionRef.current = recognizer;
 
-      let finalTranscript = '';
-
       recognizer.onstart = () => {
-        setIsListening(true);
+        if (isMountedRef.current) {
+          setIsListening(true);
+        }
       };
 
       recognizer.onresult = (event: any) => {
+        let finalTranscript = '';
         let currentInterim = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const trans = event.results[i][0].transcript;
@@ -191,53 +224,64 @@ export function useTodayGreetingConversation(
           }
         }
         const fullTranscript = (finalTranscript + currentInterim).trim();
-        setAnswerText(fullTranscript);
+        currentTranscriptRef.current = fullTranscript;
+        if (isMountedRef.current) {
+          setAnswerText(fullTranscript);
+        }
       };
 
       recognizer.onerror = (event: any) => {
-        if (event.error !== 'no-speech') {
+        if (event.error !== 'no-speech' && isMountedRef.current) {
           setSpeechError(`Lỗi micro (${event.error}). Vui lòng kiểm tra quyền truy cập micro.`);
         }
-        setIsListening(false);
+        if (isMountedRef.current) {
+          setIsListening(false);
+        }
       };
 
       recognizer.onend = () => {
+        if (!isMountedRef.current) return;
         setIsListening(false);
         speechRecognitionRef.current = null;
-        // If we captured speech, automatically submit or allow confirmation
-        const captured = (finalTranscript || answerText).trim();
-        if (captured) {
-          handleSubmit(captured);
+
+        // If not already submitted and we have speech text, submit once
+        if (!submittedRef.current) {
+          const captured = (currentTranscriptRef.current || answerText).trim();
+          if (captured) {
+            handleSubmit(captured);
+          }
         }
       };
 
       recognizer.start();
     } catch (err: any) {
-      setSpeechError(err.message || 'Không thể khởi động micro');
-      setIsListening(false);
+      if (isMountedRef.current) {
+        setSpeechError(err.message || 'Không thể khởi động micro');
+        setIsListening(false);
+      }
     }
-  }, [answerText, clearFallbackTimer, handleSubmit, voiceContext]);
+  }, [answerText, clearFallbackTimer, handleSubmit]);
 
   const handleSkipOrDismiss = useCallback(() => {
-    stopListening();
+    stopListening(false);
     clearFallbackTimer();
     setStatus('replied');
     setDisplayMessage(questionItem.fallbackReply);
-    if (voiceContext?.speak) {
-      voiceContext.speak(questionItem.fallbackReply);
+    if (voiceContextRef.current?.speak) {
+      voiceContextRef.current.speak(questionItem.fallbackReply);
     }
-  }, [clearFallbackTimer, questionItem.fallbackReply, stopListening, voiceContext]);
+  }, [clearFallbackTimer, questionItem.fallbackReply, stopListening]);
 
   // Clean up on unmount
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
       clearFallbackTimer();
       if (speechRecognitionRef.current) {
         try {
           speechRecognitionRef.current.abort();
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
     };
   }, [clearFallbackTimer]);
@@ -249,9 +293,11 @@ export function useTodayGreetingConversation(
     answerText,
     setAnswerText,
     handleSubmit,
+    handleRetry,
     handleSkipOrDismiss,
     isThinking: status === 'thinking',
     hasReplied: status === 'replied',
+    errorMessage,
     isListening,
     startListening,
     stopListening,

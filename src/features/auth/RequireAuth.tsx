@@ -54,3 +54,29 @@ export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({ children
 
   return children ? <>{children}</> : <Outlet />;
 };
+
+export const RequireAdmin: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
+  const { user, isAuthenticated, bootstrapStatus } = useAuth();
+  const location = useLocation();
+
+  if (bootstrapStatus === 'checking') {
+    return (
+      <div className="min-h-screen bg-[#050806] flex flex-col items-center justify-center p-4 font-sans">
+        <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#16A34A] to-[#22C55E] flex items-center justify-center text-[#050806] font-black text-xl shadow-lg shadow-[#16A34A]/25 animate-bounce mb-4">
+          J
+        </div>
+        <div className="text-[#F3FAF5] text-sm font-semibold tracking-wide">Đang kiểm tra quyền quản trị...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  if (user?.role !== 'admin') {
+    return <Navigate to="/today" replace />;
+  }
+
+  return children ? <>{children}</> : <Outlet />;
+};

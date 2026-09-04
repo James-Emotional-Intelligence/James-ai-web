@@ -198,6 +198,7 @@ export class AiAdapter {
       pendingTasks?: { id: string; title: string; subject?: string; estimatedMinutes?: number; dueAt?: string }[];
       upcomingExams?: { id: string; title: string; subject?: string; daysLeft?: number; examAt?: string }[];
       latestMaterialTitle?: string;
+      attachedMaterial?: { id: string; title: string; summary?: string; contentText?: string };
     }
   ): Promise<z.infer<typeof JamiResponseSchema> & { proposal?: any; clientAction?: any }> {
     const studentName = context?.studentName || 'bạn';
@@ -205,6 +206,14 @@ export class AiAdapter {
 
     if (client) {
       try {
+        const attachedDocPrompt = context?.attachedMaterial
+          ? `\n\n- TÀI LIỆU ĐƯỢC ĐÍNH KÈM:
+Tiêu đề: "${context.attachedMaterial.title}"
+${context.attachedMaterial.summary ? `Tóm tắt: ${context.attachedMaterial.summary}` : ''}
+${context.attachedMaterial.contentText ? `Nội dung trích dẫn:\n"""\n${context.attachedMaterial.contentText.slice(0, 3000)}\n"""` : ''}
+Quy tắc: Ưu tiên trả lời, phân tích và trích dẫn thông tin chuẩn xác từ tài liệu đính kèm này khi học sinh hỏi liên quan.`
+          : '';
+
         const systemPrompt = `Bạn là Jami - robot AI trợ lý học tập thân thiện và chuẩn mực cho học sinh Việt Nam.
 Tên học sinh: ${studentName}. Khối lớp: ${context?.gradeLevel || 9}.
 Nguyên tắc:
@@ -212,7 +221,7 @@ Nguyên tắc:
 2. Dựa trên dữ liệu thực tế được cung cấp trong ngữ cảnh:
 - Lịch học hôm nay: ${JSON.stringify(context?.todaySessions || [])}
 - Nhiệm vụ cần hoàn thành: ${JSON.stringify(context?.pendingTasks || [])}
-- Kỳ kiểm tra sắp tới: ${JSON.stringify(context?.upcomingExams || [])}
+- Kỳ kiểm tra sắp tới: ${JSON.stringify(context?.upcomingExams || [])}${attachedDocPrompt}
 3. Nếu học sinh muốn đổi lịch, dời giờ, tạo bài tập hoặc tạo kỳ thi mới, hãy đề xuất rõ ràng và yêu cầu xác nhận.
 4. KHÔNG TỰ BỊA ĐẶT lịch học, điểm số hay thông tin không có trong hệ thống.
 5. Tuyệt đối không xưng sai tên học sinh (luôn xưng Jami và gọi ${studentName}).`;
@@ -229,13 +238,20 @@ Nguyên tắc:
         const lower = userMessage.toLowerCase();
         const isScheduleIntent = lower.includes('đổi lịch') || lower.includes('dời') || lower.includes('bận');
 
+        const citations: string[] = [];
+        if (context?.attachedMaterial?.title) {
+          citations.push(context.attachedMaterial.title);
+        } else if (context?.latestMaterialTitle) {
+          citations.push(context.latestMaterialTitle);
+        }
+
         return {
           message: replyText,
           emotion: isScheduleIntent ? 'reminding' : 'speaking',
           suggestedActions: ['Xem lịch học hôm nay', 'Làm bài luyện tập AI', 'Bắt đầu Hẹn giờ tập trung'],
           requiresConfirmation: isScheduleIntent,
           confirmationSummary: isScheduleIntent ? `Dời và tối ưu lại các nhiệm vụ học tập của ${studentName}.` : undefined,
-          citationsToUserMaterial: context?.latestMaterialTitle ? [context.latestMaterialTitle] : [],
+          citationsToUserMaterial: citations,
         };
       } catch (err) {
         console.warn('[AI Adapter] OpenAI chat call failed, using dynamic context fallback', err);
@@ -395,52 +411,9 @@ Nguyên tắc:
   /**
    * Realtime session initialization endpoint for WebRTC / OpenAI Voice
    */
-  public static async createRealtimeSession(userId: string = 'usr_student_demo_01'): Promise<{ clientSecret?: string; mode: string; message: string; expiresAt?: number; model?: string; voice?: string }> {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!this.isConfigured() || !apiKey) {
-      return {
-        mode: 'demo_text_fallback',
-        message: 'Chế độ Demo: Giọng nói của Jami được mô phỏng qua Web Speech API / Text Fallback an toàn.',
-      };
-    }
-
-    try {
-      const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: this.getRealtimeModel(),
-          voice: this.getVoice(),
-          instructions:
-            'Bạn là Jami - robot AI đồng hành học tập thân thiện dành cho học sinh Việt Nam. Trả lời ngắn gọn, ấm áp và luôn khích lệ.',
-        }),
-      });
-
-      if (!response.ok) {
-        return {
-          mode: 'demo_text_fallback',
-          message: 'Chế độ Demo: Giọng nói của Jami được mô phỏng qua Web Speech API / Text Fallback an toàn.',
-        };
-      }
-
-      const data = await response.json();
-      return {
-        clientSecret: data.client_secret?.value,
-        expiresAt: data.client_secret?.expires_at,
-        model: this.getRealtimeModel(),
-        voice: this.getVoice(),
-        mode: 'openai_realtime',
-        message: 'Giọng nói của Jami được tạo bởi trí tuệ nhân tạo.',
-      };
-    } catch (err) {
-      return {
-        mode: 'demo_text_fallback',
-        message: 'Chế độ Demo: Giọng nói của Jami được mô phỏng qua Web Speech API / Text Fallback an toàn.',
-      };
-    }
+  public static async createRealtimeSession(userId: string = 'usr_student_demo_01'): Promise<{ clientSecret?: string; mode: string; message?: string; expiresAt?: number; model?: string; voice?: string; errorCode?: string }> {
+    const { voiceSessionService } = await import('./voice-session-service');
+    return voiceSessionService.createRealtimeClientSecret(userId);
   }
 
   /**

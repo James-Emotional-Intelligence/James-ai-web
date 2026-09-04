@@ -123,10 +123,35 @@ describe('LocalStorageAdapter & StorageService Unit Tests', () => {
       ).rejects.toThrow();
     });
 
-    it('rejects absolute paths attempting escape', async () => {
-      const absPath = process.platform === 'win32' ? 'C:\\Windows\\System32\\calc.exe' : '/etc/passwd';
+    it('rejects absolute paths attempting escape across all platforms', async () => {
       await expect(
-        adapter.save({ key: absPath, body: Buffer.from('bad'), contentType: 'text/plain' })
+        adapter.save({ key: '/etc/passwd', body: Buffer.from('bad'), contentType: 'text/plain' })
+      ).rejects.toThrow();
+
+      await expect(
+        adapter.save({ key: 'C:\\Windows\\System32\\calc.exe', body: Buffer.from('bad'), contentType: 'text/plain' })
+      ).rejects.toThrow();
+
+      await expect(
+        adapter.save({ key: 'D:/website/secret.key', body: Buffer.from('bad'), contentType: 'text/plain' })
+      ).rejects.toThrow();
+
+      await expect(
+        adapter.save({ key: '\\\\server\\share\\data', body: Buffer.from('bad'), contentType: 'text/plain' })
+      ).rejects.toThrow();
+
+      await expect(
+        adapter.save({ key: '//network/share', body: Buffer.from('bad'), contentType: 'text/plain' })
+      ).rejects.toThrow();
+    });
+
+    it('rejects double-encoded path traversal sequences', async () => {
+      await expect(
+        adapter.save({ key: '%252e%252e%252fetc%252fpasswd', body: Buffer.from('bad'), contentType: 'text/plain' })
+      ).rejects.toThrow();
+
+      await expect(
+        adapter.save({ key: '%2e%2e%2froot%2fshadow', body: Buffer.from('bad'), contentType: 'text/plain' })
       ).rejects.toThrow();
     });
   });

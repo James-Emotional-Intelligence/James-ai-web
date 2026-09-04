@@ -61,6 +61,21 @@ Quy tắc biến đổi: Chuyển vế đổi dấu và nhân cả hai vế vớ
       expect(parsed.chunks.length).toBeGreaterThanOrEqual(1);
       expect(parsed.needsOcr).toBe(false);
     });
+
+    it('detects low density/scanned PDFs and flags needsOcr: true', async () => {
+      const sparsePdf = Buffer.alloc(60000);
+      sparsePdf.write('%PDF-1.4\n/Type /Page\n/Type /Page\nBT (Hi) Tj ET', 0, 'utf-8');
+
+      const parsed = await bookParserService.parseBookBuffer(sparsePdf, 'pdf', 'Scanned Document');
+      expect(parsed.needsOcr).toBe(true);
+      expect(parsed.pageCount).toBeGreaterThanOrEqual(2);
+    });
+
+    it('handles empty or small zip buffers without throwing uncaught errors', () => {
+      const emptyZip = Buffer.from([0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+      const entries = bookParserService.extractZipEntries(emptyZip);
+      expect(entries).toEqual([]);
+    });
   });
 
   describe('Book Repository CRUD & Progress Tracking', () => {

@@ -54,7 +54,13 @@ export class R2StorageAdapter implements StorageAdapter {
       }
     } else if (input.filePath) {
       const fs = await import('fs');
-      buffer = await fs.promises.readFile(input.filePath);
+      try {
+        buffer = await fs.promises.readFile(input.filePath);
+      } finally {
+        if (input.filePath.includes('temporary') || input.filePath.includes('tmp') || input.filePath.includes('upload_')) {
+          await fs.promises.unlink(input.filePath).catch(() => {});
+        }
+      }
     } else {
       throw new Error('[R2StorageAdapter] save() yêu cầu body hoặc filePath.');
     }
@@ -225,21 +231,30 @@ export class R2StorageAdapter implements StorageAdapter {
     if (!this.s3Client) {
       return { ready: false, reason: 'Cloudflare R2 credentials are not configured.' };
     }
+    const probeKey = `temporary/.health-probe-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     try {
+      await this.s3Client.send(
+        new PutObjectCommand({
+          Bucket: this.bucketName,
+          Key: probeKey,
+          Body: 'JAMI_R2_HEALTH_PROBE',
+        })
+      );
       await this.s3Client.send(
         new HeadObjectCommand({
           Bucket: this.bucketName,
-          Key: 'health-check-probe-object',
+          Key: probeKey,
         })
-      ).catch((err) => {
-        // NotFound is expected and means connection and bucket permissions are functional
-        if (err.name !== 'NotFound' && err.$metadata?.httpStatusCode !== 404) {
-          throw err;
-        }
-      });
+      );
+      await this.s3Client.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucketName,
+          Key: probeKey,
+        })
+      );
       return { ready: true };
     } catch (err: any) {
-      return { ready: false, reason: `R2 connection failed: ${err.message}` };
+      return { ready: false, reason: `R2 connection probe failed: ${err.message}` };
     }
   }
 }

@@ -26,6 +26,8 @@ import {
   ExamCreateSchema,
   ExamUpdateSchema,
   ExamQuizGenerateSchema,
+  SubjectQuizGenerateSchema,
+  QuizRetakeWrongSchema,
   QuizAttemptSubmitSchema,
   JamiChatRequestSchema,
   JamiConversationCreateSchema,
@@ -2486,6 +2488,37 @@ apiRouter.post('/exams/:id/quizzes/generate', requireAuth, asyncHandler(async (r
     res.json({ success: true, quiz });
   } catch (err: any) {
     sendError(req, res, 400, 'QUIZ_GENERATION_FAILED', err.message || 'Không thể tạo đề ôn tập.');
+  }
+}));
+
+apiRouter.post('/quizzes/generate', requireAuth, createRateLimiter(60000, 10, 'quiz_generate', { useUserId: true }), asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parsed = SubjectQuizGenerateSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parsed.error.issues[0]?.message || 'Thông tin sinh đề không hợp lệ');
+  }
+
+  try {
+    const quiz = await quizRepo.generateSubjectQuiz(userId, parsed.data);
+    res.json({ success: true, quiz });
+  } catch (err: any) {
+    sendError(req, res, 400, 'QUIZ_GENERATION_FAILED', err.message || 'Không thể tạo đề ôn tập theo môn.');
+  }
+}));
+
+apiRouter.post('/quizzes/retake-wrong', requireAuth, createRateLimiter(60000, 15, 'quiz_retake', { useUserId: true }), asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const parsed = QuizRetakeWrongSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', parsed.error.issues[0]?.message || 'Dữ liệu yêu cầu làm lại câu sai không hợp lệ');
+  }
+
+  try {
+    const quiz = await quizRepo.generateRetakeWrongQuestionsQuiz(userId, parsed.data.originalQuizId, parsed.data.wrongQuestionIds);
+    res.json({ success: true, quiz });
+  } catch (err: any) {
+    const status = err.message?.includes('Không tìm thấy') ? 404 : 400;
+    sendError(req, res, status, 'QUIZ_RETAKE_FAILED', err.message || 'Không thể tạo đề làm lại câu sai.');
   }
 }));
 

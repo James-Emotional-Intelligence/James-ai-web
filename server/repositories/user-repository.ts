@@ -451,9 +451,10 @@ export class UserRepository {
       if (userCached && userCached.user) {
         userCached.user.preferredName = updates.preferredName;
       }
-      const demoUser = this.demoUsers.get(userId);
-      if (demoUser) {
-        demoUser.preferredName = updates.preferredName;
+      for (const demoUser of this.demoUsers.values()) {
+        if (demoUser.id === userId) {
+          demoUser.preferredName = updates.preferredName;
+        }
       }
     }
 

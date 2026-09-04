@@ -580,8 +580,19 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           dc.onmessage = (e) => {
             try {
               const event = JSON.parse(e.data);
-              if (event.type === 'response.audio_transcript.delta') {
-                setLastReply((prev) => prev + event.delta);
+              if (
+                event.type === 'response.output_audio_transcript.delta' ||
+                event.type === 'response.audio_transcript.delta'
+              ) {
+                setLastReply((prev) => prev + (event.delta || ''));
+              } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
+                if (event.transcript) {
+                  setLastTranscript(event.transcript);
+                }
+              } else if (event.type === 'response.output_audio_transcript.done' || event.type === 'response.done') {
+                setState('armed');
+              } else if (event.type === 'error') {
+                console.warn('[VoiceJami WebRTC] OpenAI Realtime error event:', event.error);
               }
             } catch {}
           };

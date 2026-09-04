@@ -63,9 +63,13 @@ export function generateTimetableHtml(options: TimetablePdfExportOptions): strin
     };
   });
 
+  const weekStartMs = new Date(firstDay).setHours(0, 0, 0, 0);
+  const weekEndMs = new Date(lastDay).setHours(23, 59, 59, 999);
+
   const relevantBusyEvents = busyEvents.filter((b) => {
     if (!b.startsAt) return false;
-    return true;
+    const eventStart = new Date(b.startsAt).getTime();
+    return eventStart >= weekStartMs && eventStart <= weekEndMs;
   });
 
   return `<!DOCTYPE html>

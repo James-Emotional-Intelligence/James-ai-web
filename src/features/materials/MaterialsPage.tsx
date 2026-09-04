@@ -107,13 +107,9 @@ export const MaterialsPage: React.FC = () => {
         if (!noteSubjectId) setNoteSubjectId(res.subjects[0].id);
         if (!outlineSubjectId) setOutlineSubjectId(res.subjects[0].id);
       }
-    } catch {
-      setSubjects([
-        { id: 'subj-math', userId: 'default', name: 'Toán học', color: '#22C55E', icon: 'calculator' },
-        { id: 'subj-eng', userId: 'default', name: 'Tiếng Anh', color: '#3B82F6', icon: 'globe' },
-        { id: 'subj-lit', userId: 'default', name: 'Ngữ văn', color: '#EC4899', icon: 'book' },
-        { id: 'subj-phy', userId: 'default', name: 'Vật lý', color: '#8B5CF6', icon: 'atom' },
-      ]);
+    } catch (err: any) {
+      setSubjects([]);
+      setError(err.message || 'Không thể tải danh sách môn học. Vui lòng thử lại.');
     }
   };
 
@@ -355,17 +351,18 @@ export const MaterialsPage: React.FC = () => {
     }
   };
 
-  // 6.1 Download with Signed/Timed URL
-  const handleDownloadMaterial = async (mat: LearningMaterial) => {
+  // 6.1 Download with direct authenticated URL
+  const handleDownloadMaterial = (mat: LearningMaterial) => {
     try {
-      const res = await api.getMaterialDownloadUrl(mat.id);
-      if (res?.downloadUrl) {
-        window.open(res.downloadUrl, '_blank');
-      } else {
-        alert('Không tìm thấy đường dẫn tải tệp.');
-      }
+      const downloadUrl = api.getMaterialDownloadUrl(mat.id);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = mat.originalFilename || mat.fileName || mat.title || 'tailieu';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     } catch (err: any) {
-      alert(err.message || 'Không thể tạo liên kết tải xuống an toàn.');
+      alert(err.message || 'Không thể tải tệp.');
     }
   };
 

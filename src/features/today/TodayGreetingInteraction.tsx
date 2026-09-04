@@ -23,9 +23,11 @@ export const TodayGreetingInteraction: React.FC<TodayGreetingInteractionProps> =
     answerText,
     setAnswerText,
     handleSubmit,
+    handleRetry,
     handleSkipOrDismiss,
     isThinking,
     hasReplied,
+    errorMessage,
     questionItem,
     isListening,
     startListening,
@@ -37,7 +39,15 @@ export const TodayGreetingInteraction: React.FC<TodayGreetingInteractionProps> =
   const voice = useVoiceJami();
   const [showManualInput, setShowManualInput] = useState(false);
 
-  const robotState = isThinking ? 'thinking' : isListening ? 'listening_command' : hasReplied ? 'encouraging' : 'speaking';
+  const robotState = isThinking
+    ? 'thinking'
+    : isListening
+      ? 'listening_command'
+      : hasReplied
+        ? 'encouraging'
+        : voice?.isSpeaking
+          ? 'speaking'
+          : 'idle';
 
   return (
     <div
@@ -233,6 +243,33 @@ export const TodayGreetingInteraction: React.FC<TodayGreetingInteractionProps> =
             <div className="flex items-center gap-2 text-xs text-[#86EFAC] pt-1">
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#22C55E]" />
               <span>Jami đang lắng nghe và suy nghĩ lời phản hồi dành riêng cho bạn...</span>
+            </div>
+          )}
+
+          {/* Error State with Retry */}
+          {status === 'error' && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-rose-950/40 border border-rose-800/40 text-xs text-rose-300 pt-1">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{errorMessage || 'Không thể kết nối đến Jami AI.'}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleRetry()}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Thử lại</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSkipOrDismiss}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#101A13] hover:bg-[#15241A] text-[#A9B8AE] text-xs font-medium border border-rose-800/30 transition-all cursor-pointer"
+                >
+                  Bỏ qua
+                </button>
+              </div>
             </div>
           )}
 

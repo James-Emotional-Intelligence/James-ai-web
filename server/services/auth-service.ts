@@ -62,6 +62,7 @@ export class AuthService {
     gradeLevel?: number;
     userAgent?: string;
     ipAddress?: string;
+    rememberMe?: boolean;
   }): Promise<{ user: User; profile: StudentProfile; rawToken: string }> {
     const normalizedEmail = data.email.trim().toLowerCase();
     const userId = 'usr_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
@@ -96,7 +97,8 @@ export class AuthService {
     const rawToken = crypto.randomBytes(32).toString('hex');
     const tokenHash = sessionRepo.hashToken(rawToken);
     const sessionId = 'sess_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-    const expiresAtDate = new Date(Date.now() + 24 * 3600 * 1000);
+    const sessionTtlMs = data.rememberMe ? 30 * 24 * 3600 * 1000 : 24 * 3600 * 1000;
+    const expiresAtDate = new Date(Date.now() + sessionTtlMs);
 
     if (db.isHealthy()) {
       try {
@@ -204,7 +206,7 @@ export class AuthService {
         preferredName: data.preferredName,
         gradeLevel: data.gradeLevel,
       });
-      const sess = await sessionRepo.createSession(createdUser.id, false, false);
+      const sess = await sessionRepo.createSession(createdUser.id, false, !!data.rememberMe);
       return { user: createdUser, profile: createdProfile, rawToken: sess.rawToken };
     }
 

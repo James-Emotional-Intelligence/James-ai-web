@@ -325,8 +325,21 @@ export class QuizRepository {
     } = {}
   ): Promise<Quiz> {
     const subjects = await subjectRepo.getByUserId(userId);
-    const targetSubject = subjects.find((s) => s.id === options.subjectId || s.name.toLowerCase().includes((options.subjectName || '').toLowerCase())) || subjects[0];
-    const subjectId = targetSubject ? targetSubject.id : (options.subjectId || 'subj-math');
+    let targetSubject = options.subjectId ? subjects.find((s) => s.id === options.subjectId) : undefined;
+    if (!targetSubject && options.subjectName) {
+      targetSubject = subjects.find((s) => s.name.toLowerCase().includes(options.subjectName!.toLowerCase()));
+    }
+    if (!targetSubject) {
+      targetSubject = subjects[0];
+    }
+
+    if (!targetSubject) {
+      if (db.isHealthy()) {
+        throw new Error('Bạn chưa có môn học nào. Vui lòng tạo môn học trong mục Cài đặt trước khi sinh đề.');
+      }
+    }
+
+    const subjectId = targetSubject ? targetSubject.id : 'subj-math';
     const subjectName = targetSubject ? targetSubject.name : (options.subjectName || 'Toán học');
 
     const difficulty = options.difficulty || 'medium';
@@ -415,15 +428,20 @@ export class QuizRepository {
     originalQuizId: string,
     wrongQuestionIds: string[]
   ): Promise<Quiz> {
+    const originalQuiz = await this.getById(userId, originalQuizId, true);
+    if (!originalQuiz) {
+      throw new Error('Không tìm thấy đề thi gốc hoặc bạn không có quyền truy cập đề thi này.');
+    }
+
     const originalQuestions = await this.getQuizQuestions(userId, originalQuizId, true);
     const wrongQuestions = originalQuestions.filter((q) => wrongQuestionIds.includes(q.id));
 
     if (wrongQuestions.length === 0) {
-      throw new Error('Không tìm thấy câu hỏi sai để làm lại.');
+      throw new Error('Không tìm thấy câu hỏi sai hợp lệ trong đề thi này để làm lại.');
     }
 
     const quizId = 'quiz_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-    const quizTitle = `Luyện Lại Câu Sai - ${wrongQuestions.length} Câu`;
+    const quizTitle = `Luyện Lại Câu Sai - ${wrongQuestions.length} Câu (${originalQuiz.subjectName})`;
 
     const questions: QuizQuestion[] = wrongQuestions.map((q, idx) => ({
       ...q,
@@ -435,11 +453,11 @@ export class QuizRepository {
     const quiz: Quiz = {
       id: quizId,
       userId,
-      subjectId: 'subj-math',
-      subjectName: 'Ôn tập câu sai',
+      subjectId: originalQuiz.subjectId,
+      subjectName: originalQuiz.subjectName,
       title: quizTitle,
       type: 'weak_topic',
-      difficulty: 'medium',
+      difficulty: originalQuiz.difficulty || 'medium',
       status: 'ready',
       questionCount: questions.length,
       questions,
@@ -451,8 +469,8 @@ export class QuizRepository {
       await db.withTransaction(async (conn) => {
         await conn.execute(
           `INSERT INTO quizzes (id, user_id, exam_id, subject_id, title, type, milestone, difficulty, status, generated_by_ai, created_at)
-           VALUES (?, ?, NULL, ?, ?, 'weak_topic', NULL, 'medium', 'ready', 0, NOW(3))`,
-          [quiz.id, userId, quiz.subjectId, quiz.title]
+           VALUES (?, ?, NULL, ?, ?, 'weak_topic', NULL, ?, 'ready', 0, NOW(3))`,
+          [quiz.id, userId, quiz.subjectId, quiz.title, quiz.difficulty]
         );
 
         for (const q of questions) {

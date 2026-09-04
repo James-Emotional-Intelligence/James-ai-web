@@ -40,7 +40,7 @@ export class VoiceSessionService {
   }
 
   /**
-   * Exchanges WebRTC SDP offer with OpenAI Realtime API /v1/realtime/calls
+   * Exchanges WebRTC SDP offer with OpenAI Realtime API /v1/realtime/calls using FormData
    */
   public async exchangeRealtimeSdp(
     userId: string,
@@ -50,32 +50,72 @@ export class VoiceSessionService {
     sdpAnswer?: string;
     model?: string;
     message?: string;
+    errorCode?: string;
   }> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!AiAdapter.isConfigured() || !apiKey) {
       return {
         mode: 'demo_fallback',
+        errorCode: 'AI_NOT_CONFIGURED',
         message: 'OpenAI API chưa được cấu hình. Đang kích hoạt chế độ Giọng nói của trình duyệt.',
       };
     }
 
     try {
       const model = AiAdapter.getRealtimeModel();
-      const response = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(model)}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/sdp',
-          'OpenAI-Safety-Identifier': this.generateSafetyIdentifier(userId),
+      const safetyId = this.generateSafetyIdentifier(userId);
+      const sessionConfig = {
+        model,
+        voice: AiAdapter.getVoice(),
+        instructions:
+          'Bạn là Jami - robot AI đồng hành học tập thân thiện dành cho học sinh Việt Nam theo chương trình GDPT 2018. ' +
+          'Khi học sinh nói "Jami ơi", bạn đã mở kết nối. ' +
+          'Hãy lắng nghe kỹ yêu cầu của học sinh, trả lời bằng tiếng Việt ngắn gọn, ấm áp, tích cực và gọi các công cụ quản lý thời khóa biểu, nhiệm vụ khi cần thiết. ' +
+          'Mọi hành động thêm/xóa/sửa dữ liệu phải tạo bản xem trước và hỏi ý kiến học sinh trước khi thực hiện.',
+        input_audio_transcription: {
+          model: AiAdapter.getTranscribeModel(),
         },
-        body: sdpOffer,
-      });
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 600,
+        },
+        tools: JamiActionService.getToolDefinitions(),
+      };
+
+      const formData = new FormData();
+      formData.append('sdp', sdpOffer);
+      formData.append('session', JSON.stringify(sessionConfig));
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      let response: Response;
+      try {
+        response = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(model)}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'OpenAI-Safety-Identifier': safetyId,
+          },
+          body: formData,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
         console.warn('[VoiceSessionService] OpenAI Realtime WebRTC calls failed:', response.status, errorText);
+        let errorCode = 'AI_UPSTREAM_ERROR';
+        if (response.status === 401 || response.status === 403) errorCode = 'AI_AUTH_FAILED';
+        else if (response.status === 429) errorCode = 'AI_RATE_LIMITED';
+
         return {
           mode: 'demo_fallback',
+          errorCode,
           message: 'Không thể thiết lập WebRTC với OpenAI Realtime. Đang chuyển sang Giọng nói trình duyệt.',
         };
       }
@@ -89,15 +129,17 @@ export class VoiceSessionService {
       };
     } catch (err: any) {
       console.warn('[VoiceSessionService] OpenAI Realtime WebRTC exchange error:', err.message);
+      const isTimeout = err.name === 'AbortError' || err.message?.includes('timeout');
       return {
         mode: 'demo_fallback',
+        errorCode: isTimeout ? 'AI_TIMEOUT' : 'AI_UPSTREAM_ERROR',
         message: 'Lỗi mạng khi kết nối OpenAI Realtime WebRTC. Sử dụng Giọng nói của trình duyệt.',
       };
     }
   }
 
   /**
-   * Creates an ephemeral client secret from OpenAI Realtime API
+   * Creates an ephemeral client secret from OpenAI Realtime API (/v1/realtime/client_secrets)
    */
   public async createRealtimeClientSecret(userId: string): Promise<{
     mode: 'openai_realtime' | 'demo_fallback';
@@ -106,60 +148,99 @@ export class VoiceSessionService {
     model?: string;
     voice?: string;
     message?: string;
+    errorCode?: string;
   }> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!AiAdapter.isConfigured() || !apiKey) {
       return {
         mode: 'demo_fallback',
+        errorCode: 'AI_NOT_CONFIGURED',
         message: 'OpenAI API chưa được cấu hình. Đang kích hoạt Fallback Web Speech API trung thực.',
       };
     }
 
-    try {
-      const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'OpenAI-Safety-Identifier': this.generateSafetyIdentifier(userId),
+    const model = AiAdapter.getRealtimeModel();
+    const voice = AiAdapter.getVoice();
+    const safetyId = this.generateSafetyIdentifier(userId);
+    const sessionPayload = {
+      session: {
+        model,
+        voice,
+        instructions:
+          'Bạn là Jami - robot AI đồng hành học tập thân thiện dành cho học sinh Việt Nam theo chương trình GDPT 2018. ' +
+          'Khi học sinh nói "Jami ơi", bạn đã mở kết nối. ' +
+          'Hãy lắng nghe kỹ yêu cầu của học sinh, trả lời bằng tiếng Việt ngắn gọn, ấm áp, tích cực và gọi các công cụ quản lý thời khóa biểu, nhiệm vụ khi cần thiết. ' +
+          'Mọi hành động thêm/xóa/sửa dữ liệu phải tạo bản xem trước và hỏi ý kiến học sinh trước khi thực hiện.',
+        input_audio_transcription: {
+          model: AiAdapter.getTranscribeModel(),
         },
-        body: JSON.stringify({
-          model: AiAdapter.getRealtimeModel(),
-          voice: AiAdapter.getVoice(),
-          instructions:
-            'Bạn là Jami - robot AI đồng hành học tập thân thiện dành cho học sinh Việt Nam theo chương trình GDPT 2018. ' +
-            'Khi học sinh nói "Jami ơi", bạn đã mở kết nối. ' +
-            'Hãy lắng nghe kỹ yêu cầu của học sinh, trả lời bằng tiếng Việt ngắn gọn, ấm áp, tích cực và gọi các công cụ quản lý thời khóa biểu, nhiệm vụ khi cần thiết. ' +
-            'Mọi hành động thêm/xóa/sửa dữ liệu phải tạo bản xem trước và hỏi ý kiến học sinh trước khi thực hiện.',
-          input_audio_transcription: {
-            model: AiAdapter.getTranscribeModel(),
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 600,
+        },
+        tools: JamiActionService.getToolDefinitions(),
+      },
+    };
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+      let response: Response;
+      try {
+        // Try GA endpoint first: /v1/realtime/client_secrets
+        response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'OpenAI-Safety-Identifier': safetyId,
           },
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 600,
-          },
-          tools: JamiActionService.getToolDefinitions(),
-        }),
-      });
+          body: JSON.stringify(sessionPayload),
+          signal: controller.signal,
+        });
+
+        // Fallback to /v1/realtime/sessions if /client_secrets returns 404
+        if (response.status === 404) {
+          response = await fetch('https://api.openai.com/v1/realtime/sessions', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+              'OpenAI-Safety-Identifier': safetyId,
+            },
+            body: JSON.stringify(sessionPayload.session),
+            signal: controller.signal,
+          });
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.warn('[VoiceSessionService] OpenAI Realtime session creation failed:', response.status, errorText);
+        console.warn('[VoiceSessionService] OpenAI Realtime client secret creation failed:', response.status, errorText);
+        let errorCode = 'AI_UPSTREAM_ERROR';
+        if (response.status === 401 || response.status === 403) errorCode = 'AI_AUTH_FAILED';
+        else if (response.status === 429) errorCode = 'AI_RATE_LIMITED';
+
         return {
           mode: 'demo_fallback',
+          errorCode,
           message: 'Không thể khởi tạo phiên OpenAI Realtime. Đang chuyển sang Web Speech Fallback.',
         };
       }
 
       const data = await response.json();
-      const clientSecretValue = data.client_secret?.value;
-      const expiresAt = data.client_secret?.expires_at;
+      const clientSecretValue = data.value || data.client_secret?.value;
+      const expiresAt = data.expires_at || data.client_secret?.expires_at;
 
       if (!clientSecretValue) {
         return {
           mode: 'demo_fallback',
+          errorCode: 'AI_UPSTREAM_ERROR',
           message: 'Không nhận được ephemeral client secret từ OpenAI.',
         };
       }
@@ -168,14 +249,16 @@ export class VoiceSessionService {
         mode: 'openai_realtime',
         clientSecret: clientSecretValue,
         expiresAt,
-        model: AiAdapter.getRealtimeModel(),
-        voice: AiAdapter.getVoice(),
+        model,
+        voice,
         message: 'Phiên OpenAI Realtime WebRTC đã sẵn sàng.',
       };
     } catch (err: any) {
       console.warn('[VoiceSessionService] OpenAI Realtime request error:', err.message);
+      const isTimeout = err.name === 'AbortError' || err.message?.includes('timeout');
       return {
         mode: 'demo_fallback',
+        errorCode: isTimeout ? 'AI_TIMEOUT' : 'AI_UPSTREAM_ERROR',
         message: 'Lỗi kết nối OpenAI Realtime. Sử dụng Web Speech Fallback.',
       };
     }

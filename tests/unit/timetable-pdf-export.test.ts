@@ -4,13 +4,13 @@ import type { TimetableEntry, BusyEvent } from '../../shared/types';
 
 describe('timetable-pdf-export utility', () => {
   const sampleWeekDays = [
-    { dayOfWeek: 1, date: new Date('2026-09-01T00:00:00Z'), dateStr: '2026-09-01', label: 'Thứ 2', isToday: true },
-    { dayOfWeek: 2, date: new Date('2026-09-02T00:00:00Z'), dateStr: '2026-09-02', label: 'Thứ 3', isToday: false },
-    { dayOfWeek: 3, date: new Date('2026-09-03T00:00:00Z'), dateStr: '2026-09-03', label: 'Thứ 4', isToday: false },
-    { dayOfWeek: 4, date: new Date('2026-09-04T00:00:00Z'), dateStr: '2026-09-04', label: 'Thứ 5', isToday: false },
-    { dayOfWeek: 5, date: new Date('2026-09-05T00:00:00Z'), dateStr: '2026-09-05', label: 'Thứ 6', isToday: false },
-    { dayOfWeek: 6, date: new Date('2026-09-06T00:00:00Z'), dateStr: '2026-09-06', label: 'Thứ 7', isToday: false },
-    { dayOfWeek: 7, date: new Date('2026-09-07T00:00:00Z'), dateStr: '2026-09-07', label: 'Chủ Nhật', isToday: false },
+    { dayOfWeek: 1, date: new Date('2026-08-31T00:00:00Z'), dateStr: '2026-08-31', label: 'Thứ 2', isToday: true },
+    { dayOfWeek: 2, date: new Date('2026-09-01T00:00:00Z'), dateStr: '2026-09-01', label: 'Thứ 3', isToday: false },
+    { dayOfWeek: 3, date: new Date('2026-09-02T00:00:00Z'), dateStr: '2026-09-02', label: 'Thứ 4', isToday: false },
+    { dayOfWeek: 4, date: new Date('2026-09-03T00:00:00Z'), dateStr: '2026-09-03', label: 'Thứ 5', isToday: false },
+    { dayOfWeek: 5, date: new Date('2026-09-04T00:00:00Z'), dateStr: '2026-09-04', label: 'Thứ 6', isToday: false },
+    { dayOfWeek: 6, date: new Date('2026-09-05T00:00:00Z'), dateStr: '2026-09-05', label: 'Thứ 7', isToday: false },
+    { dayOfWeek: 7, date: new Date('2026-09-06T00:00:00Z'), dateStr: '2026-09-06', label: 'Chủ Nhật', isToday: false },
   ];
 
   const sampleEntries: TimetableEntry[] = [

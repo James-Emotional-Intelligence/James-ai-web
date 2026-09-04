@@ -8,7 +8,7 @@ import {
   BookHighlight,
   BookStudyCitation,
 } from '../../shared/types';
-import { storageService, generateMaterialObjectKey, sanitizeFileName } from '../services/storage-service';
+import { storageService, generateMaterialObjectKey, sanitizeFileName, getSafeExtension } from '../services/storage-service';
 import { bookParserService } from '../services/book-parser-service';
 import { env } from '../config/env';
 import crypto from 'crypto';
@@ -219,7 +219,7 @@ export class BookRepository {
         title: r.title,
         type: r.type,
         materialKind: 'book',
-        storageDriver: (r.storage_driver as any) || (r.r2_object_key ? 'r2' : 'local'),
+        storageDriver: (r.storage_driver as any) || storageService.getActiveDriver(),
         storageKey: r.storage_key || r.r2_object_key || undefined,
         originalFilename: r.original_filename || r.file_name,
         detectedMime: r.detected_mime || r.mime_type,
@@ -269,6 +269,8 @@ export class BookRepository {
     const id = 'book_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const sanitizedName = sanitizeFileName(data.fileName);
     const r2ObjectKey = generateMaterialObjectKey(userId, id, sanitizedName);
+    const activeDriver = storageService.getActiveDriver();
+    const safeExt = getSafeExtension(sanitizedName, data.mimeType);
 
     const ext = sanitizedName.split('.').pop()?.toLowerCase();
     let type: Material['type'] = 'pdf';
@@ -283,6 +285,9 @@ export class BookRepository {
       title: data.title.trim(),
       type,
       materialKind: 'book',
+      storageDriver: activeDriver,
+      storageKey: r2ObjectKey,
+      extension: safeExt,
       originalFilename: sanitizedName,
       detectedMime: data.mimeType,
       publisher: data.publisher?.trim() || undefined,
@@ -302,19 +307,22 @@ export class BookRepository {
     if (db.isHealthy()) {
       await db.execute(
         `INSERT INTO learning_materials (
-          id, user_id, subject_id, title, type, material_kind, original_filename,
-          detected_mime, publisher, edition_year, language, file_name, r2_object_key,
-          mime_type, size_bytes, processing_status, processing_progress,
+          id, user_id, subject_id, title, type, material_kind, storage_driver, storage_key,
+          original_filename, detected_mime, extension, publisher, edition_year, language,
+          file_name, r2_object_key, mime_type, size_bytes, processing_status, processing_progress,
           rights_confirmed_at, rights_terms_version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'book', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', 0, NOW(3), ?, NOW(3), NOW(3))`,
+        ) VALUES (?, ?, ?, ?, ?, 'book', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', 0, NOW(3), ?, NOW(3), NOW(3))`,
         [
           book.id,
           userId,
           book.subjectId,
           book.title,
           book.type,
+          activeDriver,
+          r2ObjectKey,
           book.originalFilename,
           book.detectedMime,
+          safeExt,
           book.publisher || null,
           book.editionYear || null,
           book.language || 'vi',

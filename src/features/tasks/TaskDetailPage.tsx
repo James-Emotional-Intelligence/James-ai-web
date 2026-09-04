@@ -301,7 +301,7 @@ export const TaskDetailPage: React.FC = () => {
         const finalized = await api.finalizeMaterialUpload(intent.material.id, {
           sizeBytes: evidenceFile.size,
         });
-        fileUrl = (finalized.material as any)?.fileUrl || `/api/v1/materials/${intent.material.id}/content`;
+        fileUrl = (finalized.material as any)?.fileUrl || api.getMaterialPreviewUrl(intent.material.id);
         finalNote = `[Tệp đính kèm (${evidenceFile.name})]: ${evidenceNote}`;
       } else if (evidenceType === 'link') {
         finalNote = `[Liên kết trực tuyến]: ${evidenceLink} - ${evidenceNote}`;
@@ -1232,7 +1232,7 @@ export const TaskDetailPage: React.FC = () => {
         onFileSelected={async (res) => {
           if (!task) return;
           try {
-            const fileUrl = (res.material as any)?.fileUrl || (res.materialId ? `/api/v1/materials/${res.materialId}/download` : undefined);
+            const fileUrl = (res.material as any)?.fileUrl || (res.materialId ? api.getMaterialPreviewUrl(res.materialId) : undefined);
             await api.submitTaskEvidence(task.id, {
               type: res.mimeType?.startsWith('image/') ? 'image' : 'file',
               evidenceNote: `[Tài liệu đính kèm]: ${res.materialTitle || res.fileName}${

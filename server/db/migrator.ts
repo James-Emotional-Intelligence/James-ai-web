@@ -168,10 +168,16 @@ export class Migrator {
     let lockAcquired = false;
     try {
       const lockRes = await db.query<any>('SELECT GET_LOCK("jami_migration_lock", 10) as lockAcquired');
-      if (lockRes[0]?.lockAcquired === 1) {
+      if (lockRes && lockRes[0]?.lockAcquired === 1) {
         lockAcquired = true;
       }
-    } catch {}
+    } catch (lockErr: any) {
+      console.warn('[JAMI Migrator] Lỗi khi yêu cầu GET_LOCK:', lockErr.message);
+    }
+
+    if (!lockAcquired) {
+      throw new Error('[JAMI Migrator] Không thể lấy khóa migration (GET_LOCK jami_migration_lock). Một tiến trình migration khác đang thực thi.');
+    }
 
     try {
       await this.initMigrationTable();
@@ -183,6 +189,9 @@ export class Migrator {
 
       const migrationsDir = path.join(process.cwd(), 'server', 'db', 'migrations');
       if (!fs.existsSync(migrationsDir)) {
+        if (isProduction) {
+          throw new Error(`[JAMI Migrator FATAL] Thư mục migrations không tồn tại tại "${migrationsDir}".`);
+        }
         return { applied: [], alreadyUpToDate: true };
       }
 
@@ -220,8 +229,17 @@ export class Migrator {
           try {
             await db.execute(stmt);
           } catch (stmtErr: any) {
-            if (stmtErr.code === 'ER_DUP_FIELDNAME' || stmtErr.code === 'ER_DUP_KEYNAME' || stmtErr.errno === 1060 || stmtErr.errno === 1061) {
-              console.log(`[JAMI Migrator] Notice: Column/Key already exists in statement #${i + 1}, continuing idempotently.`);
+            const isDuplicate =
+              stmtErr.code === 'ER_DUP_FIELDNAME' ||
+              stmtErr.code === 'ER_DUP_KEYNAME' ||
+              stmtErr.code === 'ER_FK_DUP_NAME' ||
+              stmtErr.code === 'ER_DUP_KEY' ||
+              stmtErr.errno === 1060 ||
+              stmtErr.errno === 1061 ||
+              stmtErr.errno === 1826 ||
+              stmtErr.errno === 1022;
+            if (isDuplicate) {
+              console.log(`[JAMI Migrator] Notice: Column/Key/FK constraint already exists in statement #${i + 1}, continuing idempotently.`);
             } else {
               console.error(`[JAMI Migrator ERROR] Statement ${i + 1}/${statements.length} failed in ${file}:`, stmtErr.message);
               throw new Error(`Migration ${file} failed at statement #${i + 1}: ${stmtErr.message}`, { cause: stmtErr });

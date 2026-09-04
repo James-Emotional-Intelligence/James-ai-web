@@ -837,6 +837,7 @@ export const api = {
   uploadMaterialDirect: async (key: string, fileData: Blob | ArrayBuffer, contentType: string) => {
     const res = await fetch(buildApiUrl(`/materials/upload-direct?key=${encodeURIComponent(key)}`), {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': contentType,
       },
@@ -873,8 +874,19 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
-  getMaterialDownloadUrl: (id: string) =>
-    fetchJson<{ downloadUrl: string; expiresAt: string }>(`/materials/${id}/download`),
+  getMaterialPreviewUrl: (id: string) => buildApiUrl(`/materials/${encodeURIComponent(id)}/preview`),
+  getMaterialDownloadUrl: (id: string) => buildApiUrl(`/materials/${encodeURIComponent(id)}/download`),
+  getMaterialFileUrl: (id: string) => buildApiUrl(`/materials/${encodeURIComponent(id)}/file`),
+  getMaterialContentUrl: (id: string) => buildApiUrl(`/materials/${encodeURIComponent(id)}/content`),
+  fetchMaterialBlob: async (id: string): Promise<Blob> => {
+    const res = await fetch(buildApiUrl(`/materials/${encodeURIComponent(id)}/download`), {
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      throw new Error(`Không thể tải tệp (HTTP ${res.status})`);
+    }
+    return res.blob();
+  },
   generateMaterialOutline: (id: string, options?: { chapter?: string }) =>
     fetchJson<{ outline: Outline }>(`/materials/${id}/outline`, {
       method: 'POST',

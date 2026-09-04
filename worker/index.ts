@@ -105,7 +105,9 @@ export default {
           const backendResponse = await fetch(new Request(targetUrl.toString(), reqInit));
 
           const resHeaders = new Headers(backendResponse.headers);
-          resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          if (!resHeaders.has('Cache-Control')) {
+            resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          }
 
           return new Response(backendResponse.body, {
             status: backendResponse.status,

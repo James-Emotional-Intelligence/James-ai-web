@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Clock,
   CheckCircle2,
@@ -164,6 +164,7 @@ export const TodayDashboard: React.FC = () => {
   const [postponeOption, setPostponeOption] = useState<'30m' | '60m' | 'tonight' | 'tomorrow' | 'custom'>('30m');
   const [customPostponeTime, setCustomPostponeTime] = useState<string>('');
   const [isPostponing, setIsPostponing] = useState<boolean>(false);
+  const homeworkBlobUrlsRef = useRef<Map<string, string>>(new Map());
 
   // Scroll position keeper on page navigation
   useEffect(() => {
@@ -207,8 +208,11 @@ export const TodayDashboard: React.FC = () => {
       setActiveLessonForms((prev) => {
         const next = { ...prev };
         for (const cls of classes) {
-          if (!next[cls.id]) {
-            const hasExistingHw = Boolean(cls.homework || cls.homeworkImageMaterialId);
+          const existing = prev[cls.id];
+          const hasExistingHw = Boolean(cls.homework || cls.homeworkImageMaterialId);
+          const serverPreviewUrl = cls.homeworkImageUrl || (cls.homeworkImageMaterialId ? api.getMaterialPreviewUrl(cls.homeworkImageMaterialId) : null);
+
+          if (!existing) {
             next[cls.id] = {
               learnedContent: cls.learnedContent || '',
               homework: cls.homework || '',
@@ -219,11 +223,22 @@ export const TodayDashboard: React.FC = () => {
               isSaving: false,
               savedStatus: cls.savedAt ? `Đã lưu lúc ${new Date(cls.savedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : null,
               homeworkImageMaterialId: cls.homeworkImageMaterialId || null,
-              homeworkImagePreviewUrl: cls.homeworkImageUrl || (cls.homeworkImageMaterialId ? `/api/materials/${cls.homeworkImageMaterialId}/download` : null),
+              homeworkImagePreviewUrl: serverPreviewUrl,
               homeworkImageFile: null,
               isUploadingImage: false,
               uploadError: null,
             };
+          } else {
+            // Reconcile without overwriting active user typing
+            const isDirty = existing.isSaving || existing.isUploadingImage || existing.homeworkImageFile !== null;
+            if (!isDirty) {
+              next[cls.id] = {
+                ...existing,
+                savedStatus: cls.savedAt ? `Đã lưu lúc ${new Date(cls.savedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : existing.savedStatus,
+                homeworkImageMaterialId: cls.homeworkImageMaterialId || existing.homeworkImageMaterialId,
+                homeworkImagePreviewUrl: existing.homeworkImagePreviewUrl || serverPreviewUrl,
+              };
+            }
           }
         }
         return next;
@@ -238,15 +253,39 @@ export const TodayDashboard: React.FC = () => {
   const handleSelectHomeworkImage = (clsId: string, file: File) => {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) {
-      alert('Dung lượng ảnh vượt quá giới hạn 10MB. Vui lòng chọn ảnh nhỏ hơn.');
+      setActiveLessonForms((prev) => ({
+        ...prev,
+        [clsId]: {
+          ...prev[clsId],
+          uploadError: 'Dung lượng ảnh vượt quá giới hạn 10MB. Vui lòng chọn ảnh nhỏ hơn.',
+        },
+      }));
       return;
     }
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
     if (!allowedTypes.includes(file.type.toLowerCase())) {
-      alert('Định dạng hình ảnh không hợp lệ. Vui lòng chọn ảnh JPEG, PNG hoặc WEBP.');
+      setActiveLessonForms((prev) => ({
+        ...prev,
+        [clsId]: {
+          ...prev[clsId],
+          uploadError: 'Định dạng hình ảnh không hợp lệ. Vui lòng chọn ảnh JPEG, PNG hoặc WEBP.',
+        },
+      }));
       return;
     }
+
+    // Revoke previous blob url if exists for this class
+    const prevBlobUrl = homeworkBlobUrlsRef.current.get(clsId);
+    if (prevBlobUrl) {
+      try {
+        URL.revokeObjectURL(prevBlobUrl);
+      } catch {}
+      homeworkBlobUrlsRef.current.delete(clsId);
+    }
+
     const previewUrl = URL.createObjectURL(file);
+    homeworkBlobUrlsRef.current.set(clsId, previewUrl);
+
     setActiveLessonForms((prev) => ({
       ...prev,
       [clsId]: {
@@ -260,6 +299,14 @@ export const TodayDashboard: React.FC = () => {
   };
 
   const handleRemoveHomeworkImage = (clsId: string) => {
+    const prevBlobUrl = homeworkBlobUrlsRef.current.get(clsId);
+    if (prevBlobUrl) {
+      try {
+        URL.revokeObjectURL(prevBlobUrl);
+      } catch {}
+      homeworkBlobUrlsRef.current.delete(clsId);
+    }
+
     setActiveLessonForms((prev) => ({
       ...prev,
       [clsId]: {
@@ -267,9 +314,22 @@ export const TodayDashboard: React.FC = () => {
         homeworkImageFile: null,
         homeworkImagePreviewUrl: null,
         homeworkImageMaterialId: null,
+        uploadError: null,
       },
     }));
   };
+
+  // Cleanup all blob object URLs on unmount ONLY
+  useEffect(() => {
+    return () => {
+      homeworkBlobUrlsRef.current.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {}
+      });
+      homeworkBlobUrlsRef.current.clear();
+    };
+  }, []);
 
   const handleSaveLessonLog = async (item: TodayLessonLogItem, createTask: boolean) => {
     const form = activeLessonForms[item.id];
@@ -278,13 +338,19 @@ export const TodayDashboard: React.FC = () => {
     const hasHwContent = Boolean((form.homework && form.homework.trim()) || form.homeworkImageFile || form.homeworkImageMaterialId);
 
     if (createTask && !form.hasNoHomework && !hasHwContent) {
-      alert('Vui lòng nhập nội dung hoặc đính kèm ảnh bài tập về nhà trước khi tạo nhiệm vụ.');
+      setActiveLessonForms((prev) => ({
+        ...prev,
+        [item.id]: {
+          ...prev[item.id],
+          uploadError: 'Vui lòng nhập nội dung hoặc đính kèm ảnh bài tập về nhà trước khi tạo nhiệm vụ.',
+        },
+      }));
       return;
     }
 
     setActiveLessonForms((prev) => ({
       ...prev,
-      [item.id]: { ...prev[item.id], isSaving: true },
+      [item.id]: { ...prev[item.id], isSaving: true, uploadError: null },
     }));
 
     try {
@@ -306,6 +372,21 @@ export const TodayDashboard: React.FC = () => {
             materialKind: 'document',
           });
           finalMaterialId = uploadRes.material.id;
+          // Revoke local blob and switch to server preview URL
+          if (form.homeworkImagePreviewUrl && form.homeworkImagePreviewUrl.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(form.homeworkImagePreviewUrl);
+            } catch {}
+          }
+          setActiveLessonForms((prev) => ({
+            ...prev,
+            [item.id]: {
+              ...prev[item.id],
+              homeworkImageMaterialId: finalMaterialId,
+              homeworkImageFile: null,
+              homeworkImagePreviewUrl: api.getMaterialPreviewUrl(finalMaterialId),
+            },
+          }));
         } catch (uploadErr: any) {
           throw new Error(uploadErr.message || 'Tải ảnh bài tập lên máy chủ thất bại.', { cause: uploadErr });
         } finally {
@@ -340,6 +421,8 @@ export const TodayDashboard: React.FC = () => {
         dueAt = d7.toISOString();
       }
 
+      const shouldCreateTask = createTask && !form.hasNoHomework && form.attendanceStatus !== 'absent' && Boolean((form.homework && form.homework.trim()) || finalMaterialId);
+
       await api.submitSessionCheckin({
         timetableEntryId: item.timetableEntryId,
         timetableEntryIds: item.timetableEntryIds,
@@ -349,7 +432,7 @@ export const TodayDashboard: React.FC = () => {
         homeworkImageMaterialId: form.hasNoHomework ? undefined : finalMaterialId || undefined,
         hasNoHomework: form.hasNoHomework,
         attendanceStatus: form.attendanceStatus,
-        createTaskForHomework: createTask && !form.hasNoHomework && Boolean((form.homework && form.homework.trim()) || finalMaterialId),
+        createTaskForHomework: shouldCreateTask,
         dueAt,
         estimatedMinutes: form.homeworkEstimatedMinutes,
         taskId: item.linkedTaskId,
@@ -364,18 +447,23 @@ export const TodayDashboard: React.FC = () => {
           ...prev[item.id],
           homeworkImageMaterialId: form.hasNoHomework ? null : finalMaterialId,
           homeworkImageFile: null,
+          homeworkImagePreviewUrl: form.hasNoHomework ? null : (finalMaterialId ? api.getMaterialPreviewUrl(finalMaterialId) : prev[item.id].homeworkImagePreviewUrl),
           isSaving: false,
-          savedStatus: `Đã lưu lúc ${nowTimeStr}${createTask ? ' (Đã tạo nhiệm vụ)' : ''}`,
+          uploadError: null,
+          savedStatus: `Đã lưu lúc ${nowTimeStr}${shouldCreateTask ? ' (Đã tạo nhiệm vụ)' : ''}`,
         },
       }));
 
       // Background silent refetch so no scroll jump!
       await fetchDashboardData(true);
     } catch (err: any) {
-      alert(err.message || 'Không thể lưu nhật ký bài học.');
       setActiveLessonForms((prev) => ({
         ...prev,
-        [item.id]: { ...prev[item.id], isSaving: false },
+        [item.id]: {
+          ...prev[item.id],
+          isSaving: false,
+          uploadError: err.message || 'Không thể lưu nhật ký bài học.',
+        },
       }));
     }
   };
@@ -1129,7 +1217,7 @@ export const TodayDashboard: React.FC = () => {
                     isSaving: false,
                     savedStatus: cls.savedAt ? `Đã lưu lúc ${new Date(cls.savedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : null,
                     homeworkImageMaterialId: cls.homeworkImageMaterialId || null,
-                    homeworkImagePreviewUrl: cls.homeworkImageUrl || (cls.homeworkImageMaterialId ? `/api/materials/${cls.homeworkImageMaterialId}/download` : null),
+                    homeworkImagePreviewUrl: cls.homeworkImageUrl || (cls.homeworkImageMaterialId ? api.getMaterialPreviewUrl(cls.homeworkImageMaterialId) : null),
                     homeworkImageFile: null,
                     isUploadingImage: false,
                     uploadError: null,
@@ -1387,8 +1475,25 @@ export const TodayDashboard: React.FC = () => {
                                     </label>
 
                                     <span className="text-[10px] text-[#A9B8AE]/60 hidden sm:inline">
-                                      (Hỗ trợ JPEG, PNG, WEBP $\le$ 10MB)
+                                      (Hỗ trợ JPEG, PNG, WEBP &le; 10MB)
                                     </span>
+                                  </div>
+                                )}
+
+                                {/* Upload Error Banner with Retry */}
+                                {form.uploadError && (
+                                  <div className="mt-2 p-2.5 rounded-xl bg-rose-950/50 border border-rose-800/50 text-xs text-rose-300 flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-1.5 flex-1">
+                                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                                      <span>{form.uploadError}</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveLessonLog(cls, false)}
+                                      className="px-2.5 py-1 rounded-lg bg-rose-900/60 hover:bg-rose-800 text-white text-[11px] font-bold transition-all cursor-pointer shrink-0"
+                                    >
+                                      Thử lại
+                                    </button>
                                   </div>
                                 )}
                               </div>
@@ -1465,15 +1570,17 @@ export const TodayDashboard: React.FC = () => {
                                 {form.isSaving ? 'Đang lưu...' : 'Lưu bài học'}
                               </button>
 
-                              <button
-                                type="button"
-                                disabled={form.isSaving || form.isUploadingImage || (form.hasNoHomework ? false : (!form.homework.trim() && !form.homeworkImageFile && !form.homeworkImageMaterialId))}
-                                onClick={() => handleSaveLessonLog(cls, true)}
-                                className="flex items-center gap-1.5 px-4 py-2 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black rounded-xl shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer disabled:opacity-50 jami-btn-glow"
-                              >
-                                <Check className="w-3.5 h-3.5 stroke-[3]" />
-                                <span>{form.isSaving ? 'Đang lưu...' : 'Lưu & Tạo nhiệm vụ'}</span>
-                              </button>
+                              {!form.hasNoHomework && form.attendanceStatus !== 'absent' && (
+                                <button
+                                  type="button"
+                                  disabled={form.isSaving || form.isUploadingImage || (!form.homework.trim() && !form.homeworkImageFile && !form.homeworkImageMaterialId)}
+                                  onClick={() => handleSaveLessonLog(cls, true)}
+                                  className="flex items-center gap-1.5 px-4 py-2 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black rounded-xl shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer disabled:opacity-50 jami-btn-glow"
+                                >
+                                  <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                  <span>{form.isSaving ? 'Đang lưu...' : 'Lưu & Tạo nhiệm vụ'}</span>
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>

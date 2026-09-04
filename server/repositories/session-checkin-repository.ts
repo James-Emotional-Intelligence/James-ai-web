@@ -97,6 +97,33 @@ export class SessionCheckinRepository {
       ? Array.from(new Set([data.timetableEntryId, ...data.timetableEntryIds]))
       : [data.timetableEntryId];
 
+    if (db.isHealthy()) {
+      // 1. Verify timetable entries belong to this user
+      const [entryRows]: any = await db.query(
+        `SELECT e.id FROM school_timetable_entries e
+         JOIN school_timetables t ON e.timetable_id = t.id
+         WHERE e.id IN (?) AND t.user_id = ?`,
+        [targetIds, userId]
+      );
+      const validEntryIds = new Set((entryRows || []).map((r: any) => r.id));
+      for (const entryId of targetIds) {
+        if (!validEntryIds.has(entryId)) {
+          throw new Error(`Tiết học (${entryId}) không tồn tại hoặc không thuộc quyền sở hữu của bạn.`);
+        }
+      }
+
+      // 2. Verify homework image material if attached
+      if (data.homeworkImageMaterialId && !data.hasNoHomework) {
+        const [matRows]: any = await db.query(
+          'SELECT id FROM learning_materials WHERE id = ? AND user_id = ? AND deleted_at IS NULL',
+          [data.homeworkImageMaterialId, userId]
+        );
+        if (!matRows || matRows.length === 0) {
+          throw new Error('Ảnh bài tập không tồn tại hoặc không thuộc quyền sở hữu của bạn.');
+        }
+      }
+    }
+
     const checkin: ClassSessionCheckin = {
       id,
       userId,

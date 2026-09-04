@@ -2,7 +2,7 @@ import React, { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './features/auth/AuthProvider';
 import { ThemeProvider } from './context/ThemeContext';
-import { RequireAuth } from './features/auth/RequireAuth';
+import { RequireAuth, RequireAdmin } from './features/auth/RequireAuth';
 import { GuestOnlyRoute } from './features/auth/GuestOnlyRoute';
 import { AppLayout } from './components/layout/AppLayout';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -119,7 +119,14 @@ export default function App() {
               <Route path="/materials/books/:id" element={<BookReaderPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/admin" element={<AdminUsersPage />} />
+              <Route
+                path="/admin"
+                element={
+                  <RequireAdmin>
+                    <AdminUsersPage />
+                  </RequireAdmin>
+                }
+              />
             </Route>
 
             {/* Catch-all 404 Route */}

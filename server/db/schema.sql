@@ -667,3 +667,164 @@ CREATE TABLE IF NOT EXISTS book_highlights (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 40. timetable_entry_exceptions (Ngoại lệ thời khóa biểu)
+CREATE TABLE IF NOT EXISTS timetable_entry_exceptions (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  timetable_entry_id VARCHAR(64) NOT NULL,
+  occurrence_date VARCHAR(10) NOT NULL,
+  exception_type VARCHAR(32) NOT NULL DEFAULT 'cancelled',
+  reason VARCHAR(255) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_entry_occurrence (timetable_entry_id, occurrence_date),
+  INDEX idx_exceptions_user_date (user_id, occurrence_date),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 41. class_session_checkins (Nhật ký bài học & BTVN)
+CREATE TABLE IF NOT EXISTS class_session_checkins (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  timetable_entry_id VARCHAR(64) NOT NULL,
+  occurrence_date VARCHAR(10) NOT NULL,
+  learned_content TEXT NULL,
+  homework TEXT NULL,
+  homework_image_material_id VARCHAR(36) NULL,
+  has_no_homework BOOLEAN NOT NULL DEFAULT FALSE,
+  reflection TEXT NULL,
+  understanding_level VARCHAR(32) NULL,
+  attendance_status VARCHAR(32) NOT NULL DEFAULT 'attended',
+  completed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_checkin_user_entry_occ (user_id, timetable_entry_id, occurrence_date),
+  INDEX idx_checkins_user_date (user_id, occurrence_date),
+  INDEX idx_checkins_hw_material (homework_image_material_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (homework_image_material_id) REFERENCES learning_materials(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 42. tomorrow_preparation_plans (Kế hoạch chuẩn bị ngày mai)
+CREATE TABLE IF NOT EXISTS tomorrow_preparation_plans (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  target_date VARCHAR(10) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'draft',
+  summary TEXT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_prep_user_target_date (user_id, target_date),
+  INDEX idx_prep_user_date (user_id, target_date),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 43. tomorrow_preparation_items
+CREATE TABLE IF NOT EXISTS tomorrow_preparation_items (
+  id VARCHAR(64) PRIMARY KEY,
+  plan_id VARCHAR(64) NOT NULL,
+  item_type VARCHAR(32) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT NULL,
+  is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+  completed_at DATETIME(3) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_prep_items_plan (plan_id),
+  FOREIGN KEY (plan_id) REFERENCES tomorrow_preparation_plans(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 44. exam_study_plans (Kế hoạch ôn thi)
+CREATE TABLE IF NOT EXISTS exam_study_plans (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  exam_id VARCHAR(64) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'active',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_exam_study_plans_user (user_id, exam_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 45. exam_study_plan_items
+CREATE TABLE IF NOT EXISTS exam_study_plan_items (
+  id VARCHAR(64) PRIMARY KEY,
+  plan_id VARCHAR(64) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  scheduled_date VARCHAR(10) NOT NULL,
+  duration_minutes INT NOT NULL DEFAULT 45,
+  is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+  completed_at DATETIME(3) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_plan_items_plan (plan_id),
+  FOREIGN KEY (plan_id) REFERENCES exam_study_plans(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 46. exam_study_plan_versions
+CREATE TABLE IF NOT EXISTS exam_study_plan_versions (
+  id VARCHAR(64) PRIMARY KEY,
+  plan_id VARCHAR(64) NOT NULL,
+  version_number INT NOT NULL DEFAULT 1,
+  snapshot_json JSON NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_plan_versions_plan (plan_id),
+  FOREIGN KEY (plan_id) REFERENCES exam_study_plans(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 47. mistake_notebook_entries (Sổ tay lỗi sai)
+CREATE TABLE IF NOT EXISTS mistake_notebook_entries (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  subject_id VARCHAR(64) NULL,
+  topic_ref VARCHAR(255) NULL,
+  question_text TEXT NOT NULL,
+  user_wrong_answer TEXT NULL,
+  correct_answer TEXT NOT NULL,
+  explanation TEXT NULL,
+  mistake_reason VARCHAR(255) NULL,
+  mastery_level VARCHAR(32) NOT NULL DEFAULT 'unmastered',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_mistakes_user (user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 48. mistake_review_attempts
+CREATE TABLE IF NOT EXISTS mistake_review_attempts (
+  id VARCHAR(64) PRIMARY KEY,
+  entry_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  is_correct BOOLEAN NOT NULL DEFAULT FALSE,
+  user_answer TEXT NULL,
+  reviewed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_mistake_reviews (entry_id, user_id),
+  FOREIGN KEY (entry_id) REFERENCES mistake_notebook_entries(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 49. learning_material_outlines (Đề cương môn học)
+CREATE TABLE IF NOT EXISTS learning_material_outlines (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  material_id VARCHAR(64) NOT NULL,
+  outline_json JSON NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_outlines_mat (material_id, user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 50. notification_deliveries (Nhật ký gửi thông báo)
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+  id VARCHAR(64) PRIMARY KEY,
+  notification_id VARCHAR(64) NOT NULL,
+  channel VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  error_message TEXT NULL,
+  delivered_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_notif_deliveries (notification_id),
+  FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

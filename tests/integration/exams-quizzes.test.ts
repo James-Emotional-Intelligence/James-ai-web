@@ -194,4 +194,54 @@ describe('Exams & Quizzes Revision Subsystem Integration Tests', () => {
     expect(res.body.attempt.attemptId).toBe(attemptId);
     expect(res.body.quiz).toBeDefined();
   });
+
+  it('10. POST /api/v1/quizzes/generate generates standalone subject quiz with real user subject', async () => {
+    const res = await request(app)
+      .post('/api/v1/quizzes/generate')
+      .set('Cookie', [userASession])
+      .send({
+        subjectId,
+        questionCount: 3,
+        difficulty: 'hard',
+        topic: 'Định lý hàm số',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.quiz).toBeDefined();
+    expect(res.body.quiz.subjectId).toBe(subjectId);
+    expect(res.body.quiz.difficulty).toBe('hard');
+  });
+
+  it('11. POST /api/v1/quizzes/retake-wrong creates retake quiz from wrong questions', async () => {
+    const quizRes = await request(app)
+      .get(`/api/v1/quizzes/${quizId}`)
+      .set('Cookie', [userASession]);
+    const firstQId = quizRes.body.quiz.questions[0].id;
+
+    const res = await request(app)
+      .post('/api/v1/quizzes/retake-wrong')
+      .set('Cookie', [userASession])
+      .send({
+        originalQuizId: quizId,
+        wrongQuestionIds: [firstQId],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.quiz).toBeDefined();
+    expect(res.body.quiz.questions.length).toBe(1);
+  });
+
+  it('12. POST /api/v1/quizzes/retake-wrong rejects access when original quiz belongs to another user', async () => {
+    const res = await request(app)
+      .post('/api/v1/quizzes/retake-wrong')
+      .set('Cookie', [userBSession])
+      .send({
+        originalQuizId: quizId,
+        wrongQuestionIds: ['q_dummy_1'],
+      });
+
+    expect(res.status).toBe(404);
+  });
 });

@@ -326,19 +326,6 @@ export const JamiAssistantPage: React.FC = () => {
     const rawText = (textToSend || inputMessage).trim();
     if (!rawText || isSending || !activeConvId) return;
 
-    let attachmentPrefix = '';
-    if (attachedMaterial) {
-      const mat = (attachedMaterial as any).material;
-      if (mat?.contentText) {
-        attachmentPrefix = `[Nội dung tài liệu đính kèm "${attachedMaterial.title}":\n"""\n${mat.contentText.slice(0, 3000)}\n"""\n]\n`;
-      } else if (mat?.summary) {
-        attachmentPrefix = `[Tóm tắt tài liệu đính kèm "${attachedMaterial.title}":\n"""\n${mat.summary}\n"""\n]\n`;
-      } else {
-        attachmentPrefix = `[Tài liệu đính kèm: "${attachedMaterial.title}"]\n`;
-      }
-    }
-    const text = `${attachmentPrefix}${rawText}`;
-
     setInputMessage('');
     const currentAttachment = attachedMaterial;
     setAttachedMaterial(null);
@@ -350,7 +337,7 @@ export const JamiAssistantPage: React.FC = () => {
       conversationId: activeConvId,
       userId: '',
       sender: 'user',
-      text,
+      text: rawText,
       createdAt: new Date().toISOString(),
     };
 
@@ -358,7 +345,7 @@ export const JamiAssistantPage: React.FC = () => {
     setIsSending(true);
 
     try {
-      const res = await api.sendJamiChat(text, activeConvId, clientMessageId, currentAttachment?.id);
+      const res = await api.sendJamiChat(rawText, activeConvId, clientMessageId, currentAttachment?.id);
       // Replace optimistic message with real message and add Jami reply
       setMessages((prev) => {
         const filtered = prev.filter((m) => m.id !== clientMessageId);

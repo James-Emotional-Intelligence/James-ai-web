@@ -2941,24 +2941,16 @@ export const TimetablePage: React.FC = () => {
                                 }
 
                                 try {
-                                  const dlRes = await fetch(`/api/v1/materials/${m.id}/download`, { credentials: 'include' });
-                                  if (dlRes.ok) {
-                                    const dlJson = await dlRes.json();
-                                    const fileUrl = dlJson.downloadUrl || `/api/v1/materials/${m.id}/content`;
-                                    const fileRes = await fetch(fileUrl, { credentials: 'include' });
-                                    if (fileRes.ok) {
-                                      const blob = await fileRes.blob();
-                                      const reader = new FileReader();
-                                      reader.onload = () => {
-                                        const b64 = reader.result as string;
-                                        setOcrBase64(b64);
-                                        if (mime.startsWith('image/')) {
-                                          setOcrPreviewUrl(b64);
-                                        }
-                                      };
-                                      reader.readAsDataURL(blob);
+                                  const blob = await api.fetchMaterialBlob(m.id);
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    const b64 = reader.result as string;
+                                    setOcrBase64(b64);
+                                    if (mime.startsWith('image/')) {
+                                      setOcrPreviewUrl(b64);
                                     }
-                                  }
+                                  };
+                                  reader.readAsDataURL(blob);
                                 } catch {
                                   // Fallback with extractedText or note content
                                   const extText = (m as any).extractedText;

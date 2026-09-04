@@ -47,28 +47,62 @@ export class LocalStorageAdapter implements StorageAdapter {
       throw new Error('[LocalStorage] Khóa lưu trữ không hợp lệ (chuỗi rỗng hoặc sai kiểu dữ liệu).');
     }
 
-    // 1. Block null bytes and dangerous control characters
-    if (relativeKey.indexOf('\0') !== -1) {
-      throw new Error('[LocalStorage: SECURITY] Phát hiện ký tự null byte trong khóa lưu trữ.');
+    // 1. Block null bytes and control characters
+    for (let i = 0; i < relativeKey.length; i++) {
+      const code = relativeKey.charCodeAt(i);
+      if (code < 32 || code === 127) {
+        throw new Error('[LocalStorage: SECURITY] Phát hiện ký tự không hợp lệ trong khóa lưu trữ.');
+      }
     }
 
-    // 2. Decode URL encoding if present to catch %2e%2e/ tricks
+    // 2. Decode URL encoding (support double-decode for %252e%252e)
     let decodedKey = relativeKey;
-    try {
-      decodedKey = decodeURIComponent(relativeKey);
-    } catch {
-      // Use raw if decode fails
+    for (let i = 0; i < 3; i++) {
+      try {
+        const next = decodeURIComponent(decodedKey);
+        if (next === decodedKey) break;
+        decodedKey = next;
+      } catch {
+        break;
+      }
     }
 
-    // 3. Normalize slashes
-    const normalizedKey = decodedKey.replace(/\\/g, '/').replace(/^\/+/, '');
+    // 3. Reject POSIX absolute path, Windows drive path, UNC path, backslash prefixes
+    if (
+      relativeKey.startsWith('/') ||
+      relativeKey.startsWith('\\') ||
+      /^[a-zA-Z]:/i.test(relativeKey) ||
+      relativeKey.startsWith('//') ||
+      relativeKey.startsWith('\\\\') ||
+      decodedKey.startsWith('/') ||
+      decodedKey.startsWith('\\') ||
+      /^[a-zA-Z]:/i.test(decodedKey) ||
+      decodedKey.startsWith('//') ||
+      decodedKey.startsWith('\\\\')
+    ) {
+      throw new Error(`[LocalStorage: SECURITY] Từ chối đường dẫn tuyệt đối hoặc UNC path: ${relativeKey}`);
+    }
 
-    // 4. Resolve absolute path
+    // 4. Reject explicit traversal segments before normalization
+    if (
+      decodedKey.includes('../') ||
+      decodedKey.includes('..\\') ||
+      decodedKey === '..' ||
+      decodedKey.endsWith('/..') ||
+      decodedKey.endsWith('\\..')
+    ) {
+      throw new Error(`[LocalStorage: SECURITY] Phát hiện hành vi path traversal trái phép: ${relativeKey}`);
+    }
+
+    // 5. Normalize slashes
+    const normalizedKey = decodedKey.replace(/\\/g, '/');
+
+    // 6. Resolve absolute path within rootDir
     const resolvedPath = path.resolve(this.rootDir, normalizedKey);
 
-    // 5. Ensure path strictly resides within rootDir
+    // 7. Ensure path strictly resides within rootDir
     const relativeToRoot = path.relative(this.rootDir, resolvedPath);
-    if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
+    if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot) || relativeToRoot === '') {
       throw new Error(`[LocalStorage: SECURITY] Phát hiện hành vi path traversal trái phép: ${relativeKey}`);
     }
 

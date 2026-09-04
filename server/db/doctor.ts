@@ -41,6 +41,7 @@ const REQUIRED_TABLES = [
   'school_timetables',
   'school_timetable_entries',
   'timetable_entry_exceptions',
+  'class_session_checkins',
   'busy_events',
   'busy_event_exceptions',
   'availability_rules',
@@ -54,10 +55,17 @@ const REQUIRED_TABLES = [
   'focus_sessions',
   'task_evidence',
   'learning_materials',
+  'learning_material_outlines',
+  'book_chapters',
+  'book_chunks',
+  'book_progress',
+  'book_bookmarks',
+  'book_highlights',
   'quizzes',
   'quiz_questions',
   'quiz_attempts',
   'notifications',
+  'notification_deliveries',
   'jami_preferences',
   'jami_memory_summaries',
   'audit_logs',
@@ -228,6 +236,51 @@ export async function runDbDoctor(): Promise<DoctorReport> {
         name: 'Jami Chat Messages Table Integrity',
         passed: hasText && hasSender && hasUser,
         details: hasUser ? 'jami_messages text, sender, user_id columns verified' : 'jami_messages columns missing',
+      });
+    }
+
+    if (existingTables.has('class_session_checkins')) {
+      const checkinCols = await db.query<any>(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'class_session_checkins'`
+      );
+      const checkinColNames = new Set(checkinCols.map((c) => c.COLUMN_NAME.toLowerCase()));
+      const requiredCheckinCols = [
+        'id',
+        'user_id',
+        'timetable_entry_id',
+        'occurrence_date',
+        'learned_content',
+        'homework',
+        'homework_image_material_id',
+        'has_no_homework',
+        'reflection',
+        'attendance_status',
+      ];
+      const missingCheckinCols = requiredCheckinCols.filter((c) => !checkinColNames.has(c));
+      checks.push({
+        name: 'Class Session Check-ins Integrity',
+        passed: missingCheckinCols.length === 0,
+        details:
+          missingCheckinCols.length === 0
+            ? 'All check-in columns verified (including homework_image_material_id & has_no_homework)'
+            : `Missing columns: ${missingCheckinCols.join(', ')}`,
+      });
+    }
+
+    if (existingTables.has('book_progress')) {
+      const progCols = await db.query<any>(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'book_progress'`
+      );
+      const progColNames = new Set(progCols.map((c) => c.COLUMN_NAME.toLowerCase()));
+      const requiredProgCols = ['id', 'user_id', 'material_id', 'page', 'percentage'];
+      const missingProgCols = requiredProgCols.filter((c) => !progColNames.has(c));
+      checks.push({
+        name: 'Soft Books Subsystem Integrity',
+        passed: missingProgCols.length === 0,
+        details:
+          missingProgCols.length === 0
+            ? 'Soft books progress, chapters, and bookmarks verified'
+            : `Missing columns: ${missingProgCols.join(', ')}`,
       });
     }
 
