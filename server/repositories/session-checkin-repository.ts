@@ -83,6 +83,7 @@ export class SessionCheckinRepository {
       occurrenceDate: string;
       learnedContent?: string | null;
       homework?: string | null;
+      homeworkImageMaterialId?: string | null;
       hasNoHomework?: boolean;
       reflection?: string | null;
       understandingLevel?: 'very_easy' | 'normal' | 'hard' | 'not_understood' | null;
@@ -103,6 +104,7 @@ export class SessionCheckinRepository {
       occurrenceDate: data.occurrenceDate,
       learnedContent: data.learnedContent || undefined,
       homework: data.hasNoHomework ? undefined : data.homework || undefined,
+      homeworkImageMaterialId: data.hasNoHomework ? undefined : data.homeworkImageMaterialId || undefined,
       hasNoHomework: Boolean(data.hasNoHomework),
       reflection: data.reflection || undefined,
       understandingLevel: data.understandingLevel || undefined,
@@ -117,12 +119,13 @@ export class SessionCheckinRepository {
         const rowId = entryId === data.timetableEntryId ? id : 'chk_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
         await db.execute(
           `INSERT INTO class_session_checkins (
-             id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, has_no_homework, reflection,
+             id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, homework_image_material_id, has_no_homework, reflection,
              understanding_level, attendance_status, completed_at, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3), NOW(3))
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3), NOW(3))
            ON DUPLICATE KEY UPDATE
              learned_content = VALUES(learned_content),
              homework = VALUES(homework),
+             homework_image_material_id = VALUES(homework_image_material_id),
              has_no_homework = VALUES(has_no_homework),
              reflection = VALUES(reflection),
              understanding_level = VALUES(understanding_level),
@@ -136,6 +139,7 @@ export class SessionCheckinRepository {
             data.occurrenceDate,
             data.learnedContent || null,
             data.hasNoHomework ? null : data.homework || null,
+            data.hasNoHomework ? null : data.homeworkImageMaterialId || null,
             data.hasNoHomework ? 1 : 0,
             data.reflection || null,
             data.understandingLevel || null,
@@ -239,7 +243,8 @@ export class SessionCheckinRepository {
           prev.attendanceStatus = curCheckin.attendanceStatus;
           prev.learnedContent = curCheckin.learnedContent;
           prev.homework = curCheckin.homework;
-          prev.hasNoHomework = curCheckin.hasNoHomework !== undefined ? curCheckin.hasNoHomework : !curCheckin.homework;
+          prev.homeworkImageMaterialId = curCheckin.homeworkImageMaterialId;
+          prev.hasNoHomework = curCheckin.hasNoHomework !== undefined ? curCheckin.hasNoHomework : (!curCheckin.homework && !curCheckin.homeworkImageMaterialId);
           prev.reflection = curCheckin.reflection;
           prev.understandingLevel = curCheckin.understandingLevel;
           prev.savedAt = curCheckin.updatedAt || curCheckin.completedAt;
@@ -262,7 +267,8 @@ export class SessionCheckinRepository {
           attendanceStatus: curCheckin ? curCheckin.attendanceStatus : isSkipped ? 'absent' : 'unconfirmed',
           learnedContent: curCheckin?.learnedContent,
           homework: curCheckin?.homework,
-          hasNoHomework: curCheckin ? (curCheckin.hasNoHomework !== undefined ? curCheckin.hasNoHomework : !curCheckin.homework) : false,
+          homeworkImageMaterialId: curCheckin?.homeworkImageMaterialId,
+          hasNoHomework: curCheckin ? (curCheckin.hasNoHomework !== undefined ? curCheckin.hasNoHomework : (!curCheckin.homework && !curCheckin.homeworkImageMaterialId)) : false,
           reflection: curCheckin?.reflection,
           understandingLevel: curCheckin?.understandingLevel,
           checkinId: curCheckin?.id,
@@ -282,7 +288,7 @@ export class SessionCheckinRepository {
   public async getCheckins(userId: string, fromDate?: string, toDate?: string): Promise<ClassSessionCheckin[]> {
     if (db.isHealthy()) {
       let query = `
-        SELECT id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, has_no_homework, reflection,
+        SELECT id, user_id, timetable_entry_id, occurrence_date, learned_content, homework, homework_image_material_id, has_no_homework, reflection,
                understanding_level, attendance_status, completed_at, created_at, updated_at
         FROM class_session_checkins
         WHERE user_id = ?
@@ -306,6 +312,7 @@ export class SessionCheckinRepository {
         occurrenceDate: r.occurrence_date,
         learnedContent: r.learned_content || undefined,
         homework: r.homework || undefined,
+        homeworkImageMaterialId: r.homework_image_material_id || undefined,
         hasNoHomework: Boolean(r.has_no_homework),
         reflection: r.reflection || undefined,
         understandingLevel: r.understanding_level || undefined,

@@ -19,6 +19,7 @@ import {
   Edit2,
   Calendar,
   School,
+  CalendarPlus2,
   Download,
   Upload,
   Image as ImageIcon,
@@ -45,6 +46,8 @@ import {
 } from '../../../shared/types';
 import { doesEventOccurOnLocalDate } from '../../../shared/utils/recurrence-utils';
 import { formatTimeVN, formatDateVN, formatDateShortVN, formatDateFullVN, formatBytes } from '../../lib/utils';
+import { generateWeekOptions } from '../../lib/week-utils';
+import { exportTimetableToPdf } from '../../lib/timetable-pdf-export';
 import confetti from 'canvas-confetti';
 
 export const getSubjectColorTheme = (title: string, subjectName?: string) => {
@@ -178,7 +181,7 @@ export const TimetablePage: React.FC = () => {
   const [isReplanning, setIsReplanning] = useState(false);
   const [isConfirmingProposal, setIsConfirmingProposal] = useState(false);
   const [proposalDiff, setProposalDiff] = useState<ScheduleProposal | null>(null);
-  const [isDownloadingCsv, setIsDownloadingCsv] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   // Modals
   const [isAddEntryOpen, setIsAddEntryOpen] = useState(false);
@@ -329,35 +332,9 @@ export const TimetablePage: React.FC = () => {
   const [isWeekSwitchModalOpen, setIsWeekSwitchModalOpen] = useState(false);
   const [targetWeekOffset, setTargetWeekOffset] = useState<number | null>(null);
 
-  // List of weeks for dropdown selector
+  // List of weeks for dropdown selector (ISO-8601 standardized)
   const weekOptions = useMemo(() => {
-    const options = [];
-    const today = new Date();
-    const currentJsDay = today.getDay();
-    const mondayOffset = currentJsDay === 0 ? -6 : 1 - currentJsDay;
-
-    for (let offset = -4; offset <= 16; offset++) {
-      const monday = new Date(today);
-      monday.setDate(today.getDate() + mondayOffset + offset * 7);
-      const sunday = new Date(monday);
-      sunday.setDate(monday.getDate() + 6);
-
-      let label: string;
-      if (offset === 0) {
-        label = `Tuần hiện tại (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
-      } else if (offset === 1) {
-        label = `Tuần tiếp theo (+1) (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
-      } else if (offset === -1) {
-        label = `Tuần trước (-1) (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
-      } else if (offset > 1) {
-        label = `Tuần sau +${offset} (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
-      } else {
-        label = `Tuần trước ${offset} (${formatDateShortVN(monday)} - ${formatDateShortVN(sunday)})`;
-      }
-
-      options.push({ offset, label, monday, sunday });
-    }
-    return options;
+    return generateWeekOptions(new Date(), -4, 16);
   }, []);
 
   const targetWeekDays = useMemo(() => {
@@ -872,14 +849,19 @@ export const TimetablePage: React.FC = () => {
     }
   };
 
-  const handleDownloadTimetable = async () => {
-    setIsDownloadingCsv(true);
+  const handleDownloadPdf = async () => {
+    setIsDownloadingPdf(true);
     try {
-      await api.downloadTimetableCsv();
+      await exportTimetableToPdf({
+        timetableName: activeTimetable?.name || '1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)',
+        weekDays,
+        timetableEntries,
+        busyEvents,
+      });
     } catch (err: any) {
-      alert(err.message || 'Không thể tải xuống thời khóa biểu');
+      alert(err.message || 'Không thể xuất thời khóa biểu dưới dạng PDF');
     } finally {
-      setIsDownloadingCsv(false);
+      setIsDownloadingPdf(false);
     }
   };
 
@@ -1342,8 +1324,10 @@ export const TimetablePage: React.FC = () => {
                   setIsAddEntryOpen(true);
                 }}
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer"
+                aria-label="Thêm tiết học mới"
+                title="Thêm tiết học mới"
               >
-                <School className="w-3.5 h-3.5" />
+                <CalendarPlus2 className="w-3.5 h-3.5" />
                 <span>Thêm tiết học</span>
               </button>
 
@@ -1351,13 +1335,13 @@ export const TimetablePage: React.FC = () => {
                 <>
                   <button
                     type="button"
-                    onClick={handleDownloadTimetable}
-                    disabled={isDownloadingCsv}
+                    onClick={handleDownloadPdf}
+                    disabled={isDownloadingPdf}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
-                    title="Tải xuống thời khóa biểu dưới dạng tệp CSV"
+                    title="Tải xuống hoặc in thời khóa biểu dưới dạng tệp PDF"
                   >
-                    <Download className={`w-3.5 h-3.5 text-[#22C55E] ${isDownloadingCsv ? 'animate-bounce' : ''}`} />
-                    <span className="hidden sm:inline">{isDownloadingCsv ? 'Đang tải...' : 'Tải CSV'}</span>
+                    <Download className={`w-3.5 h-3.5 text-[#22C55E] ${isDownloadingPdf ? 'animate-bounce' : ''}`} />
+                    <span className="hidden sm:inline">{isDownloadingPdf ? 'Đang tạo PDF...' : 'Tải PDF'}</span>
                   </button>
 
                   <button

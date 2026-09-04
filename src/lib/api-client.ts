@@ -350,6 +350,7 @@ export const api = {
     occurrenceDate: string;
     learnedContent?: string;
     homework?: string;
+    homeworkImageMaterialId?: string | null;
     hasNoHomework?: boolean;
     reflection?: string;
     understandingLevel?: string;

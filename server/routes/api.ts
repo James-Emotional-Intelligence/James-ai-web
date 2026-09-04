@@ -1207,6 +1207,19 @@ apiRouter.post('/timetables/session-checkins', requireAuth, asyncHandler(async (
     return sendError(req, res, 400, 'VALIDATION_ERROR', parseResult.error.issues[0]?.message || 'Dữ liệu check-in không hợp lệ');
   }
   const data = parseResult.data;
+
+  // Validate homework image material ownership and format if provided
+  if (data.homeworkImageMaterialId) {
+    const hwMaterial = await materialRepo.getById(userId, data.homeworkImageMaterialId);
+    if (!hwMaterial) {
+      return sendError(req, res, 400, 'INVALID_HOMEWORK_IMAGE', 'Tệp đính kèm bài tập về nhà không tồn tại hoặc không thuộc quyền sở hữu của bạn.');
+    }
+    const isImage = (hwMaterial.mimeType && hwMaterial.mimeType.startsWith('image/')) || ['image', 'photo'].includes(hwMaterial.type);
+    if (!isImage) {
+      return sendError(req, res, 400, 'INVALID_HOMEWORK_IMAGE', 'Tệp đính kèm bài tập về nhà phải là hình ảnh (JPEG, PNG, WEBP).');
+    }
+  }
+
   const checkin = await sessionCheckinRepo.createOrUpdateCheckin(userId, data);
 
   let task: any = null;
@@ -1216,12 +1229,19 @@ apiRouter.post('/timetables/session-checkins', requireAuth, asyncHandler(async (
   const userTasks = await taskRepo.getByUserId(userId);
   const existingTask = userTasks.find((t) => t.source === stableSource || (data.taskId && t.id === data.taskId));
 
-  if (data.createTaskForHomework && data.homework && data.homework.trim() && data.attendanceStatus === 'attended' && !data.hasNoHomework) {
+  const hasHomeworkContent = Boolean((data.homework && data.homework.trim()) || data.homeworkImageMaterialId);
+
+  if (data.createTaskForHomework && hasHomeworkContent && data.attendanceStatus === 'attended' && !data.hasNoHomework) {
     const entry = await timetableRepo.getEntryById(userId, data.timetableEntryId);
     const subjectName = entry?.subjectName || entry?.title || 'Môn học';
-    const title = `BTVN: ${subjectName} - ${data.homework.slice(0, 80)}`;
+    const title = data.homework && data.homework.trim()
+      ? `BTVN: ${subjectName} - ${data.homework.slice(0, 80)}`
+      : `BTVN: ${subjectName} (ảnh đính kèm)`;
     const dueAt = data.dueAt || new Date(Date.now() + 24 * 3600 * 1000).toISOString();
     const estimatedMinutes = data.estimatedMinutes || 45;
+    const hwObjectiveText = data.homework && data.homework.trim()
+      ? `Bài tập về nhà buổi học ngày ${data.occurrenceDate}:\n${data.homework}`
+      : `Bài tập về nhà (ảnh đính kèm) buổi học ngày ${data.occurrenceDate}`;
 
     if (existingTask) {
       task = await taskRepo.update(userId, existingTask.id, {
@@ -1230,7 +1250,7 @@ apiRouter.post('/timetables/session-checkins', requireAuth, asyncHandler(async (
         subjectName: subjectName || existingTask.subjectName,
         dueAt,
         estimatedMinutes,
-        objective: `Bài tập về nhà buổi học ngày ${data.occurrenceDate}:\n${data.homework}`,
+        objective: hwObjectiveText,
       });
     } else {
       task = await taskRepo.create(userId, {
@@ -1242,10 +1262,10 @@ apiRouter.post('/timetables/session-checkins', requireAuth, asyncHandler(async (
         estimatedMinutes,
         dueAt,
         source: stableSource,
-        objective: `Bài tập về nhà buổi học ngày ${data.occurrenceDate}:\n${data.homework}`,
+        objective: hwObjectiveText,
       });
     }
-  } else if (existingTask && (data.hasNoHomework || !data.homework?.trim() || data.attendanceStatus === 'absent')) {
+  } else if (existingTask && (data.hasNoHomework || !hasHomeworkContent || data.attendanceStatus === 'absent')) {
     // If the task was auto-generated from this checkin and is still pending, cancel/delete it so no orphan task remains
     if (existingTask.source === stableSource && existingTask.status === 'pending') {
       await taskRepo.delete(userId, existingTask.id);

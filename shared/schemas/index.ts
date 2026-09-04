@@ -193,6 +193,7 @@ export const ClassSessionCheckinSubmitSchema = z
     occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Định dạng ngày phải là YYYY-MM-DD' }),
     learnedContent: z.string().max(3000).optional().nullable(),
     homework: z.string().max(3000).optional().nullable(),
+    homeworkImageMaterialId: z.string().optional().nullable(),
     hasNoHomework: z.boolean().optional().default(false),
     homeworkStatus: z.enum(['unanswered', 'has_homework', 'no_homework']).optional(),
     reflection: z.string().max(3000).optional().nullable(),
@@ -205,20 +206,21 @@ export const ClassSessionCheckinSubmitSchema = z
   })
   .superRefine((data, ctx) => {
     const hasHomeworkText = Boolean(data.homework && data.homework.trim().length > 0);
+    const hasHomeworkImage = Boolean(data.homeworkImageMaterialId && data.homeworkImageMaterialId.trim().length > 0);
     const isNoHomework = data.hasNoHomework === true || data.homeworkStatus === 'no_homework';
 
-    if (isNoHomework && hasHomeworkText) {
+    if (isNoHomework && (hasHomeworkText || hasHomeworkImage)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Không thể vừa tích "Không có BTVN" vừa nhập nội dung BTVN.',
+        message: 'Không thể vừa tích "Không có BTVN" vừa đính kèm ảnh hoặc nhập nội dung BTVN.',
         path: ['hasNoHomework'],
       });
     }
 
-    if (data.createTaskForHomework && (isNoHomework || !hasHomeworkText)) {
+    if (data.createTaskForHomework && (isNoHomework || (!hasHomeworkText && !hasHomeworkImage))) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Chỉ có thể tạo nhiệm vụ khi có nội dung BTVN.',
+        message: 'Chỉ có thể tạo nhiệm vụ khi có nội dung hoặc hình ảnh BTVN.',
         path: ['createTaskForHomework'],
       });
     }

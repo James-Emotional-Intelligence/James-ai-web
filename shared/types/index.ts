@@ -102,6 +102,7 @@ export interface ClassSessionCheckin {
   occurrenceDate: string; // "YYYY-MM-DD"
   learnedContent?: string;
   homework?: string;
+  homeworkImageMaterialId?: string | null;
   hasNoHomework?: boolean;
   reflection?: string;
   understandingLevel?: UnderstandingLevel;
@@ -141,6 +142,8 @@ export interface TodayLessonLogItem {
   attendanceStatus: 'attended' | 'absent' | 'unconfirmed';
   learnedContent?: string;
   homework?: string;
+  homeworkImageMaterialId?: string | null;
+  homeworkImageUrl?: string | null;
   hasNoHomework?: boolean;
   homeworkDueAt?: string;
   homeworkEstimatedMinutes?: number;

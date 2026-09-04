@@ -8,6 +8,7 @@ interface HaiBaTrungHeroProps {
   todayDateFormatted?: string;
   onOpenStoryModal: () => void;
   onScrollToLessonLogs?: () => void;
+  interactionSlot?: React.ReactNode;
 }
 
 export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
@@ -16,6 +17,7 @@ export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
   todayDateFormatted,
   onOpenStoryModal,
   onScrollToLessonLogs,
+  interactionSlot,
 }) => {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [imageError, setImageError] = useState(false);
@@ -70,16 +72,20 @@ export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
           </div>
 
           {/* Greeting & Date */}
-          <div className="text-xs text-[#B9C8BE] space-y-0.5 pt-1">
-            <div className="font-bold text-[#F5F4EF]">
-              {greetingMessage || `Xin chào, ${studentName}!`}
-            </div>
-            {todayDateFormatted && (
-              <div className="text-[11px] text-[#B9C8BE]/80">
-                {todayDateFormatted}
+          {interactionSlot ? (
+            <div className="pt-1">{interactionSlot}</div>
+          ) : (
+            <div className="text-xs text-[#B9C8BE] space-y-0.5 pt-1">
+              <div className="font-bold text-[#F5F4EF]">
+                {greetingMessage || `Xin chào, ${studentName}!`}
               </div>
-            )}
-          </div>
+              {todayDateFormatted && (
+                <div className="text-[11px] text-[#B9C8BE]/80">
+                  {todayDateFormatted}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Hero Action Buttons */}
           <div className="flex flex-wrap items-center gap-2.5 pt-2">

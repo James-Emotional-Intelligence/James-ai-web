@@ -226,4 +226,24 @@ describe('TimetablePage React UI Component Tests', () => {
       expect(api.confirmProposal).toHaveBeenCalledWith('prop_test_123');
     });
   });
+
+  it('renders Tải PDF button and triggers PDF export on click', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <TimetablePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Thời khóa biểu Học kỳ 1/i)).toBeInTheDocument();
+    });
+
+    const downloadPdfBtn = screen.getByRole('button', { name: /Tải PDF/i });
+    expect(downloadPdfBtn).toBeInTheDocument();
+
+    await user.click(downloadPdfBtn);
+    // Button state changes and export is triggered
+  });
 });

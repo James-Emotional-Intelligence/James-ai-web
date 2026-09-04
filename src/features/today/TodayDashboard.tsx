@@ -33,6 +33,11 @@ import {
   RotateCcw,
   BookOpenCheck,
   PenLine,
+  Camera,
+  Image as ImageIcon,
+  Maximize2,
+  Eye,
+  UploadCloud,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
@@ -52,6 +57,8 @@ import { ModalPortal } from '../../components/common/ModalPortal';
 import { HAI_BA_TRUNG_ASSETS } from '../../assets/themes/hai-ba-trung';
 import { HaiBaTrungHero } from '../../components/themes/HaiBaTrungHero';
 import { RobotJami } from '../../components/jami/RobotJami';
+import { useTodayGreetingConversation } from './useTodayGreetingConversation';
+import { TodayGreetingInteraction } from './TodayGreetingInteraction';
 import confetti from 'canvas-confetti';
 
 type TaskFilterType = 'all' | 'pending' | 'in_progress' | 'completed' | 'overdue';
@@ -91,6 +98,12 @@ export const TodayDashboard: React.FC = () => {
   const [isStoryModalOpen, setIsStoryModalOpen] = useState(false);
   const [taskFilter, setTaskFilter] = useState<TaskFilterType>('all');
 
+  // Today Greeting Conversation Hook - only speaks when all page data has finished loading
+  const greetingConversation = useTodayGreetingConversation(
+    overview?.studentName || user?.displayName || user?.preferredName || 'bạn',
+    { isReady: !isLoading && !!overview }
+  );
+
   // Today Lesson Logs & Homework ("Ghi lại bài học & BTVN hôm nay") States
   const [todayLessonLogs, setTodayLessonLogs] = useState<TodayLessonLogItem[]>([]);
   const [activeLessonForms, setActiveLessonForms] = useState<Record<string, {
@@ -102,7 +115,13 @@ export const TodayDashboard: React.FC = () => {
     attendanceStatus: 'attended' | 'absent';
     isSaving: boolean;
     savedStatus: string | null;
+    homeworkImageMaterialId: string | null;
+    homeworkImagePreviewUrl: string | null;
+    homeworkImageFile: File | null;
+    isUploadingImage: boolean;
+    uploadError: string | null;
   }>>({});
+  const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
 
   // Tomorrow Preparation Plan ("Jami chuẩn bị ngày mai") States
   const [tomorrowPlanOverview, setTomorrowPlanOverview] = useState<TomorrowPlanOverviewInfo | null>(null);
@@ -189,15 +208,21 @@ export const TodayDashboard: React.FC = () => {
         const next = { ...prev };
         for (const cls of classes) {
           if (!next[cls.id]) {
+            const hasExistingHw = Boolean(cls.homework || cls.homeworkImageMaterialId);
             next[cls.id] = {
               learnedContent: cls.learnedContent || '',
               homework: cls.homework || '',
-              hasNoHomework: cls.hasNoHomework || (cls.checkinId ? !cls.homework : false),
+              hasNoHomework: cls.hasNoHomework || (cls.checkinId ? !hasExistingHw : false),
               homeworkDueOption: 'tomorrow',
               homeworkEstimatedMinutes: cls.homeworkEstimatedMinutes || 30,
               attendanceStatus: cls.attendanceStatus === 'absent' ? 'absent' : 'attended',
               isSaving: false,
               savedStatus: cls.savedAt ? `Đã lưu lúc ${new Date(cls.savedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : null,
+              homeworkImageMaterialId: cls.homeworkImageMaterialId || null,
+              homeworkImagePreviewUrl: cls.homeworkImageUrl || (cls.homeworkImageMaterialId ? `/api/materials/${cls.homeworkImageMaterialId}/download` : null),
+              homeworkImageFile: null,
+              isUploadingImage: false,
+              uploadError: null,
             };
           }
         }
@@ -210,12 +235,50 @@ export const TodayDashboard: React.FC = () => {
     }
   }, []);
 
+  const handleSelectHomeworkImage = (clsId: string, file: File) => {
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Dung lượng ảnh vượt quá giới hạn 10MB. Vui lòng chọn ảnh nhỏ hơn.');
+      return;
+    }
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+    if (!allowedTypes.includes(file.type.toLowerCase())) {
+      alert('Định dạng hình ảnh không hợp lệ. Vui lòng chọn ảnh JPEG, PNG hoặc WEBP.');
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    setActiveLessonForms((prev) => ({
+      ...prev,
+      [clsId]: {
+        ...prev[clsId],
+        homeworkImageFile: file,
+        homeworkImagePreviewUrl: previewUrl,
+        hasNoHomework: false,
+        uploadError: null,
+      },
+    }));
+  };
+
+  const handleRemoveHomeworkImage = (clsId: string) => {
+    setActiveLessonForms((prev) => ({
+      ...prev,
+      [clsId]: {
+        ...prev[clsId],
+        homeworkImageFile: null,
+        homeworkImagePreviewUrl: null,
+        homeworkImageMaterialId: null,
+      },
+    }));
+  };
+
   const handleSaveLessonLog = async (item: TodayLessonLogItem, createTask: boolean) => {
     const form = activeLessonForms[item.id];
     if (!form) return;
 
-    if (createTask && !form.hasNoHomework && (!form.homework || !form.homework.trim())) {
-      alert('Vui lòng nhập nội dung bài tập về nhà trước khi tạo nhiệm vụ.');
+    const hasHwContent = Boolean((form.homework && form.homework.trim()) || form.homeworkImageFile || form.homeworkImageMaterialId);
+
+    if (createTask && !form.hasNoHomework && !hasHwContent) {
+      alert('Vui lòng nhập nội dung hoặc đính kèm ảnh bài tập về nhà trước khi tạo nhiệm vụ.');
       return;
     }
 
@@ -228,6 +291,30 @@ export const TodayDashboard: React.FC = () => {
       const occurrenceDate = overview?.todayDateFormatted
         ? overview.todayDateFormatted
         : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
+      // If a new image file is chosen, upload it first
+      let finalMaterialId = form.homeworkImageMaterialId;
+      if (form.homeworkImageFile) {
+        setActiveLessonForms((prev) => ({
+          ...prev,
+          [item.id]: { ...prev[item.id], isUploadingImage: true },
+        }));
+        try {
+          const uploadRes = await api.uploadMaterial(form.homeworkImageFile, {
+            title: `BTVN: ${item.subjectName} (${occurrenceDate})`,
+            subjectId: item.subjectId,
+            materialKind: 'document',
+          });
+          finalMaterialId = uploadRes.material.id;
+        } catch (uploadErr: any) {
+          throw new Error(uploadErr.message || 'Tải ảnh bài tập lên máy chủ thất bại.', { cause: uploadErr });
+        } finally {
+          setActiveLessonForms((prev) => ({
+            ...prev,
+            [item.id]: { ...prev[item.id], isUploadingImage: false },
+          }));
+        }
+      }
 
       // Calculate dueAt date
       let dueAt: string | undefined = undefined;
@@ -259,9 +346,10 @@ export const TodayDashboard: React.FC = () => {
         occurrenceDate,
         learnedContent: form.learnedContent.trim() || undefined,
         homework: form.hasNoHomework ? undefined : form.homework.trim() || undefined,
+        homeworkImageMaterialId: form.hasNoHomework ? undefined : finalMaterialId || undefined,
         hasNoHomework: form.hasNoHomework,
         attendanceStatus: form.attendanceStatus,
-        createTaskForHomework: createTask && !form.hasNoHomework && Boolean(form.homework.trim()),
+        createTaskForHomework: createTask && !form.hasNoHomework && Boolean((form.homework && form.homework.trim()) || finalMaterialId),
         dueAt,
         estimatedMinutes: form.homeworkEstimatedMinutes,
         taskId: item.linkedTaskId,
@@ -274,6 +362,8 @@ export const TodayDashboard: React.FC = () => {
         ...prev,
         [item.id]: {
           ...prev[item.id],
+          homeworkImageMaterialId: form.hasNoHomework ? null : finalMaterialId,
+          homeworkImageFile: null,
           isSaving: false,
           savedStatus: `Đã lưu lúc ${nowTimeStr}${createTask ? ' (Đã tạo nhiệm vụ)' : ''}`,
         },
@@ -708,7 +798,7 @@ export const TodayDashboard: React.FC = () => {
       {theme === 'hai-ba-trung' ? (
         <HaiBaTrungHero
           studentName={overview.studentName}
-          greetingMessage={getGreeting(overview.studentName)}
+          greetingMessage={greetingConversation.displayMessage}
           todayDateFormatted={`Học tập hôm nay • ${todayDateStr}`}
           onOpenStoryModal={() => setIsStoryModalOpen(true)}
           onScrollToLessonLogs={() => {
@@ -717,9 +807,16 @@ export const TodayDashboard: React.FC = () => {
               el.scrollIntoView({ behavior: 'smooth' });
             }
           }}
+          interactionSlot={
+            <TodayGreetingInteraction
+              conversation={greetingConversation}
+              studentName={overview.studentName}
+              compact
+            />
+          }
         />
       ) : (
-        <div className="bg-[#0B120D] p-6 sm:p-8 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl relative overflow-hidden">
+        <div className="bg-[#0B120D] p-5 sm:p-7 rounded-3xl border border-[rgba(34,197,94,0.25)] shadow-xl relative overflow-hidden space-y-4">
           <div className="absolute top-0 right-0 w-80 h-80 bg-radial from-[#22C55E]/10 to-transparent blur-2xl pointer-events-none" />
 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
@@ -729,13 +826,13 @@ export const TodayDashboard: React.FC = () => {
                 <span>Học tập hôm nay • {todayDateStr}</span>
               </div>
               <h1 className="text-xl sm:text-2xl font-black text-[#F3FAF5]">
-                {getGreeting(overview.studentName)}
+                Xin chào, {overview.studentName}!
               </h1>
-              <p className="text-xs text-[#A9B8AE]">
-                {user?.role === 'admin'
-                  ? 'Tài khoản Quản trị viên (Admin) • Giám sát và đồng hành cùng toàn bộ hệ thống JAMI AI.'
-                  : `Lớp ${overview.gradeLevel} • Jami đồng hành tối ưu hóa thời gian tự học của em.`}
-              </p>
+              {user?.role === 'admin' && (
+                <p className="text-xs text-[#A9B8AE]">
+                  Tài khoản Quản trị viên (Admin) • Giám sát và đồng hành cùng toàn bộ hệ thống JAMI AI.
+                </p>
+              )}
             </div>
 
             {/* Quick Actions in Banner */}
@@ -748,7 +845,7 @@ export const TodayDashboard: React.FC = () => {
                     el.scrollIntoView({ behavior: 'smooth' });
                   }
                 }}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-[#101A13] hover:bg-[#142319] text-[#86EFAC] hover:text-[#F3FAF5] text-xs font-bold border border-[rgba(34,197,94,0.3)] shadow-md transition-all cursor-pointer shrink-0"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-[#101A13] hover:bg-[#142319] text-[#86EFAC] hover:text-[#F3FAF5] text-xs font-bold border border-[rgba(34,197,94,0.3)] shadow-md transition-all cursor-pointer shrink-0"
               >
                 <PenLine className="w-4 h-4 text-[#22C55E]" />
                 <span>Nhập bài học & BTVN</span>
@@ -756,13 +853,19 @@ export const TodayDashboard: React.FC = () => {
 
               <button
                 onClick={() => navigateToFocus(buildFocusUrl({ returnTo: '/today' }))}
-                className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-lg shadow-[#16A34A]/25 transition-all cursor-pointer shrink-0 jami-btn-glow"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-lg shadow-[#16A34A]/25 transition-all cursor-pointer shrink-0 jami-btn-glow"
               >
                 <Play className="w-4 h-4 fill-[#050806]" />
                 <span>Hẹn giờ tập trung</span>
               </button>
             </div>
           </div>
+
+          {/* Interactive Greeting Conversation with Robot Jami */}
+          <TodayGreetingInteraction
+            conversation={greetingConversation}
+            studentName={overview.studentName}
+          />
         </div>
       )}
 
@@ -1019,12 +1122,17 @@ export const TodayDashboard: React.FC = () => {
                   const form = activeLessonForms[cls.id] || {
                     learnedContent: cls.learnedContent || '',
                     homework: cls.homework || '',
-                    hasNoHomework: cls.hasNoHomework || (cls.checkinId ? !cls.homework : false),
+                    hasNoHomework: cls.hasNoHomework || (cls.checkinId ? (!cls.homework && !cls.homeworkImageMaterialId) : false),
                     homeworkDueOption: 'tomorrow',
                     homeworkEstimatedMinutes: cls.homeworkEstimatedMinutes || 30,
                     attendanceStatus: cls.attendanceStatus === 'absent' ? 'absent' : 'attended',
                     isSaving: false,
                     savedStatus: cls.savedAt ? `Đã lưu lúc ${new Date(cls.savedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : null,
+                    homeworkImageMaterialId: cls.homeworkImageMaterialId || null,
+                    homeworkImagePreviewUrl: cls.homeworkImageUrl || (cls.homeworkImageMaterialId ? `/api/materials/${cls.homeworkImageMaterialId}/download` : null),
+                    homeworkImageFile: null,
+                    isUploadingImage: false,
+                    uploadError: null,
                   };
 
                   const isAbsent = form.attendanceStatus === 'absent' || cls.isSkipped;
@@ -1122,7 +1230,7 @@ export const TodayDashboard: React.FC = () => {
                           </div>
 
                           {/* 2) BTVN là gì? */}
-                          <div className="space-y-1.5">
+                          <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <label className="text-xs font-bold text-[#F3FAF5] flex items-center gap-1.5">
                                 <FileText className="w-3.5 h-3.5 text-[#22C55E]" />
@@ -1137,7 +1245,13 @@ export const TodayDashboard: React.FC = () => {
                                     const checked = e.target.checked;
                                     setActiveLessonForms((prev) => ({
                                       ...prev,
-                                      [cls.id]: { ...prev[cls.id], hasNoHomework: checked },
+                                      [cls.id]: {
+                                        ...prev[cls.id],
+                                        hasNoHomework: checked,
+                                        homeworkImageFile: checked ? null : prev[cls.id]?.homeworkImageFile,
+                                        homeworkImagePreviewUrl: checked ? null : prev[cls.id]?.homeworkImagePreviewUrl,
+                                        homeworkImageMaterialId: checked ? null : prev[cls.id]?.homeworkImageMaterialId,
+                                      },
                                     }));
                                   }}
                                   className="rounded border-[rgba(34,197,94,0.3)] text-[#16A34A] focus:ring-0"
@@ -1160,7 +1274,7 @@ export const TodayDashboard: React.FC = () => {
                               placeholder={
                                 form.hasNoHomework
                                   ? 'Môn này không có bài tập về nhà'
-                                  : 'VD: Làm bài 1, 2, 3 trang 45 SGK...'
+                                  : 'VD: Làm bài 1, 2, 3 trang 45 SGK hoặc đính kèm ảnh bài tập...'
                               }
                               className={`w-full rounded-xl p-2.5 text-xs focus:outline-none transition-all ${
                                 form.hasNoHomework
@@ -1168,6 +1282,117 @@ export const TodayDashboard: React.FC = () => {
                                   : 'bg-[#050806] border border-[rgba(34,197,94,0.2)] text-[#F3FAF5] placeholder-[#A9B8AE]/50 focus:border-[#22C55E]'
                               }`}
                             />
+
+                            {/* Image Attachment Subsection for Homework */}
+                            {!form.hasNoHomework && (
+                              <div className="pt-1">
+                                {form.homeworkImagePreviewUrl ? (
+                                  <div className="flex flex-wrap items-center gap-3 p-2.5 rounded-xl bg-[#050906] border border-[#22C55E]/25">
+                                    {/* Thumbnail */}
+                                    <div
+                                      onClick={() => setViewingImageUrl(form.homeworkImagePreviewUrl)}
+                                      className="relative group cursor-pointer w-16 h-16 rounded-lg overflow-hidden border border-[#22C55E]/40 shrink-0 bg-black/50"
+                                      title="Bấm để xem ảnh lớn"
+                                    >
+                                      <img
+                                        src={form.homeworkImagePreviewUrl}
+                                        alt="Ảnh bài tập về nhà"
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-all"
+                                      />
+                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                        <Eye className="w-4 h-4 text-[#86EFAC]" />
+                                      </div>
+                                    </div>
+
+                                    {/* Info and Actions */}
+                                    <div className="flex-1 min-w-[160px] space-y-1">
+                                      <div className="flex items-center gap-1.5 text-xs font-bold text-[#86EFAC]">
+                                        <ImageIcon className="w-3.5 h-3.5 text-[#22C55E]" />
+                                        <span>Ảnh bài tập đã đính kèm</span>
+                                      </div>
+                                      {form.homeworkImageFile && (
+                                        <p className="text-[11px] text-[#A9B8AE] truncate max-w-[220px]">
+                                          {form.homeworkImageFile.name} ({(form.homeworkImageFile.size / 1024).toFixed(0)} KB)
+                                        </p>
+                                      )}
+                                      <div className="flex items-center gap-2 pt-0.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setViewingImageUrl(form.homeworkImagePreviewUrl)}
+                                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#142319] hover:bg-[#1A2E21] text-[#86EFAC] text-[11px] font-medium border border-[#22C55E]/20 transition-all cursor-pointer"
+                                        >
+                                          <Maximize2 className="w-3 h-3" />
+                                          <span>Xem ảnh</span>
+                                        </button>
+
+                                        <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#142319] hover:bg-[#1A2E21] text-[#A9B8AE] hover:text-[#F3FAF5] text-[11px] font-medium border border-[rgba(34,197,94,0.2)] transition-all cursor-pointer">
+                                          <Camera className="w-3 h-3 text-[#22C55E]" />
+                                          <span>Đổi ảnh</span>
+                                          <input
+                                            type="file"
+                                            accept="image/jpeg,image/png,image/webp,image/jpg"
+                                            className="hidden"
+                                            onChange={(e) => {
+                                              const file = e.target.files?.[0];
+                                              if (file) handleSelectHomeworkImage(cls.id, file);
+                                              e.target.value = '';
+                                            }}
+                                          />
+                                        </label>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveHomeworkImage(cls.id)}
+                                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 text-[11px] font-medium border border-rose-800/30 transition-all cursor-pointer"
+                                        >
+                                          <Trash2 className="w-3 h-3 text-rose-400" />
+                                          <span>Xóa</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                                    {/* Upload File Input */}
+                                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#050906] hover:bg-[#142319] text-[#86EFAC] hover:text-[#F3FAF5] text-xs font-semibold border border-[#22C55E]/25 transition-all cursor-pointer">
+                                      <ImageIcon className="w-3.5 h-3.5 text-[#22C55E]" />
+                                      <span>Đính kèm ảnh BTVN</span>
+                                      <input
+                                        type="file"
+                                        accept="image/jpeg,image/png,image/webp,image/jpg"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) handleSelectHomeworkImage(cls.id, file);
+                                          e.target.value = '';
+                                        }}
+                                      />
+                                    </label>
+
+                                    {/* Camera Capture Input */}
+                                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#050906] hover:bg-[#142319] text-[#86EFAC] hover:text-[#F3FAF5] text-xs font-semibold border border-[#22C55E]/25 transition-all cursor-pointer">
+                                      <Camera className="w-3.5 h-3.5 text-[#22C55E]" />
+                                      <span>Chụp ảnh bài tập</span>
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        capture="environment"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) handleSelectHomeworkImage(cls.id, file);
+                                          e.target.value = '';
+                                        }}
+                                      />
+                                    </label>
+
+                                    <span className="text-[10px] text-[#A9B8AE]/60 hidden sm:inline">
+                                      (Hỗ trợ JPEG, PNG, WEBP $\le$ 10MB)
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
 
                           {/* Options: Hạn nộp & Thời lượng dự kiến */}
@@ -1233,7 +1458,7 @@ export const TodayDashboard: React.FC = () => {
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
-                                disabled={form.isSaving}
+                                disabled={form.isSaving || form.isUploadingImage}
                                 onClick={() => handleSaveLessonLog(cls, false)}
                                 className="px-3 py-2 rounded-xl bg-[#050806] hover:bg-[#142319] text-[#A9B8AE] hover:text-[#F3FAF5] text-xs font-bold border border-[rgba(34,197,94,0.2)] transition-all cursor-pointer disabled:opacity-50"
                               >
@@ -1242,7 +1467,7 @@ export const TodayDashboard: React.FC = () => {
 
                               <button
                                 type="button"
-                                disabled={form.isSaving || (form.hasNoHomework ? false : !form.homework.trim())}
+                                disabled={form.isSaving || form.isUploadingImage || (form.hasNoHomework ? false : (!form.homework.trim() && !form.homeworkImageFile && !form.homeworkImageMaterialId))}
                                 onClick={() => handleSaveLessonLog(cls, true)}
                                 className="flex items-center gap-1.5 px-4 py-2 bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black rounded-xl shadow-md shadow-[#16A34A]/25 transition-all cursor-pointer disabled:opacity-50 jami-btn-glow"
                               >
@@ -2267,6 +2492,46 @@ export const TodayDashboard: React.FC = () => {
           </div>
         </div>
       </ModalPortal>
+
+      {/* Full Size Image Lightbox Modal */}
+      {viewingImageUrl && (
+        <ModalPortal
+          isOpen={Boolean(viewingImageUrl)}
+          onClose={() => setViewingImageUrl(null)}
+          title="Xem ảnh bài tập về nhà"
+          maxWidthClass="max-w-4xl"
+          footer={
+            <div className="flex items-center justify-between w-full">
+              <a
+                href={viewingImageUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                download="btvn-image.png"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#101A13] hover:bg-[#142319] text-[#86EFAC] text-xs font-bold border border-[#22C55E]/30 transition-all"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span>Mở trong tab mới / Tải về</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => setViewingImageUrl(null)}
+                className="px-5 py-2 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] text-xs font-black shadow-md cursor-pointer transition-all"
+              >
+                Đóng
+              </button>
+            </div>
+          }
+        >
+          <div className="flex items-center justify-center p-2 bg-black/60 rounded-2xl overflow-hidden min-h-[300px]">
+            <img
+              src={viewingImageUrl}
+              alt="Ảnh bài tập về nhà chi tiết"
+              className="max-h-[70vh] w-auto max-w-full object-contain rounded-xl shadow-2xl"
+            />
+          </div>
+        </ModalPortal>
+      )}
     </div>
   );
 };
