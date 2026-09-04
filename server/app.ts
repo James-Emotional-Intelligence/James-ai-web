@@ -154,8 +154,8 @@ export function createApp() {
     next();
   });
 
-  // 6. Mount API Router (supports /api/v1, /api, and root /materials, /books)
-  app.use(['/api/v1', '/api', '/materials', '/books'], apiRouter);
+  // 6. Mount API Router (supports canonical /api/v1 and /api)
+  app.use(['/api/v1', '/api'], apiRouter);
 
   return app;
 }
