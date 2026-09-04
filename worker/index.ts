@@ -92,14 +92,17 @@ export default {
           reqHeaders.set('X-Forwarded-Proto', 'https');
           reqHeaders.set('X-Forwarded-Host', url.host);
 
-          const backendResponse = await fetch(
-            new Request(targetUrl.toString(), {
-              method: request.method,
-              headers: reqHeaders,
-              body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
-              redirect: 'manual',
-            })
-          );
+          const reqInit: any = {
+            method: request.method,
+            headers: reqHeaders,
+            body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
+            redirect: 'manual',
+          };
+          if (!['GET', 'HEAD'].includes(request.method) && request.body) {
+            reqInit.duplex = 'half';
+          }
+
+          const backendResponse = await fetch(new Request(targetUrl.toString(), reqInit));
 
           const resHeaders = new Headers(backendResponse.headers);
           resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

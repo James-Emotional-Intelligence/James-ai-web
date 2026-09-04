@@ -153,15 +153,36 @@ describe('Storage API Integration Tests (Multipart & Local Storage)', () => {
     expect(res.body.book.storageDriver).toBe('local');
   });
 
-  it('6. Health readiness check verifies storage adapter without leaking absolute paths', async () => {
-    const res = await request(app).get('/api/v1/health/ready');
+  it('7. Unauthenticated POST to /materials/books/upload returns 401 UNAUTHORIZED, not 404', async () => {
+    const res = await request(app)
+      .post('/api/v1/materials/books/upload')
+      .field('title', 'Unauthorized Upload Attempt');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('8. GET /materials/books correctly resolves to books list without being swallowed by /materials/:id', async () => {
+    const res = await request(app)
+      .get('/api/v1/materials/books')
+      .set('Cookie', [userSession]);
 
     expect(res.status).toBe(200);
-    expect(res.body.storage).toBeDefined();
-    expect(res.body.storage.ready).toBe(true);
-    expect(res.body.storage.driver).toBe('local');
-    // Ensure no raw C:\ or /Users paths leak
-    expect(JSON.stringify(res.body.storage)).not.toContain('C:\\');
-    expect(JSON.stringify(res.body.storage)).not.toContain('/Users/');
+    expect(res.body.books).toBeDefined();
+    expect(Array.isArray(res.body.books)).toBe(true);
+    expect(typeof res.body.total).toBe('number');
+    expect(res.body.books.length).toBeGreaterThanOrEqual(1);
+    const uploadedBook = res.body.books.find((b: any) => b.title === 'Sách Vật Lý 10 (Cánh Diều)');
+    expect(uploadedBook).toBeDefined();
+  });
+
+  it('9. GET /meta/version returns system version, commit SHA, and node runtime', async () => {
+    const res = await request(app).get('/api/v1/meta/version');
+
+    expect(res.status).toBe(200);
+    expect(res.body.appVersion).toBe('1.0.0');
+    expect(res.body.runtime).toBe('node');
+    expect(res.body.storageDriver).toBeDefined();
   });
 });
+

@@ -68,13 +68,27 @@ export function normalizeApiBaseUrl(url?: string): string {
   return `${clean}/api/v1`;
 }
 
-const getBaseUrl = (): string => {
+export const getBaseUrl = (): string => {
   const runtimeWindowUrl = typeof window !== 'undefined' ? (window as any).__API_BASE_URL__ : undefined;
   const envUrl = (import.meta as any).env?.VITE_API_BASE_URL;
   return normalizeApiBaseUrl(runtimeWindowUrl || envUrl);
 };
 
-const API_BASE = getBaseUrl();
+export function buildApiUrl(urlPath: string): string {
+  const relativePath = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
+  const baseUrl = getBaseUrl();
+  
+  if (baseUrl.startsWith('http://') || baseUrl.startsWith('https://')) {
+    const baseWithoutSlash = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    return `${baseWithoutSlash}${relativePath}`;
+  }
+  
+  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  if (relativePath.startsWith(base)) {
+    return relativePath;
+  }
+  return `${base}${relativePath}`;
+}
 
 export interface JamiChatMessageItem {
   id: string;
@@ -145,20 +159,7 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> {
-  const relativePath = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
-  const baseUrl = getBaseUrl();
-  
-  let fullUrl: string;
-  if (baseUrl.startsWith('http://') || baseUrl.startsWith('https://')) {
-    fullUrl = `${baseUrl}${relativePath}`;
-  } else {
-    const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-    if (relativePath.startsWith(base)) {
-      fullUrl = relativePath;
-    } else {
-      fullUrl = `${base}${relativePath}`;
-    }
-  }
+  const fullUrl = buildApiUrl(urlPath);
 
   const isBodyObject = options?.body && typeof options.body === 'string';
   const headers: Record<string, string> = {
@@ -556,7 +557,7 @@ export const api = {
   deleteBusyEvent: (id: string) =>
     fetchJson<{ success: boolean }>(`/busy-events/${id}`, { method: 'DELETE' }),
   downloadTimetableCsv: async () => {
-    const response = await fetch(`${API_BASE}/timetables/export/csv`, { credentials: 'include' });
+    const response = await fetch(buildApiUrl('/timetables/export/csv'), { credentials: 'include' });
     if (!response.ok) throw new Error('Không thể tải xuống thời khóa biểu');
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
@@ -590,7 +591,7 @@ export const api = {
   unscheduleTask: (taskId: string) =>
     fetchJson<{ task: StudyTask }>(`/tasks/${taskId}/unschedule`, { method: 'POST' }),
   downloadTasksCsv: async () => {
-    const response = await fetch(`${API_BASE}/tasks/export/csv`, { credentials: 'include' });
+    const response = await fetch(buildApiUrl('/tasks/export/csv'), { credentials: 'include' });
     if (!response.ok) throw new Error('Không thể tải xuống danh sách nhiệm vụ');
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
@@ -793,7 +794,7 @@ export const api = {
       if (meta.materialKind) formData.append('materialKind', meta.materialKind);
 
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `${API_BASE}/materials/upload`);
+      xhr.open('POST', buildApiUrl('/materials/upload'));
       xhr.withCredentials = true;
 
       if (signal) {
@@ -833,7 +834,7 @@ export const api = {
     });
   },
   uploadMaterialDirect: async (key: string, fileData: Blob | ArrayBuffer, contentType: string) => {
-    const res = await fetch(`${API_BASE}/materials/upload-direct?key=${encodeURIComponent(key)}`, {
+    const res = await fetch(buildApiUrl(`/materials/upload-direct?key=${encodeURIComponent(key)}`), {
       method: 'POST',
       headers: {
         'Content-Type': contentType,
@@ -932,7 +933,7 @@ export const api = {
       formData.append('rightsConfirmed', String(meta.rightsConfirmed));
 
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `${API_BASE}/materials/books/upload`);
+      xhr.open('POST', buildApiUrl('/materials/books/upload'));
       xhr.withCredentials = true;
 
       if (signal) {
@@ -1064,7 +1065,7 @@ export const api = {
     if (params?.to) query.set('to', params.to);
     if (params?.timezone) query.set('timezone', params.timezone);
     const qs = query.toString();
-    return `/api/v1/reports/export${qs ? `?${qs}` : ''}`;
+    return buildApiUrl(`/reports/export${qs ? `?${qs}` : ''}`);
   },
   downloadReportsCsv: async (params?: { period?: 'week' | 'month' | 'custom'; from?: string; to?: string; timezone?: string }) => {
     const query = new URLSearchParams();
@@ -1074,7 +1075,7 @@ export const api = {
     if (params?.timezone) query.set('timezone', params.timezone);
     const qs = query.toString();
 
-    const response = await fetch(`${API_BASE}/reports/export${qs ? `?${qs}` : ''}`, {
+    const response = await fetch(buildApiUrl(`/reports/export${qs ? `?${qs}` : ''}`), {
       credentials: 'include',
     });
 
@@ -1093,7 +1094,7 @@ export const api = {
     window.URL.revokeObjectURL(url);
   },
   downloadMaterialFile: async (materialId: string, fallbackFileName?: string) => {
-    const response = await fetch(`${API_BASE}/materials/${materialId}/content`, {
+    const response = await fetch(buildApiUrl(`/materials/${materialId}/content`), {
       credentials: 'include',
     });
 
@@ -1251,4 +1252,14 @@ export const api = {
     }),
   deleteAdminUser: (userId: string) =>
     fetchJson<{ success: boolean; message: string }>(`/admin/users/${userId}`, { method: 'DELETE' }),
+
+  // Version & Diagnostics
+  getVersion: () =>
+    fetchJson<{
+      appVersion: string;
+      commitSha: string;
+      buildTime: string;
+      runtime: string;
+      storageDriver?: string;
+    }>('/meta/version'),
 };

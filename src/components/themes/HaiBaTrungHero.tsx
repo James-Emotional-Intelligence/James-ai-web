@@ -30,9 +30,6 @@ export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
     }
   }, []);
 
-  const imageSrc = prefersReducedMotion
-    ? HAI_BA_TRUNG_ASSETS.ridingElephantsPoster
-    : HAI_BA_TRUNG_ASSETS.ridingElephantsGif;
 
   return (
     <div
@@ -114,23 +111,42 @@ export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
         <div className="w-full md:w-[58%] lg:w-[62%] flex items-center justify-center md:justify-end relative self-stretch overflow-visible">
           {!imageError ? (
             <div className="relative w-full h-[220px] sm:h-[270px] md:h-[320px] lg:h-[340px] flex items-center justify-center md:justify-end">
-              <img
-                src={imageSrc}
-                alt="Hai Bà Trưng cưỡi hai voi, phất cờ và cầm kiếm"
-                width={1920}
-                height={1080}
-                loading="eager"
-                decoding="async"
-                onError={() => setImageError(true)}
-                className="w-full h-full object-contain object-center md:object-right select-none pointer-events-none drop-shadow-[0_16px_32px_rgba(0,0,0,0.7)] transition-transform duration-500 hover:scale-[1.01]"
-                style={{
-                  maxWidth: '100%',
-                  aspectRatio: '16/9',
-                }}
-              />
+              {prefersReducedMotion ? (
+                <img
+                  src={HAI_BA_TRUNG_ASSETS.ridingElephantsPoster}
+                  alt="Hai Bà Trưng cưỡi hai voi, phất cờ và cầm kiếm"
+                  width={1920}
+                  height={1080}
+                  loading="eager"
+                  decoding="async"
+                  onError={() => setImageError(true)}
+                  className="w-full h-full object-contain object-center md:object-right select-none pointer-events-none drop-shadow-[0_16px_32px_rgba(0,0,0,0.7)] transition-transform duration-500 hover:scale-[1.01]"
+                  style={{
+                    maxWidth: '100%',
+                    aspectRatio: '16/9',
+                  }}
+                />
+              ) : (
+                <video
+                  src={HAI_BA_TRUNG_ASSETS.ridingElephantsMp4}
+                  poster={HAI_BA_TRUNG_ASSETS.ridingElephantsPoster}
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  preload="metadata"
+                  onError={() => setImageError(true)}
+                  className="w-full h-full object-contain object-center md:object-right select-none pointer-events-none drop-shadow-[0_16px_32px_rgba(0,0,0,0.7)] transition-transform duration-500 hover:scale-[1.01]"
+                  style={{
+                    maxWidth: '100%',
+                    aspectRatio: '16/9',
+                  }}
+                  aria-label="Hai Bà Trưng cưỡi hai voi, phất cờ và cầm kiếm"
+                />
+              )}
             </div>
           ) : (
-            /* Elegant vector fallback if image decoding fails */
+            /* Elegant vector fallback if image/video decoding fails */
             <div className="w-full h-[200px] flex flex-col items-center justify-center rounded-2xl bg-[#102B20]/60 border border-[#D2A84A]/30 text-center p-4 space-y-2">
               <img
                 src={HAI_BA_TRUNG_ASSETS.statueTransparent}

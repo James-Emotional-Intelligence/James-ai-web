@@ -157,5 +157,53 @@ export function createApp() {
   // 6. Mount API Router (supports canonical /api/v1 and /api)
   app.use(['/api/v1', '/api'], apiRouter);
 
+  // 7. Error Handling Middleware (Multer & General App Errors)
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+    const requestId = (req as any).requestId || 'req_' + crypto.randomUUID().substring(0, 16);
+    if (err && err.name === 'MulterError') {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          error: {
+            code: 'FILE_TOO_LARGE',
+            message: 'Dung lượng tệp vượt quá giới hạn tối đa cho phép.',
+            requestId,
+          },
+          message: 'Dung lượng tệp vượt quá giới hạn tối đa cho phép.',
+        });
+      }
+      return res.status(400).json({
+        error: {
+          code: 'UPLOAD_ERROR',
+          message: err.message || 'Lỗi xử lý tệp tải lên.',
+          requestId,
+        },
+        message: err.message || 'Lỗi xử lý tệp tải lên.',
+      });
+    }
+
+    if (err) {
+      console.error('[Unhandled App Error]:', err);
+      const status = typeof err.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+      return res.status(status).json({
+        error: {
+          code: err.code || 'INTERNAL_SERVER_ERROR',
+          message: err.message || 'Đã xảy ra lỗi nội bộ máy chủ.',
+          requestId,
+        },
+        message: err.message || 'Đã xảy ra lỗi nội bộ máy chủ.',
+      });
+    }
+
+    return res.status(500).json({
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Đã xảy ra lỗi nội bộ máy chủ.',
+        requestId,
+      },
+      message: 'Đã xảy ra lỗi nội bộ máy chủ.',
+    });
+  });
+
   return app;
 }
+
