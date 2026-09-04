@@ -54,6 +54,7 @@ export function useTodayGreetingConversation(
   const hasSpokenQuestionRef = useRef(false);
   const submittedRef = useRef(false);
   const currentTranscriptRef = useRef('');
+  const finalTranscriptAccumulatorRef = useRef('');
   const lastSubmittedAnswerRef = useRef('');
   const requestSeqRef = useRef(0);
   const isMountedRef = useRef(true);
@@ -188,6 +189,8 @@ export function useTodayGreetingConversation(
     setSpeechError(null);
     setErrorMessage(null);
     submittedRef.current = false;
+    currentTranscriptRef.current = '';
+    finalTranscriptAccumulatorRef.current = '';
 
     if (voiceContextRef.current?.isSpeaking) {
       voiceContextRef.current.stopSpeaking();
@@ -213,17 +216,19 @@ export function useTodayGreetingConversation(
       };
 
       recognizer.onresult = (event: any) => {
-        let finalTranscript = '';
         let currentInterim = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const trans = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            finalTranscript += trans + ' ';
+            const clean = trans.trim();
+            if (clean) {
+              finalTranscriptAccumulatorRef.current += (finalTranscriptAccumulatorRef.current ? ' ' : '') + clean;
+            }
           } else {
             currentInterim += trans;
           }
         }
-        const fullTranscript = (finalTranscript + currentInterim).trim();
+        const fullTranscript = (finalTranscriptAccumulatorRef.current + (currentInterim ? ' ' + currentInterim : '')).trim();
         currentTranscriptRef.current = fullTranscript;
         if (isMountedRef.current) {
           setAnswerText(fullTranscript);

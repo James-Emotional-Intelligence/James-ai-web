@@ -76,6 +76,26 @@ Quy tắc biến đổi: Chuyển vế đổi dấu và nhân cả hai vế vớ
       const entries = bookParserService.extractZipEntries(emptyZip);
       expect(entries).toEqual([]);
     });
+
+    it('rejects zip entries with path traversal (Zip Slip)', () => {
+      // Create ZIP central directory entry with directory traversal in filename
+      const zipWithSlip = Buffer.alloc(120);
+      zipWithSlip.write('PK\x01\x02', 0);
+      zipWithSlip.writeUInt16LE(8, 10); // compression method deflate
+      zipWithSlip.writeUInt32LE(10, 20); // compressed size
+      zipWithSlip.writeUInt32LE(100, 24); // uncompressed size
+      const filename = '../../etc/passwd';
+      zipWithSlip.writeUInt16LE(filename.length, 28);
+      zipWithSlip.write(filename, 46);
+      const eocdPos = 46 + filename.length + 10;
+      // EOCD
+      zipWithSlip.write('PK\x05\x06', eocdPos);
+      zipWithSlip.writeUInt16LE(1, eocdPos + 10); // totalEntries = 1
+      zipWithSlip.writeUInt32LE(eocdPos, eocdPos + 12); // central dir size
+      zipWithSlip.writeUInt32LE(0, eocdPos + 16); // cdOffset = 0
+
+      expect(() => bookParserService.extractZipEntries(zipWithSlip)).toThrow(/đường dẫn không hợp lệ/);
+    });
   });
 
   describe('Book Repository CRUD & Progress Tracking', () => {

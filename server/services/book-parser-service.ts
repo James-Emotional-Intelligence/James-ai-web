@@ -198,13 +198,35 @@ export class BookParserService {
           }
 
           const rawData = buffer.subarray(dataStart, dataEnd);
+          let decompressed: Buffer;
+
           if (compressionMethod === 0) {
-            return rawData;
+            decompressed = rawData;
           } else if (compressionMethod === 8) {
-            return zlib.inflateRawSync(rawData);
+            const maxAllowed = Math.min(
+              uncompressedSize > 0 ? uncompressedSize : BOOK_MAX_UNCOMPRESSED_BYTES,
+              BOOK_MAX_UNCOMPRESSED_BYTES
+            );
+            try {
+              decompressed = zlib.inflateRawSync(rawData, {
+                maxOutputLength: maxAllowed,
+              });
+            } catch (inflateErr: any) {
+              throw new Error(`Giải nén thất bại hoặc vượt quá dung lượng cho phép tại ${fileName}: ${inflateErr.message}`, { cause: inflateErr });
+            }
           } else {
             throw new Error(`Phương thức nén không hỗ trợ: ${compressionMethod} trong ${fileName}`);
           }
+
+          if (decompressed.length > BOOK_MAX_UNCOMPRESSED_BYTES) {
+            throw new Error(`Dung lượng giải nén thực tế (${decompressed.length} bytes) vượt quá giới hạn an toàn (${BOOK_MAX_UNCOMPRESSED_BYTES} bytes) tại ${fileName}`);
+          }
+
+          if (uncompressedSize > 0 && decompressed.length !== uncompressedSize) {
+            throw new Error(`Dung lượng giải nén thực tế (${decompressed.length} bytes) không khớp với header ZIP (${uncompressedSize} bytes) tại ${fileName}`);
+          }
+
+          return decompressed;
         },
       };
 
