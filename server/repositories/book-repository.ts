@@ -9,6 +9,8 @@ import {
   BookStudyCitation,
 } from '../../shared/types';
 import { storageService, generateMaterialObjectKey, sanitizeFileName } from '../services/storage-service';
+import { bookParserService } from '../services/book-parser-service';
+import { env } from '../config/env';
 import crypto from 'crypto';
 
 export class BookRepository {
@@ -330,12 +332,49 @@ export class BookRepository {
   public async finalizeUpload(
     userId: string,
     materialId: string,
-    data: {
-      sizeBytes: number;
+    meta?: {
+      sizeBytes?: number;
       sha256?: string;
       detectedMime?: string;
     }
   ): Promise<boolean> {
+    const book = await this.getBookById(userId, materialId);
+    if (!book) {
+      return false;
+    }
+
+    let finalSize = meta?.sizeBytes || book.sizeBytes || 0;
+    let finalSha = meta?.sha256 || book.sha256;
+    let finalMime = meta?.detectedMime || book.detectedMime || book.mimeType || 'application/pdf';
+
+    // Verify against actual object in storageService / R2 if available
+    if (book.r2ObjectKey) {
+      const storedObj = await storageService.getObject(book.r2ObjectKey);
+      if (storedObj && storedObj.body) {
+        finalSize = storedObj.size || storedObj.body.length;
+        finalSha = crypto.createHash('sha256').update(storedObj.body).digest('hex');
+
+        // Check file size limits against environment configuration
+        const maxBytes = (env.BOOK_MAX_UPLOAD_MB || 100) * 1024 * 1024;
+        if (finalSize > maxBytes) {
+          throw new Error(`Dung lượng sách (${Math.round(finalSize / 1024 / 1024)}MB) vượt quá giới hạn cho phép (${env.BOOK_MAX_UPLOAD_MB}MB).`);
+        }
+
+        // Validate magic bytes server-side (prevent spoofed extensions/MIME)
+        const magicCheck = bookParserService.validateMagicBytes(
+          storedObj.body,
+          storedObj.contentType || finalMime,
+          book.originalFilename || book.fileName || 'book.pdf'
+        );
+
+        if (!magicCheck.valid) {
+          throw new Error('Tệp sách không hợp lệ hoặc định dạng thực tế không khớp với nội dung tệp.');
+        }
+
+        finalMime = magicCheck.detectedMime;
+      }
+    }
+
     if (db.isHealthy()) {
       const res = await db.execute(
         `UPDATE learning_materials
@@ -346,10 +385,15 @@ export class BookRepository {
              detected_mime = COALESCE(?, detected_mime),
              updated_at = NOW(3)
          WHERE id = ? AND user_id = ? AND material_kind = 'book'`,
-        [data.sizeBytes, data.sha256 || null, data.detectedMime || null, materialId, userId]
+        [finalSize, finalSha || null, finalMime || null, materialId, userId]
       );
 
-      // Create durable processing job
+      // Check affectedRows first: return false if book not found / not updated
+      if (!res || (res.affectedRows || 0) === 0) {
+        return false;
+      }
+
+      // Create durable processing job only after confirming affectedRows > 0
       const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
       await db.execute(
         `INSERT INTO material_processing_jobs (
@@ -358,7 +402,7 @@ export class BookRepository {
         [jobId, materialId, userId]
       );
 
-      return (res?.affectedRows || 0) > 0;
+      return true;
     }
 
     const list = this.demoBooks.get(userId) || [];
@@ -366,8 +410,9 @@ export class BookRepository {
     if (b) {
       b.processingStatus = 'ready';
       b.processingProgress = 100;
-      b.sizeBytes = data.sizeBytes;
-      b.sha256 = data.sha256;
+      b.sizeBytes = finalSize;
+      b.sha256 = finalSha;
+      b.detectedMime = finalMime;
       return true;
     }
     return false;

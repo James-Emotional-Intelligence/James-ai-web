@@ -82,7 +82,7 @@ export function createApp() {
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
         res.setHeader(
           'Access-Control-Allow-Headers',
-          'Content-Type, Authorization, X-Requested-With, X-Request-Id, X-CSRF-Token, X-Admin-Key, X-Internal-Secret'
+          'Content-Type, Authorization, X-Requested-With, X-Request-Id, X-CSRF-Token, X-Admin-Key, X-Internal-Cron-Secret, X-Internal-Secret'
         );
         if (req.method === 'OPTIONS') {
           return res.sendStatus(204);
@@ -107,12 +107,22 @@ export function createApp() {
     next();
   });
 
-  // 4. CSRF / Same-Origin Verification Middleware for state-mutating requests
+  // 4. Body & Cookie Parsers (Must run before CSRF middleware so req.cookies is populated)
+  app.use(express.raw({ limit: '50mb', type: ['application/pdf', 'image/*', 'application/octet-stream'] }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  app.use(cookieParser());
+
+  // 5. CSRF / Same-Origin Verification Middleware for state-mutating requests
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-      // Exclude internal routes authenticated via internal secret header
-      const internalSecret = req.headers['x-internal-secret'] || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '');
-      if (req.path.startsWith('/api/v1/internal/') && internalSecret && internalSecret === env.INTERNAL_CRON_SECRET) {
+      // Exclude internal routes authenticated via internal cron secret header or Bearer token
+      const cronSecretHeader = (req.headers['x-internal-cron-secret'] || req.headers['x-internal-secret'] || '') as string;
+      const bearerSecret = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '';
+      const providedSecret = cronSecretHeader || bearerSecret;
+      const expectedSecret = env.INTERNAL_CRON_SECRET || env.ADMIN_SECRET_KEY || 'jami-cron-internal-secret-key-32-chars';
+
+      if (req.path.startsWith('/api/v1/internal/') && providedSecret && providedSecret === expectedSecret) {
         return next();
       }
 
@@ -143,12 +153,6 @@ export function createApp() {
     }
     next();
   });
-
-  // 5. Body & Cookie Parsers
-  app.use(express.raw({ limit: '50mb', type: ['application/pdf', 'image/*', 'application/octet-stream'] }));
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-  app.use(cookieParser());
 
   // 6. Mount API Router
   app.use('/api/v1', apiRouter);

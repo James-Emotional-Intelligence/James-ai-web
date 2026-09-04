@@ -2724,20 +2724,30 @@ apiRouter.post('/materials/books/upload-intent', requireAuth, createRateLimiter(
 apiRouter.post('/materials/books/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const { sizeBytes, sha256, detectedMime } = req.body || {};
-  const ok = await bookRepo.finalizeUpload(userId, req.params.id, {
-    sizeBytes: Number(sizeBytes) || 0,
-    sha256,
-    detectedMime,
-  });
-  if (!ok) {
-    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm để hoàn tất tải lên.' } });
+
+  try {
+    const ok = await bookRepo.finalizeUpload(userId, req.params.id, {
+      sizeBytes: sizeBytes !== undefined ? Number(sizeBytes) : undefined,
+      sha256,
+      detectedMime,
+    });
+    if (!ok) {
+      return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm để hoàn tất tải lên.' } });
+    }
+
+    // Trigger background job poll immediately
+    materialWorker.pollJobs().catch(() => {});
+
+    const book = await bookRepo.getBookById(userId, req.params.id);
+    res.json({ success: true, book });
+  } catch (err: any) {
+    return res.status(400).json({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: err.message || 'Xác thực tệp sách tải lên thất bại.',
+      },
+    });
   }
-
-  // Trigger background job poll immediately
-  materialWorker.pollJobs().catch(() => {});
-
-  const book = await bookRepo.getBookById(userId, req.params.id);
-  res.json({ success: true, book });
 }));
 
 apiRouter.get('/materials/books', requireAuth, asyncHandler(async (req: Request, res: Response) => {
