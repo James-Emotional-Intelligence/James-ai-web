@@ -222,31 +222,23 @@ export const MaterialsPage: React.FC = () => {
     }
 
     setIsUploading(true);
-    setUploadProgress(10);
+    setUploadProgress(5);
 
     try {
       const subjectId = uploadSubjectId || (subjects[0]?.id || 'subj-math');
-      const mimeType = selectedFile.type || (selectedFile.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
 
-      // 1. Create Upload Intent
-      const intent = await api.createMaterialUploadIntent({
-        title: uploadTitle.trim() || selectedFile.name,
-        subjectId,
-        fileName: selectedFile.name,
-        mimeType,
-        sizeBytes: selectedFile.size,
-      });
-
-      setUploadProgress(40);
-
-      // 2. Direct upload to storage
-      await api.uploadMaterialDirect(intent.r2ObjectKey, selectedFile, mimeType);
-      setUploadProgress(85);
-
-      // 3. Finalize upload
-      await api.finalizeMaterialUpload(intent.material.id, {
-        sizeBytes: selectedFile.size,
-      });
+      // Direct streaming multipart upload with real progress
+      await api.uploadMaterial(
+        selectedFile,
+        {
+          title: uploadTitle.trim() || selectedFile.name,
+          subjectId,
+          materialKind: 'document',
+        },
+        (percent) => {
+          setUploadProgress(Math.max(5, percent));
+        }
+      );
 
       setUploadProgress(100);
       confetti({ particleCount: 60, spread: 50 });
@@ -272,48 +264,31 @@ export const MaterialsPage: React.FC = () => {
       return;
     }
     if (!bookRightsConfirmed) {
-      alert('Vui lòng xác nhận quyền sử dụng tệp sách cho mục đích học tập cá nhân trước khi tiếp tục.');
+      alert('Vui lòng xác nhận cam kết bản quyền học tập cá nhân đối với sách mềm trước khi tiếp tục.');
       return;
     }
 
     setIsUploadingBook(true);
-    setBookUploadProgress(10);
+    setBookUploadProgress(5);
 
     try {
       const subjectId = bookSubjectId || (subjects[0]?.id || 'subj-math');
-      const ext = bookFile.name.split('.').pop()?.toLowerCase();
-      let mimeType = bookFile.type;
-      if (!mimeType) {
-        if (ext === 'pdf') mimeType = 'application/pdf';
-        else if (ext === 'epub') mimeType = 'application/epub+zip';
-        else if (ext === 'docx') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        else if (ext === 'md') mimeType = 'text/markdown';
-        else mimeType = 'text/plain';
-      }
 
-      // 1. Create Book Upload Intent
-      const intent = await api.createBookUploadIntent({
-        title: bookTitle.trim() || bookFile.name,
-        subjectId,
-        fileName: bookFile.name,
-        mimeType,
-        sizeBytes: bookFile.size,
-        rightsConfirmed: true,
-        rightsTermsVersion: 'v1.0',
-        publisher: bookPublisher.trim() || undefined,
-        editionYear: bookEditionYear ? parseInt(bookEditionYear, 10) : 2024,
-      });
-
-      setBookUploadProgress(40);
-
-      // 2. Direct upload to storage
-      await api.uploadMaterialDirect(intent.r2ObjectKey, bookFile, mimeType);
-      setBookUploadProgress(85);
-
-      // 3. Finalize upload & enqueue worker parsing
-      await api.finalizeBookUpload(intent.book.id, {
-        sizeBytes: bookFile.size,
-      });
+      // Direct streaming multipart upload for soft books
+      await api.uploadBook(
+        bookFile,
+        {
+          title: bookTitle.trim() || bookFile.name,
+          subjectId,
+          publisher: bookPublisher.trim() || undefined,
+          editionYear: bookEditionYear ? parseInt(bookEditionYear, 10) : 2024,
+          language: 'vi',
+          rightsConfirmed: true,
+        },
+        (percent) => {
+          setBookUploadProgress(Math.max(5, percent));
+        }
+      );
 
       setBookUploadProgress(100);
       confetti({ particleCount: 70, spread: 55 });

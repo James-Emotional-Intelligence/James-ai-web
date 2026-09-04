@@ -81,6 +81,14 @@ const EnvSchema = z.object({
   OPENAI_TRANSCRIBE_MODEL: z.string().default('whisper-1'),
   OPENAI_VOICE: z.string().default('alloy'),
 
+  // Storage Configuration (Local Disk vs Cloudflare R2/S3)
+  STORAGE_DRIVER: z.enum(['local', 'r2']).default('local'),
+  LOCAL_STORAGE_ROOT: z.string().default('./storage'),
+  MATERIAL_MAX_UPLOAD_MB: z.preprocess((val) => (val ? Number(val) : 25), z.number().default(25)),
+  LOCAL_STORAGE_QUOTA_MB_PER_USER: z.preprocess((val) => (val ? Number(val) : 1000), z.number().default(1000)),
+  LOCAL_STORAGE_MIN_FREE_MB: z.preprocess((val) => (val ? Number(val) : 2048), z.number().default(2048)),
+  TEMP_FILE_MAX_AGE_HOURS: z.preprocess((val) => (val ? Number(val) : 24), z.number().default(24)),
+
   // Cloudflare R2 Object Storage Configuration (S3-Compatible)
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),

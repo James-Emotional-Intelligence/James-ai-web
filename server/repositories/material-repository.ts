@@ -3,6 +3,7 @@ import { Material, StructuredMaterialSummary } from '../../shared/types';
 import { storageService, generateMaterialObjectKey, sanitizeFileName } from '../services/storage-service';
 import { SubjectRepository } from './subject-repository';
 import crypto from 'crypto';
+import path from 'path';
 
 export class MaterialRepository {
   private static instance: MaterialRepository;
@@ -20,9 +21,11 @@ export class MaterialRepository {
   public async getByUserId(userId: string): Promise<Material[]> {
     if (db.isHealthy()) {
       const rows = await db.query<any>(
-        `SELECT m.id, m.user_id, m.subject_id, m.title, m.type, m.r2_object_key,
-                m.file_name, m.mime_type, m.size_bytes, m.sha256, m.processing_status,
-                m.summary, m.summary_json, m.content_text, m.error_message, m.created_at, m.updated_at,
+        `SELECT m.id, m.user_id, m.subject_id, m.title, m.type, m.material_kind,
+                m.storage_driver, m.storage_key, m.original_filename, m.detected_mime, m.extension,
+                m.r2_object_key, m.file_name, m.mime_type, m.size_bytes, m.sha256, m.processing_status,
+                m.summary, m.summary_json, m.content_text, m.error_message, m.processing_error_code,
+                m.created_at, m.updated_at,
                 s.name as subject_name
          FROM learning_materials m
          LEFT JOIN subjects s ON m.subject_id = s.id
@@ -46,12 +49,19 @@ export class MaterialRepository {
           subjectName: r.subject_name || 'Môn học',
           title: r.title,
           type: r.type,
+          materialKind: r.material_kind || 'document',
+          storageDriver: (r.storage_driver as any) || (r.r2_object_key ? 'r2' : 'local'),
+          storageKey: r.storage_key || r.r2_object_key || undefined,
+          originalFilename: r.original_filename || r.file_name || undefined,
+          detectedMime: r.detected_mime || r.mime_type || undefined,
+          extension: r.extension || undefined,
           fileName: r.file_name || undefined,
           r2ObjectKey: r.r2_object_key || undefined,
           mimeType: r.mime_type || undefined,
           sizeBytes: Number(r.size_bytes) || 0,
           sha256: r.sha256 || undefined,
           processingStatus: r.processing_status || 'ready',
+          processingErrorCode: r.processing_error_code || undefined,
           summary: r.summary || undefined,
           summaryJson,
           contentText: r.content_text || undefined,
@@ -82,7 +92,7 @@ export class MaterialRepository {
   ): Promise<{ material: Material; uploadUrl: string; r2ObjectKey: string }> {
     const id = 'mat_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const sanitizedName = sanitizeFileName(data.fileName);
-    const r2ObjectKey = generateMaterialObjectKey(userId, sanitizedName);
+    const r2ObjectKey = generateMaterialObjectKey(userId, id, sanitizedName);
 
     const type: 'pdf' | 'image' | 'notes' = data.mimeType.startsWith('image/') ? 'image' : 'pdf';
 
@@ -207,6 +217,105 @@ export class MaterialRepository {
     return material;
   }
 
+  public async createUploadedMaterial(
+    userId: string,
+    data: {
+      materialId: string;
+      title: string;
+      subjectId: string;
+      fileName: string;
+      originalFilename: string;
+      mimeType: string;
+      detectedMime: string;
+      extension: string;
+      sizeBytes: number;
+      sha256: string;
+      storageDriver: 'local' | 'r2';
+      storageKey: string;
+      materialKind?: 'document' | 'book';
+    }
+  ): Promise<Material> {
+    let resolvedSubjectId = data.subjectId;
+    if (db.isHealthy()) {
+      let subjectExists = false;
+      if (resolvedSubjectId) {
+        const rows = await db.query<any>('SELECT id FROM subjects WHERE id = ?', [resolvedSubjectId]);
+        if (rows.length > 0) subjectExists = true;
+      }
+      if (!subjectExists) {
+        const userSubjects = await SubjectRepository.getInstance().getByUserId(userId);
+        if (userSubjects && userSubjects.length > 0) {
+          resolvedSubjectId = userSubjects[0].id;
+        }
+      }
+    }
+
+    const type: 'pdf' | 'image' | 'notes' | 'docx' | 'epub' | 'txt' =
+      data.mimeType.startsWith('image/')
+        ? 'image'
+        : data.extension === 'docx'
+        ? 'docx'
+        : data.extension === 'epub'
+        ? 'epub'
+        : data.extension === 'txt' || data.extension === 'md'
+        ? 'txt'
+        : 'pdf';
+
+    const material: Material = {
+      id: data.materialId,
+      userId,
+      subjectId: resolvedSubjectId,
+      title: data.title.trim(),
+      type,
+      materialKind: data.materialKind || 'document',
+      storageDriver: data.storageDriver,
+      storageKey: data.storageKey,
+      originalFilename: data.originalFilename,
+      detectedMime: data.detectedMime,
+      extension: data.extension,
+      fileName: data.fileName,
+      mimeType: data.mimeType,
+      sizeBytes: data.sizeBytes,
+      sha256: data.sha256,
+      processingStatus: 'queued',
+      processingProgress: 10,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO learning_materials (
+          id, user_id, subject_id, title, type, material_kind, storage_driver, storage_key,
+          original_filename, detected_mime, extension, file_name, mime_type,
+          size_bytes, sha256, processing_status, processing_progress, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 10, NOW(3), NOW(3))`,
+        [
+          material.id,
+          userId,
+          material.subjectId,
+          material.title,
+          material.type,
+          material.materialKind,
+          material.storageDriver,
+          material.storageKey,
+          material.originalFilename,
+          material.detectedMime,
+          material.extension,
+          material.fileName,
+          material.mimeType,
+          material.sizeBytes,
+          material.sha256,
+        ]
+      );
+    } else {
+      const list = this.demoMaterials.get(userId) || [];
+      list.unshift(material);
+      this.demoMaterials.set(userId, list);
+    }
+
+    return material;
+  }
+
   public async finalizeUpload(
     userId: string,
     materialId: string,
@@ -218,8 +327,9 @@ export class MaterialRepository {
     let finalSize = meta?.sizeBytes || material.sizeBytes;
     let finalSha = meta?.sha256 || material.sha256;
 
-    if (material.r2ObjectKey) {
-      const stored = await storageService.headObject(material.r2ObjectKey);
+    const effectiveKey = material.storageKey || material.r2ObjectKey;
+    if (effectiveKey) {
+      const stored = await storageService.headObject(effectiveKey, material.storageDriver);
       if (stored) {
         finalSize = stored.size;
         finalSha = stored.sha256 || finalSha;
@@ -322,16 +432,23 @@ export class MaterialRepository {
         [materialId, userId]
       );
 
-      // Asynchronously delete R2 object
-      if (material.r2ObjectKey) {
-        storageService.deleteObject(material.r2ObjectKey).catch(() => {});
+      // Asynchronously delete stored files
+      const effectiveKey = material.storageKey || material.r2ObjectKey;
+      if (effectiveKey) {
+        if (material.storageDriver === 'local' && effectiveKey.startsWith('materials/')) {
+          const dir = path.dirname(effectiveKey);
+          storageService.deleteMaterialDirectory(dir, 'local').catch(() => {});
+        } else {
+          storageService.deleteObject(effectiveKey, material.storageDriver || 'r2').catch(() => {});
+        }
       }
 
-      return res?.affectedRows > 0;
+      return (res?.affectedRows || 0) > 0;
     }
 
-    if (material.r2ObjectKey) {
-      storageService.deleteObject(material.r2ObjectKey).catch(() => {});
+    const effectiveKey = material.storageKey || material.r2ObjectKey;
+    if (effectiveKey) {
+      storageService.deleteObject(effectiveKey, material.storageDriver).catch(() => {});
     }
 
     const list = this.demoMaterials.get(userId) || [];
@@ -362,9 +479,15 @@ export class MaterialRepository {
 
   public async getDownloadUrl(userId: string, materialId: string): Promise<{ downloadUrl: string; expiresAt: string } | null> {
     const material = await this.getById(userId, materialId);
-    if (!material || !material.r2ObjectKey) return null;
+    if (!material) return null;
+    const effectiveKey = material.storageKey || material.r2ObjectKey;
+    if (!effectiveKey) return null;
 
-    return await storageService.getSignedDownloadUrl(material.r2ObjectKey, 3600);
+    const downloadUrl = await storageService.getSignedDownloadUrl(effectiveKey, material.originalFilename || material.fileName || 'document', 3600);
+    return {
+      downloadUrl,
+      expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+    };
   }
 
   // ==========================================

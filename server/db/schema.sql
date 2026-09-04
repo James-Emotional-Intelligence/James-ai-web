@@ -345,16 +345,40 @@ CREATE TABLE IF NOT EXISTS learning_materials (
   user_id VARCHAR(36) NOT NULL,
   subject_id VARCHAR(36) NOT NULL,
   title VARCHAR(200) NOT NULL,
-  type VARCHAR(50) NOT NULL, -- 'pdf', 'image', 'notes'
+  type VARCHAR(50) NOT NULL, -- 'pdf', 'image', 'notes', 'docx', 'epub', 'txt'
+  material_kind VARCHAR(32) NOT NULL DEFAULT 'document', -- 'document', 'book'
+  storage_driver VARCHAR(16) NOT NULL DEFAULT 'local', -- 'local', 'r2'
+  storage_key VARCHAR(512) NULL,
+  original_filename VARCHAR(255) NULL,
+  detected_mime VARCHAR(100) NULL,
+  extension VARCHAR(32) NULL,
   r2_object_key VARCHAR(255) NULL,
+  file_name VARCHAR(255) NULL,
   mime_type VARCHAR(100) NULL,
   size_bytes BIGINT DEFAULT 0,
   sha256 VARCHAR(64) NULL,
+  publisher VARCHAR(150) NULL,
+  edition_year INT NULL,
+  language VARCHAR(10) DEFAULT 'vi',
+  cover_object_key VARCHAR(500) NULL,
+  page_count INT DEFAULT 0,
+  chapter_count INT DEFAULT 0,
   processing_status VARCHAR(30) DEFAULT 'ready',
+  processing_progress INT DEFAULT 0,
+  processing_error_code VARCHAR(64) NULL,
+  summary TEXT NULL,
+  summary_json JSON NULL,
+  content_text LONGTEXT NULL,
+  error_message TEXT NULL,
+  rights_confirmed_at DATETIME(3) NULL,
+  rights_terms_version VARCHAR(20) NULL,
   created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   deleted_at DATETIME(3) NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+  FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+  INDEX idx_mat_user_status_created (user_id, processing_status, created_at),
+  INDEX idx_mat_storage_driver (storage_driver)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 21. quizzes

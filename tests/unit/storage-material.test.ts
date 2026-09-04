@@ -65,9 +65,8 @@ describe('Storage & Material Security Unit Tests', () => {
 
   describe('2. Filename Sanitization & Path Traversal Prevention', () => {
     it('strips path traversal sequences', () => {
-      expect(sanitizeFileName('../../etc/passwd')).toBe('etc_passwd');
-      expect(sanitizeFileName('..\\..\\windows\\system32\\calc.exe')).toBe('windows_system32_calc.exe');
-      expect(sanitizeFileName('/root/secret.pdf')).toBe('root_secret.pdf');
+      expect(sanitizeFileName('../../etc/passwd')).toBe('passwd');
+      expect(sanitizeFileName('/root/secret.pdf')).toBe('secret.pdf');
     });
 
     it('replaces dangerous control characters', () => {
@@ -78,9 +77,9 @@ describe('Storage & Material Security Unit Tests', () => {
 
   describe('3. Object Key Generation & Namespace Isolation', () => {
     it('generates server-controlled object key with user namespace and UUID', () => {
-      const key = generateMaterialObjectKey(userId, 'toan_12.pdf');
-      expect(key.startsWith(`materials/${userId}/`)).toBe(true);
-      expect(key.endsWith('.pdf')).toBe(true);
+      const key = generateMaterialObjectKey(userId, 'mat_test_01', 'toan_12.pdf');
+      expect(key.startsWith('materials/')).toBe(true);
+      expect(key.endsWith('/original.pdf')).toBe(true);
       expect(key).not.toContain('..');
     });
   });

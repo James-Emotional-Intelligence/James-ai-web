@@ -658,8 +658,11 @@ export interface Material {
   title: string;
   type: 'pdf' | 'image' | 'notes' | 'docx' | 'epub' | 'txt';
   materialKind?: 'document' | 'book';
+  storageDriver?: 'local' | 'r2';
+  storageKey?: string;
   originalFilename?: string;
   detectedMime?: string;
+  extension?: string;
   publisher?: string;
   editionYear?: number;
   language?: string;
@@ -667,6 +670,7 @@ export interface Material {
   pageCount?: number;
   chapterCount?: number;
   processingProgress?: number;
+  processingErrorCode?: string;
   rightsConfirmedAt?: string;
   rightsTermsVersion?: string;
   fileName?: string;
@@ -681,6 +685,7 @@ export interface Material {
   errorMessage?: string;
   createdAt: string;
   updatedAt?: string;
+  deletedAt?: string;
 }
 
 export interface BookChapter {

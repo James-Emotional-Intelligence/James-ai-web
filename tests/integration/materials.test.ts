@@ -52,7 +52,7 @@ describe('Learning Materials & R2 Subsystem Integration Tests', () => {
     expect(intentRes.status).toBe(200);
     expect(intentRes.body.material).toBeDefined();
     expect(intentRes.body.uploadUrl).toBeDefined();
-    expect(intentRes.body.r2ObjectKey).toContain(`materials/${userAId}/`);
+    expect(intentRes.body.r2ObjectKey).toMatch(/^materials\/[a-f0-9]{16}\/mat_/);
 
     const materialId = intentRes.body.material.id;
     const r2Key = intentRes.body.r2ObjectKey;
@@ -192,13 +192,13 @@ describe('Learning Materials & R2 Subsystem Integration Tests', () => {
     expect(renameRes.status).toBe(200);
     expect(renameRes.body.material.title).toBe('Tên mới sau khi đổi');
 
-    // 4. Get Download URL
+    // 4. Download Note
     const dlRes = await request(app)
       .get(`/api/v1/materials/${note.id}/download`)
       .set('Cookie', [userASession]);
 
     expect(dlRes.status).toBe(200);
-    expect(dlRes.body.downloadUrl).toBeDefined();
+    expect(dlRes.headers['content-disposition']).toContain('attachment');
 
     // 5. Delete Outline
     const delRes = await request(app)

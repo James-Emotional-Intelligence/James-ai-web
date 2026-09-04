@@ -1,5 +1,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import multer from 'multer';
 import { UserRepository } from '../repositories/user-repository';
 import { AuthService } from '../services/auth-service';
 import { AiAdapter } from '../services/ai-adapter';
@@ -57,13 +60,14 @@ import {
 import { env, isProduction, isProductionRuntime, isDatabaseRequired, isDemoMode } from '../config/env';
 import { createRateLimiter } from '../middleware/rate-limit';
 import { z } from 'zod';
-import { StudyTask, StudentProfile } from '../../shared/types';
+import { StudyTask, StudentProfile, Material } from '../../shared/types';
 import {
   EmailAlreadyExistsError,
   DatabaseUnavailableError,
   DbSchemaIncompatibleError,
 } from '../errors/app-errors';
 
+import { db } from '../db/mysql';
 import { subjectRepo } from '../repositories/subject-repository';
 import { timetableRepo } from '../repositories/timetable-repository';
 import { sessionCheckinRepo } from '../repositories/session-checkin-repository';
@@ -90,7 +94,14 @@ import { Migrator } from '../db/migrator';
 import { voiceSessionService } from '../services/voice-session-service';
 import { jamiActionService } from '../services/jami-action-service';
 import { notificationScheduler } from '../services/notification-scheduler-service';
-import { storageService, validateMagicBytes } from '../services/storage-service';
+import {
+  storageService,
+  validateMagicBytes,
+  getSafeExtension,
+  generateMaterialStorageKey,
+  getUserDirHash,
+  sanitizeFileName,
+} from '../services/storage-service';
 import { materialProcessor } from '../services/material-processor';
 
 export const apiRouter = Router();
@@ -207,6 +218,27 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
 // Rate limiters
 const authRateLimiter = createRateLimiter(60 * 1000, 5, 'auth_limit');
 
+// Multer Disk Storage Configuration (Streaming directly to storage/temporary)
+const tempUploadDir = path.resolve(process.cwd(), env.LOCAL_STORAGE_ROOT || './storage', 'temporary');
+if (!fs.existsSync(tempUploadDir)) {
+  fs.mkdirSync(tempUploadDir, { recursive: true });
+}
+
+const uploadDisk = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      cb(null, tempUploadDir);
+    },
+    filename: (_req, _file, cb) => {
+      const uniqueName = `upload-${Date.now()}-${crypto.randomBytes(8).toString('hex')}.tmp`;
+      cb(null, uniqueName);
+    },
+  }),
+  limits: {
+    fileSize: Math.max(env.MATERIAL_MAX_UPLOAD_MB || 25, env.BOOK_MAX_UPLOAD_MB || 100) * 1024 * 1024,
+  },
+});
+
 // ==========================================
 // Health & Diagnostic Routes
 // ==========================================
@@ -218,11 +250,13 @@ apiRouter.get('/health/live', (req: Request, res: Response) => {
 apiRouter.get('/health/ready', asyncHandler(async (req: Request, res: Response) => {
   const doctor = await runDbDoctor();
   const isHealthy = doctor.status === 'healthy';
+  const storageCheck = await storageService.checkStorageReady();
 
-  if (!isHealthy && isProduction) {
+  if ((!isHealthy || !storageCheck.ready) && isProduction) {
     return res.status(503).json({
       status: 'unhealthy',
       database: doctor.status,
+      storage: storageCheck.ready ? 'ready' : (storageCheck.details || 'unhealthy'),
       timestamp: new Date().toISOString(),
     });
   }
@@ -232,7 +266,11 @@ apiRouter.get('/health/ready', asyncHandler(async (req: Request, res: Response) 
     mode: env.APP_MODE,
     database: doctor.status,
     aiConfigured: AiAdapter.isConfigured(),
-    storageConfigured: Boolean(env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID),
+    storage: {
+      driver: storageCheck.driver,
+      ready: storageCheck.ready,
+      freeMb: storageCheck.freeMb,
+    },
     timestamp: new Date().toISOString(),
   });
 }));
@@ -2467,7 +2505,101 @@ apiRouter.get('/quiz-attempts/:id/result', requireAuth, asyncHandler(async (req:
   res.json(result);
 }));
 
+// ==========================================
 // Learning Materials Subsystem Routes
+// ==========================================
+
+async function serveMaterialFile(
+  req: Request,
+  res: Response,
+  material: Material,
+  mode: 'inline' | 'attachment' | 'raw' = 'raw'
+) {
+  const effectiveKey = material.storageKey || material.r2ObjectKey;
+  if (!effectiveKey) {
+    if (material.type === 'notes' && material.contentText) {
+      const safeFilename = sanitizeFileName(material.title || 'note') + '.txt';
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (mode === 'attachment') {
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${encodeURIComponent(safeFilename)}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`
+        );
+      } else {
+        res.setHeader(
+          'Content-Disposition',
+          `inline; filename="${encodeURIComponent(safeFilename)}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`
+        );
+      }
+      return res.send(material.contentText);
+    }
+    return res.status(404).json({
+      error: { code: 'FILE_NOT_FOUND', message: 'Tài liệu này chưa có tệp đính kèm.' },
+    });
+  }
+
+  const adapter = storageService.getAdapter(material.storageDriver);
+  const exists = await adapter.exists(effectiveKey);
+  if (!exists) {
+    return res.status(404).json({
+      error: { code: 'FILE_NOT_FOUND', message: 'Không tìm thấy tệp trên ổ đĩa lưu trữ.' },
+    });
+  }
+
+  const stat = await adapter.stat(effectiveKey);
+  const totalSize = stat.size;
+  const mimeType = material.detectedMime || material.mimeType || stat.contentType || 'application/octet-stream';
+  const originalName = material.originalFilename || material.fileName || material.title || 'document';
+  const safeFilename = sanitizeFileName(originalName);
+
+  // Security Headers
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', mimeType);
+
+  if (mode === 'attachment') {
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(safeFilename)}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`
+    );
+  } else if (mode === 'inline') {
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(safeFilename)}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`
+    );
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox;");
+  }
+
+  // Handle HTTP Range Requests (RFC 7233)
+  const rangeHeader = req.headers.range;
+  if (rangeHeader && rangeHeader.startsWith('bytes=')) {
+    const parts = rangeHeader.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+    if (isNaN(start) || isNaN(end) || start >= totalSize || end >= totalSize || start > end) {
+      res.setHeader('Content-Range', `bytes */${totalSize}`);
+      return res.status(416).json({
+        error: { code: 'RANGE_NOT_SATISFIABLE', message: 'Phạm vi yêu cầu vượt quá kích thước tệp.' },
+      });
+    }
+
+    const chunkSize = end - start + 1;
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+    res.setHeader('Content-Length', chunkSize);
+
+    const stream = await adapter.createReadStream(effectiveKey, { start, end });
+    return (stream as any).pipe(res);
+  }
+
+  // Full response
+  res.setHeader('Content-Length', totalSize);
+  const stream = await adapter.createReadStream(effectiveKey);
+  return (stream as any).pipe(res);
+}
+
 apiRouter.get('/materials', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const materials = await materialRepo.getByUserId(userId);
@@ -2485,6 +2617,128 @@ apiRouter.get('/materials/:id', requireAuth, asyncHandler(async (req: Request, r
   res.json({ material });
 }));
 
+// Multipart streaming upload for documents/images/PDFs
+apiRouter.post('/materials/upload', requireAuth, uploadDisk.single('file'), asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).json({
+      error: { code: 'MISSING_FILE', message: 'Vui lòng chọn tệp tài liệu để tải lên.' },
+    });
+  }
+
+  const cleanupTemp = () => {
+    if (file.path && fs.existsSync(file.path)) {
+      fs.promises.unlink(file.path).catch(() => {});
+    }
+  };
+
+  try {
+    const title = (req.body?.title || file.originalname || 'Tài liệu không tên').trim();
+    const subjectId = (req.body?.subjectId || 'subj-math').trim();
+    const materialKind = (req.body?.materialKind || 'document') as 'document' | 'book';
+
+    // 1. Quota Check
+    const maxFileSizeMb = materialKind === 'book' ? (env.BOOK_MAX_UPLOAD_MB || 100) : (env.MATERIAL_MAX_UPLOAD_MB || 25);
+    const maxSizeBytes = maxFileSizeMb * 1024 * 1024;
+    if (file.size > maxSizeBytes) {
+      cleanupTemp();
+      return res.status(413).json({
+        error: {
+          code: 'FILE_TOO_LARGE',
+          message: `Dung lượng tệp (${Math.round(file.size / 1024 / 1024)}MB) vượt quá giới hạn ${maxFileSizeMb}MB.`,
+        },
+      });
+    }
+
+    const currentUsage = await storageService.getUserStorageUsage(userId);
+    const quotaBytes = (env.LOCAL_STORAGE_QUOTA_MB_PER_USER || 1000) * 1024 * 1024;
+    if (currentUsage + file.size > quotaBytes) {
+      cleanupTemp();
+      return res.status(413).json({
+        error: {
+          code: 'STORAGE_QUOTA_EXCEEDED',
+          message: `Bạn đã sử dụng hết hạn mức lưu trữ (${env.LOCAL_STORAGE_QUOTA_MB_PER_USER}MB). Vui lòng xóa bớt tài liệu cũ.`,
+        },
+      });
+    }
+
+    // 2. Magic bytes verification (read header from temp file)
+    const headerBuffer = Buffer.alloc(4096);
+    const fd = await fs.promises.open(file.path, 'r');
+    const bytesRead = (await fd.read(headerBuffer, 0, 4096, 0)).bytesRead;
+    await fd.close();
+
+    const actualHeader = headerBuffer.subarray(0, bytesRead);
+    const magicCheck = validateMagicBytes(actualHeader, file.mimetype, file.originalname);
+    if (!magicCheck.isValid) {
+      cleanupTemp();
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_FILE_BYTES',
+          message: magicCheck.error || 'Nội dung tệp không hợp lệ hoặc bị từ chối.',
+        },
+      });
+    }
+
+    // 3. Generate canonical storage key & save via StorageAdapter
+    const materialId = 'mat_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const safeExt = getSafeExtension(file.originalname, magicCheck.detectedMime);
+    const storageKey = generateMaterialStorageKey(userId, materialId, file.originalname, magicCheck.detectedMime);
+    const adapter = storageService.getAdapter();
+
+    const storedFile = await adapter.save({
+      key: storageKey,
+      filePath: file.path,
+      contentType: magicCheck.detectedMime,
+      originalFilename: file.originalname,
+    });
+
+    // 4. Save record in database
+    const material = await materialRepo.createUploadedMaterial(userId, {
+      materialId,
+      title,
+      subjectId,
+      fileName: sanitizeFileName(file.originalname),
+      originalFilename: file.originalname,
+      mimeType: file.mimetype,
+      detectedMime: magicCheck.detectedMime,
+      extension: safeExt,
+      sizeBytes: storedFile.size,
+      sha256: storedFile.sha256,
+      storageDriver: adapter.driverName,
+      storageKey,
+      materialKind,
+    });
+
+    // 5. Create processing job and trigger worker
+    if (db.isHealthy()) {
+      const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+      await db.execute(
+        `INSERT INTO material_processing_jobs (
+          id, material_id, user_id, job_type, status, progress_percent, created_at
+        ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
+        [jobId, material.id, userId]
+      ).catch(() => {});
+    }
+
+    materialWorker.pollJobs().catch(() => {});
+    materialProcessor.processMaterial(userId, material.id).catch(() => {});
+
+    return res.status(201).json({
+      success: true,
+      material,
+    });
+  } catch (err: any) {
+    cleanupTemp();
+    return res.status(500).json({
+      error: { code: 'UPLOAD_FAILED', message: err.message || 'Tải tệp lên thất bại.' },
+    });
+  }
+}));
+
+// Backward compatibility: upload-intent
 apiRouter.post('/materials/upload-intent', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = MaterialUploadIntentSchema.safeParse(req.body);
@@ -2502,10 +2756,12 @@ apiRouter.post('/materials/upload-intent', requireAuth, asyncHandler(async (req:
   res.json(intent);
 }));
 
+// Backward compatibility: upload-direct
 apiRouter.post('/materials/upload-direct', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
+  const userHash = getUserDirHash(userId);
   const key = req.query.key as string;
-  if (!key || !key.startsWith(`materials/${userId}/`)) {
+  if (!key || (!key.startsWith(`materials/${userHash}/`) && !key.startsWith(`materials/${userId}/`))) {
     return res.status(403).json({
       error: { code: 'FORBIDDEN', message: 'Khóa lưu trữ không hợp lệ hoặc không thuộc quyền sở hữu.' },
     });
@@ -2513,12 +2769,10 @@ apiRouter.post('/materials/upload-direct', requireAuth, asyncHandler(async (req:
 
   const contentType = req.headers['content-type'] || 'application/pdf';
 
-  // Read raw body buffer
   let bodyBuffer: Buffer;
   if (Buffer.isBuffer(req.body)) {
     bodyBuffer = req.body;
   } else if (req.body && typeof req.body === 'object') {
-    // If parsed as json or base64
     const base64Data = (req.body as any).fileBase64 || (req.body as any).data;
     if (base64Data) {
       bodyBuffer = Buffer.from(base64Data.replace(/^data:.*?;base64,/, ''), 'base64');
@@ -2529,7 +2783,6 @@ apiRouter.post('/materials/upload-direct', requireAuth, asyncHandler(async (req:
     bodyBuffer = Buffer.from(String(req.body || ''));
   }
 
-  // Magic bytes security verification
   const magicCheck = validateMagicBytes(bodyBuffer, contentType);
   if (!magicCheck.isValid) {
     return res.status(400).json({
@@ -2537,19 +2790,16 @@ apiRouter.post('/materials/upload-direct', requireAuth, asyncHandler(async (req:
     });
   }
 
-  // Put object in storage
   const putResult = await storageService.putObject(key, bodyBuffer, contentType);
 
-  // Find corresponding material record
   const materials = await materialRepo.getByUserId(userId);
-  const material = materials.find((m) => m.r2ObjectKey === key);
+  const material = materials.find((m) => m.r2ObjectKey === key || m.storageKey === key);
 
   if (material) {
     await materialRepo.finalizeUpload(userId, material.id, {
       sizeBytes: putResult.size,
       sha256: putResult.sha256,
     });
-    // Trigger asynchronous AI processing
     materialProcessor.processMaterial(userId, material.id).catch((err) => {
       console.error('[API] Error processing material after upload:', err);
     });
@@ -2578,7 +2828,6 @@ apiRouter.post('/materials/note', requireAuth, asyncHandler(async (req: Request,
   }
 
   const note = await materialRepo.createNote(userId, parsed.data);
-  // Asynchronously trigger AI processing for note
   materialProcessor.processMaterial(userId, note.id).catch((err) => {
     console.error('[API] Error processing note:', err);
   });
@@ -2598,12 +2847,39 @@ apiRouter.post('/materials/:id/finalize', requireAuth, asyncHandler(async (req: 
     });
   }
 
-  // Trigger processing
   materialProcessor.processMaterial(userId, finalized.id).catch((err) => {
     console.error('[API] Error processing finalized material:', err);
   });
 
   res.json({ success: true, material: finalized });
+}));
+
+// Streaming file endpoints with range support
+apiRouter.get('/materials/:id/file', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const material = await materialRepo.getById(userId, req.params.id);
+  if (!material) {
+    return res.status(404).json({ error: { code: 'MATERIAL_NOT_FOUND', message: 'Không tìm thấy tài liệu.' } });
+  }
+  return serveMaterialFile(req, res, material, 'raw');
+}));
+
+apiRouter.get('/materials/:id/preview', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const material = await materialRepo.getById(userId, req.params.id);
+  if (!material) {
+    return res.status(404).json({ error: { code: 'MATERIAL_NOT_FOUND', message: 'Không tìm thấy tài liệu.' } });
+  }
+  return serveMaterialFile(req, res, material, 'inline');
+}));
+
+apiRouter.get('/materials/:id/download', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const material = await materialRepo.getById(userId, req.params.id);
+  if (!material) {
+    return res.status(404).json({ error: { code: 'MATERIAL_NOT_FOUND', message: 'Không tìm thấy tài liệu.' } });
+  }
+  return serveMaterialFile(req, res, material, 'attachment');
 }));
 
 apiRouter.get('/materials/:id/content', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -2621,21 +2897,7 @@ apiRouter.get('/materials/:id/content', requireAuth, asyncHandler(async (req: Re
     return res.send(material.contentText);
   }
 
-  if (material.r2ObjectKey) {
-    const obj = await storageService.getObject(material.r2ObjectKey);
-    if (obj) {
-      res.setHeader('Content-Type', obj.contentType || material.mimeType || 'application/pdf');
-      res.setHeader('Content-Length', obj.size);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      const safeName = (material.fileName || material.title).replace(/[^\w.-]/g, '_');
-      res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
-      return res.send(obj.body);
-    }
-  }
-
-  res.status(404).json({
-    error: { code: 'CONTENT_NOT_FOUND', message: 'Chưa có nội dung tệp cho tài liệu này.' },
-  });
+  return serveMaterialFile(req, res, material, 'inline');
 }));
 
 apiRouter.post('/materials/:id/reprocess', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -2679,19 +2941,6 @@ apiRouter.patch('/materials/:id', requireAuth, asyncHandler(async (req: Request,
   res.json({ material: updated });
 }));
 
-apiRouter.get('/materials/:id/download', requireAuth, asyncHandler(async (req: Request, res: Response) => {
-  const userId = (req as any).userId;
-  const result = await materialRepo.getDownloadUrl(userId, req.params.id);
-  if (!result) {
-    const material = await materialRepo.getById(userId, req.params.id);
-    if (!material) {
-      return res.status(404).json({ error: { code: 'MATERIAL_NOT_FOUND', message: 'Không tìm thấy tài liệu.' } });
-    }
-    return res.json({ downloadUrl: `/api/v1/materials/${material.id}/content`, expiresAt: new Date(Date.now() + 3600000).toISOString() });
-  }
-  res.json(result);
-}));
-
 apiRouter.post('/materials/:id/outline', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const outline = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, req.body?.chapter);
@@ -2708,7 +2957,141 @@ apiRouter.delete('/materials/:id', requireAuth, asyncHandler(async (req: Request
 // Sách Mềm (Soft Books) Subsystem Routes
 // ==========================================
 
-apiRouter.post('/materials/books/upload-intent', requireAuth, createRateLimiter(60000, 20, 'book_upload', { useUserId: true }), asyncHandler(async (req: Request, res: Response) => {
+// Multipart streaming upload for soft books (PDF/EPUB/DOCX/TXT)
+apiRouter.post(['/materials/books/upload', '/books/upload'], requireAuth, uploadDisk.single('file'), asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).json({
+      error: { code: 'MISSING_FILE', message: 'Vui lòng chọn tệp sách mềm để tải lên.' },
+    });
+  }
+
+  const cleanupTemp = () => {
+    if (file.path && fs.existsSync(file.path)) {
+      fs.promises.unlink(file.path).catch(() => {});
+    }
+  };
+
+  try {
+    const title = (req.body?.title || file.originalname || 'Sách giáo khoa').trim();
+    const subjectId = (req.body?.subjectId || 'subj-math').trim();
+    const publisher = req.body?.publisher ? String(req.body.publisher).trim() : undefined;
+    const editionYear = req.body?.editionYear ? Number(req.body.editionYear) : undefined;
+    const language = req.body?.language ? String(req.body.language).trim() : 'vi';
+    const rightsConfirmed = req.body?.rightsConfirmed === true || req.body?.rightsConfirmed === 'true';
+
+    if (!rightsConfirmed) {
+      cleanupTemp();
+      return res.status(400).json({
+        error: { code: 'RIGHTS_REQUIRED', message: 'Bạn cần xác nhận cam kết bản quyền học tập cá nhân đối với sách mềm này.' },
+      });
+    }
+
+    // 1. Quota Check
+    const maxFileSizeMb = env.BOOK_MAX_UPLOAD_MB || 100;
+    const maxSizeBytes = maxFileSizeMb * 1024 * 1024;
+    if (file.size > maxSizeBytes) {
+      cleanupTemp();
+      return res.status(413).json({
+        error: {
+          code: 'FILE_TOO_LARGE',
+          message: `Dung lượng sách (${Math.round(file.size / 1024 / 1024)}MB) vượt quá giới hạn ${maxFileSizeMb}MB.`,
+        },
+      });
+    }
+
+    const currentUsage = await storageService.getUserStorageUsage(userId);
+    const quotaBytes = (env.LOCAL_STORAGE_QUOTA_MB_PER_USER || 1000) * 1024 * 1024;
+    if (currentUsage + file.size > quotaBytes) {
+      cleanupTemp();
+      return res.status(413).json({
+        error: {
+          code: 'STORAGE_QUOTA_EXCEEDED',
+          message: `Bạn đã sử dụng hết hạn mức lưu trữ (${env.LOCAL_STORAGE_QUOTA_MB_PER_USER}MB). Vui lòng xóa bớt tài liệu cũ.`,
+        },
+      });
+    }
+
+    // 2. Magic bytes verification
+    const headerBuffer = Buffer.alloc(4096);
+    const fd = await fs.promises.open(file.path, 'r');
+    const bytesRead = (await fd.read(headerBuffer, 0, 4096, 0)).bytesRead;
+    await fd.close();
+
+    const actualHeader = headerBuffer.subarray(0, bytesRead);
+    const magicCheck = validateMagicBytes(actualHeader, file.mimetype, file.originalname);
+    if (!magicCheck.isValid) {
+      cleanupTemp();
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_FILE_BYTES',
+          message: magicCheck.error || 'Nội dung tệp không hợp lệ hoặc bị từ chối.',
+        },
+      });
+    }
+
+    // 3. Save via StorageAdapter
+    const materialId = 'book_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const safeExt = getSafeExtension(file.originalname, magicCheck.detectedMime);
+    const storageKey = generateMaterialStorageKey(userId, materialId, file.originalname, magicCheck.detectedMime);
+    const adapter = storageService.getAdapter();
+
+    const storedFile = await adapter.save({
+      key: storageKey,
+      filePath: file.path,
+      contentType: magicCheck.detectedMime,
+      originalFilename: file.originalname,
+    });
+
+    // 4. Save Book in database
+    const book = await bookRepo.createUploadedBook(userId, {
+      materialId,
+      title,
+      subjectId,
+      fileName: sanitizeFileName(file.originalname),
+      originalFilename: file.originalname,
+      mimeType: file.mimetype,
+      detectedMime: magicCheck.detectedMime,
+      extension: safeExt,
+      sizeBytes: storedFile.size,
+      sha256: storedFile.sha256,
+      storageDriver: adapter.driverName,
+      storageKey,
+      publisher,
+      editionYear,
+      language,
+      rightsConfirmed: true,
+      rightsTermsVersion: 'v1.0',
+    });
+
+    // 5. Create processing job & poll worker
+    if (db.isHealthy()) {
+      const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+      await db.execute(
+        `INSERT INTO material_processing_jobs (
+          id, material_id, user_id, job_type, status, progress_percent, created_at
+        ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
+        [jobId, book.id, userId]
+      ).catch(() => {});
+    }
+
+    materialWorker.pollJobs().catch(() => {});
+
+    return res.status(201).json({
+      success: true,
+      book,
+    });
+  } catch (err: any) {
+    cleanupTemp();
+    return res.status(500).json({
+      error: { code: 'UPLOAD_FAILED', message: err.message || 'Tải sách mềm lên thất bại.' },
+    });
+  }
+}));
+
+apiRouter.post(['/materials/books/upload-intent', '/books/upload-intent'], requireAuth, createRateLimiter(60000, 20, 'book_upload', { useUserId: true }), asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = BookUploadIntentSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -2721,7 +3104,7 @@ apiRouter.post('/materials/books/upload-intent', requireAuth, createRateLimiter(
   res.json(intent);
 }));
 
-apiRouter.post('/materials/books/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post(['/materials/books/:id/finalize', '/books/:id/finalize'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const { sizeBytes, sha256, detectedMime } = req.body || {};
 
@@ -2735,7 +3118,6 @@ apiRouter.post('/materials/books/:id/finalize', requireAuth, asyncHandler(async 
       return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm để hoàn tất tải lên.' } });
     }
 
-    // Trigger background job poll immediately
     materialWorker.pollJobs().catch(() => {});
 
     const book = await bookRepo.getBookById(userId, req.params.id);
@@ -2750,7 +3132,34 @@ apiRouter.post('/materials/books/:id/finalize', requireAuth, asyncHandler(async 
   }
 }));
 
-apiRouter.get('/materials/books', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/file', '/books/:id/file'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
+  return serveMaterialFile(req, res, book, 'raw');
+}));
+
+apiRouter.get(['/materials/books/:id/preview', '/books/:id/preview'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
+  return serveMaterialFile(req, res, book, 'inline');
+}));
+
+apiRouter.get(['/materials/books/:id/download', '/books/:id/download'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
+  return serveMaterialFile(req, res, book, 'attachment');
+}));
+
+apiRouter.get(['/materials/books', '/books'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const { search, subjectId, status, limit, offset } = req.query;
   const result = await bookRepo.getBooksByUserId(userId, {
@@ -2763,7 +3172,7 @@ apiRouter.get('/materials/books', requireAuth, asyncHandler(async (req: Request,
   res.json(result);
 }));
 
-apiRouter.get('/materials/books/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id', '/books/:id'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const book = await bookRepo.getBookById(userId, req.params.id);
   if (!book) {
@@ -2773,13 +3182,13 @@ apiRouter.get('/materials/books/:id', requireAuth, asyncHandler(async (req: Requ
   res.json({ book, progress });
 }));
 
-apiRouter.delete('/materials/books/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.delete(['/materials/books/:id', '/books/:id'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const success = await bookRepo.deleteBook(userId, req.params.id);
   res.json({ success });
 }));
 
-apiRouter.get('/materials/books/:id/status', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/status', '/books/:id/status'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const book = await bookRepo.getBookById(userId, req.params.id);
   if (!book) {
@@ -2794,7 +3203,7 @@ apiRouter.get('/materials/books/:id/status', requireAuth, asyncHandler(async (re
   });
 }));
 
-apiRouter.post('/materials/books/:id/retry-processing', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post(['/materials/books/:id/retry-processing', '/books/:id/retry-processing'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const success = await materialWorker.retryJob(userId, req.params.id);
   if (!success) {
@@ -2804,7 +3213,7 @@ apiRouter.post('/materials/books/:id/retry-processing', requireAuth, asyncHandle
   res.json({ success: true, message: 'Đã đưa sách vào hàng đợi xử lý lại.' });
 }));
 
-apiRouter.get('/materials/books/:id/chapters', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/chapters', '/books/:id/chapters'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const book = await bookRepo.getBookById(userId, req.params.id);
   if (!book) {
@@ -2814,7 +3223,7 @@ apiRouter.get('/materials/books/:id/chapters', requireAuth, asyncHandler(async (
   res.json({ chapters });
 }));
 
-apiRouter.get('/materials/books/:id/read', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/read', '/books/:id/read'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const book = await bookRepo.getBookById(userId, req.params.id);
   if (!book) {
@@ -2826,7 +3235,7 @@ apiRouter.get('/materials/books/:id/read', requireAuth, asyncHandler(async (req:
   res.json({ page, chunks, pageCount: book.pageCount || 1 });
 }));
 
-apiRouter.get('/materials/books/:id/search', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/search', '/books/:id/search'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const q = String(req.query.q || '').trim();
   if (!q) {
@@ -2838,13 +3247,13 @@ apiRouter.get('/materials/books/:id/search', requireAuth, asyncHandler(async (re
   res.json({ results });
 }));
 
-apiRouter.get('/materials/books/:id/progress', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/progress', '/books/:id/progress'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const progress = await bookRepo.getProgress(userId, req.params.id);
   res.json({ progress });
 }));
 
-apiRouter.put('/materials/books/:id/progress', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.put(['/materials/books/:id/progress', '/books/:id/progress'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = BookProgressUpdateSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -2854,13 +3263,13 @@ apiRouter.put('/materials/books/:id/progress', requireAuth, asyncHandler(async (
   res.json({ progress });
 }));
 
-apiRouter.get('/materials/books/:id/bookmarks', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/bookmarks', '/books/:id/bookmarks'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const bookmarks = await bookRepo.getBookmarks(userId, req.params.id);
   res.json({ bookmarks });
 }));
 
-apiRouter.post('/materials/books/:id/bookmarks', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post(['/materials/books/:id/bookmarks', '/books/:id/bookmarks'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = BookBookmarkCreateSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -2870,19 +3279,19 @@ apiRouter.post('/materials/books/:id/bookmarks', requireAuth, asyncHandler(async
   res.json({ bookmark });
 }));
 
-apiRouter.delete('/materials/books/:id/bookmarks/:bookmarkId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.delete(['/materials/books/:id/bookmarks/:bookmarkId', '/books/:id/bookmarks/:bookmarkId'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const success = await bookRepo.deleteBookmark(userId, req.params.bookmarkId);
   res.json({ success });
 }));
 
-apiRouter.get('/materials/books/:id/highlights', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.get(['/materials/books/:id/highlights', '/books/:id/highlights'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const highlights = await bookRepo.getHighlights(userId, req.params.id);
   res.json({ highlights });
 }));
 
-apiRouter.post('/materials/books/:id/highlights', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post(['/materials/books/:id/highlights', '/books/:id/highlights'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = BookHighlightCreateSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -2892,14 +3301,14 @@ apiRouter.post('/materials/books/:id/highlights', requireAuth, asyncHandler(asyn
   res.json({ highlight });
 }));
 
-apiRouter.delete('/materials/books/:id/highlights/:highlightId', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.delete(['/materials/books/:id/highlights/:highlightId', '/books/:id/highlights/:highlightId'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const success = await bookRepo.deleteHighlight(userId, req.params.highlightId);
   res.json({ success });
 }));
 
 apiRouter.post(
-  '/materials/books/:id/study-aids',
+  ['/materials/books/:id/study-aids', '/books/:id/study-aids'],
   requireAuth,
   createRateLimiter(60000, 10, 'book_study_aid', { useUserId: true, maxConcurrency: 3, dailyQuota: 100 }),
   asyncHandler(async (req: Request, res: Response) => {

@@ -37,3 +37,8 @@ certs/*.pem
 !certs/ca.pem
 *.key
 *.crt
+
+# User Uploads & Local Storage (Filesystem Storage Root)
+storage/*
+!storage/.gitkeep
+

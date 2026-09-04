@@ -775,8 +775,65 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  uploadMaterial: async (
+    file: File | Blob,
+    meta: {
+      title?: string;
+      subjectId?: string;
+      materialKind?: 'document' | 'book';
+    },
+    onProgress?: (progress: number) => void,
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; material: LearningMaterial }> => {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (meta.title) formData.append('title', meta.title);
+      if (meta.subjectId) formData.append('subjectId', meta.subjectId);
+      if (meta.materialKind) formData.append('materialKind', meta.materialKind);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/materials/upload`);
+      xhr.withCredentials = true;
+
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          xhr.abort();
+          reject(new Error('Tải lên đã bị hủy.'));
+        });
+      }
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve(data);
+          } catch {
+            reject(new Error('Phản hồi từ máy chủ không hợp lệ.'));
+          }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.error?.message || err.message || `Lỗi tải lên (${xhr.status})`));
+          } catch {
+            reject(new Error(`Tải lên thất bại với mã lỗi HTTP ${xhr.status}`));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Không thể kết nối đến máy chủ.'));
+      xhr.send(formData);
+    });
+  },
   uploadMaterialDirect: async (key: string, fileData: Blob | ArrayBuffer, contentType: string) => {
-    const res = await fetch(`/api/v1/materials/upload-direct?key=${encodeURIComponent(key)}`, {
+    const res = await fetch(`${API_BASE}/materials/upload-direct?key=${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: {
         'Content-Type': contentType,
@@ -851,6 +908,69 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  uploadBook: async (
+    file: File | Blob,
+    meta: {
+      title?: string;
+      subjectId?: string;
+      publisher?: string;
+      editionYear?: number;
+      language?: string;
+      rightsConfirmed: boolean;
+    },
+    onProgress?: (progress: number) => void,
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; book: LearningMaterial }> => {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (meta.title) formData.append('title', meta.title);
+      if (meta.subjectId) formData.append('subjectId', meta.subjectId);
+      if (meta.publisher) formData.append('publisher', meta.publisher);
+      if (meta.editionYear) formData.append('editionYear', String(meta.editionYear));
+      if (meta.language) formData.append('language', meta.language);
+      formData.append('rightsConfirmed', String(meta.rightsConfirmed));
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/materials/books/upload`);
+      xhr.withCredentials = true;
+
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          xhr.abort();
+          reject(new Error('Tải lên đã bị hủy.'));
+        });
+      }
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve(data);
+          } catch {
+            reject(new Error('Phản hồi từ máy chủ không hợp lệ.'));
+          }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.error?.message || err.message || `Lỗi tải lên (${xhr.status})`));
+          } catch {
+            reject(new Error(`Tải lên sách thất bại với mã lỗi HTTP ${xhr.status}`));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Không thể kết nối đến máy chủ.'));
+      xhr.send(formData);
+    });
+  },
   finalizeBookUpload: (id: string, data: { sizeBytes: number; sha256?: string; detectedMime?: string }) =>
     fetchJson<{ success: boolean; book: LearningMaterial }>(`/materials/books/${id}/finalize`, {
       method: 'POST',

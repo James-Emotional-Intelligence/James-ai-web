@@ -12,6 +12,7 @@ import { storageService, generateMaterialObjectKey, sanitizeFileName } from '../
 import { bookParserService } from '../services/book-parser-service';
 import { env } from '../config/env';
 import crypto from 'crypto';
+import path from 'path';
 
 export class BookRepository {
   private static instance: BookRepository;
@@ -111,13 +112,14 @@ export class BookRepository {
     if (db.isHealthy()) {
       let query = `
         SELECT m.id, m.user_id, m.subject_id, m.title, m.type, m.material_kind,
-               m.original_filename, m.detected_mime, m.publisher, m.edition_year, m.language,
-               m.cover_object_key, m.page_count, m.chapter_count, m.processing_progress,
-               m.r2_object_key, m.file_name, m.mime_type, m.size_bytes, m.sha256,
-               m.processing_status, m.summary, m.summary_json, m.content_text,
-               m.error_message, m.rights_confirmed_at, m.rights_terms_version,
-               m.created_at, m.updated_at,
-               s.name as subject_name
+                m.storage_driver, m.storage_key, m.extension, m.processing_error_code,
+                m.original_filename, m.detected_mime, m.publisher, m.edition_year, m.language,
+                m.cover_object_key, m.page_count, m.chapter_count, m.processing_progress,
+                m.r2_object_key, m.file_name, m.mime_type, m.size_bytes, m.sha256,
+                m.processing_status, m.summary, m.summary_json, m.content_text,
+                m.error_message, m.rights_confirmed_at, m.rights_terms_version,
+                m.created_at, m.updated_at,
+                s.name as subject_name
         FROM learning_materials m
         LEFT JOIN subjects s ON m.subject_id = s.id
         WHERE m.user_id = ? AND m.material_kind = 'book' AND m.deleted_at IS NULL
@@ -157,8 +159,11 @@ export class BookRepository {
         title: r.title,
         type: r.type,
         materialKind: r.material_kind || 'book',
+        storageDriver: (r.storage_driver as any) || (r.r2_object_key ? 'r2' : 'local'),
+        storageKey: r.storage_key || r.r2_object_key || undefined,
         originalFilename: r.original_filename || r.file_name,
         detectedMime: r.detected_mime || r.mime_type,
+        extension: r.extension || undefined,
         publisher: r.publisher || undefined,
         editionYear: r.edition_year ? Number(r.edition_year) : undefined,
         language: r.language || 'vi',
@@ -166,6 +171,7 @@ export class BookRepository {
         pageCount: Number(r.page_count) || 0,
         chapterCount: Number(r.chapter_count) || 0,
         processingProgress: Number(r.processing_progress) || 0,
+        processingErrorCode: r.processing_error_code || undefined,
         r2ObjectKey: r.r2_object_key || undefined,
         fileName: r.file_name || undefined,
         mimeType: r.mime_type || undefined,
@@ -213,8 +219,11 @@ export class BookRepository {
         title: r.title,
         type: r.type,
         materialKind: 'book',
+        storageDriver: (r.storage_driver as any) || (r.r2_object_key ? 'r2' : 'local'),
+        storageKey: r.storage_key || r.r2_object_key || undefined,
         originalFilename: r.original_filename || r.file_name,
         detectedMime: r.detected_mime || r.mime_type,
+        extension: r.extension || undefined,
         publisher: r.publisher || undefined,
         editionYear: r.edition_year ? Number(r.edition_year) : undefined,
         language: r.language || 'vi',
@@ -222,6 +231,7 @@ export class BookRepository {
         pageCount: Number(r.page_count) || 0,
         chapterCount: Number(r.chapter_count) || 0,
         processingProgress: Number(r.processing_progress) || 0,
+        processingErrorCode: r.processing_error_code || undefined,
         r2ObjectKey: r.r2_object_key || undefined,
         fileName: r.file_name || undefined,
         mimeType: r.mime_type || undefined,
@@ -258,7 +268,7 @@ export class BookRepository {
   ): Promise<{ book: Material; uploadUrl: string; r2ObjectKey: string }> {
     const id = 'book_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const sanitizedName = sanitizeFileName(data.fileName);
-    const r2ObjectKey = generateMaterialObjectKey(userId, sanitizedName);
+    const r2ObjectKey = generateMaterialObjectKey(userId, id, sanitizedName);
 
     const ext = sanitizedName.split('.').pop()?.toLowerCase();
     let type: Material['type'] = 'pdf';
@@ -418,33 +428,155 @@ export class BookRepository {
     return false;
   }
 
+  public async createUploadedBook(
+    userId: string,
+    data: {
+      materialId: string;
+      title: string;
+      subjectId: string;
+      fileName: string;
+      originalFilename: string;
+      mimeType: string;
+      detectedMime: string;
+      extension: string;
+      sizeBytes: number;
+      sha256: string;
+      storageDriver: 'local' | 'r2';
+      storageKey: string;
+      publisher?: string;
+      editionYear?: number;
+      language?: string;
+      rightsConfirmed?: boolean;
+      rightsTermsVersion?: string;
+    }
+  ): Promise<Material> {
+    const type: 'pdf' | 'docx' | 'epub' | 'txt' =
+      data.extension === 'docx'
+        ? 'docx'
+        : data.extension === 'epub'
+        ? 'epub'
+        : data.extension === 'txt' || data.extension === 'md'
+        ? 'txt'
+        : 'pdf';
+
+    const book: Material = {
+      id: data.materialId,
+      userId,
+      subjectId: data.subjectId,
+      title: data.title.trim(),
+      type,
+      materialKind: 'book',
+      storageDriver: data.storageDriver,
+      storageKey: data.storageKey,
+      originalFilename: data.originalFilename,
+      detectedMime: data.detectedMime,
+      extension: data.extension,
+      publisher: data.publisher?.trim() || undefined,
+      editionYear: data.editionYear || undefined,
+      language: data.language || 'vi',
+      fileName: data.fileName,
+      mimeType: data.mimeType,
+      sizeBytes: data.sizeBytes,
+      sha256: data.sha256,
+      processingStatus: 'queued',
+      processingProgress: 10,
+      rightsConfirmedAt: new Date().toISOString(),
+      rightsTermsVersion: data.rightsTermsVersion || 'v1.0',
+      createdAt: new Date().toISOString(),
+    };
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `INSERT INTO learning_materials (
+          id, user_id, subject_id, title, type, material_kind, storage_driver, storage_key,
+          original_filename, detected_mime, extension, publisher, edition_year, language,
+          file_name, mime_type, size_bytes, sha256, processing_status, processing_progress,
+          rights_confirmed_at, rights_terms_version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'book', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 10, NOW(3), ?, NOW(3), NOW(3))`,
+        [
+          book.id,
+          userId,
+          book.subjectId,
+          book.title,
+          book.type,
+          book.storageDriver,
+          book.storageKey,
+          book.originalFilename,
+          book.detectedMime,
+          book.extension,
+          book.publisher || null,
+          book.editionYear || null,
+          book.language || 'vi',
+          book.fileName,
+          book.mimeType,
+          book.sizeBytes,
+          book.sha256,
+          book.rightsTermsVersion || 'v1.0',
+        ]
+      );
+    } else {
+      const userList = this.demoBooks.get(userId) || [];
+      userList.unshift(book);
+      this.demoBooks.set(userId, userList);
+    }
+
+    return book;
+  }
+
   public async deleteBook(userId: string, materialId: string): Promise<boolean> {
+    const book = await this.getBookById(userId, materialId);
+    if (!book) return false;
+
     if (db.isHealthy()) {
       const rows = await db.query<any>(
-        'SELECT r2_object_key, cover_object_key FROM learning_materials WHERE id = ? AND user_id = ?',
+        'SELECT storage_driver, storage_key, r2_object_key, cover_object_key FROM learning_materials WHERE id = ? AND user_id = ?',
         [materialId, userId]
       );
       if (rows.length > 0) {
-        const { r2_object_key, cover_object_key } = rows[0];
-        if (r2_object_key) await storageService.deleteObject(r2_object_key).catch(() => {});
-        if (cover_object_key) await storageService.deleteObject(cover_object_key).catch(() => {});
+        const { storage_driver, storage_key, r2_object_key, cover_object_key } = rows[0];
+        const effectiveKey = storage_key || r2_object_key;
+        if (effectiveKey) {
+          if (storage_driver === 'local' && effectiveKey.startsWith('materials/')) {
+            const dir = path.dirname(effectiveKey);
+            await storageService.deleteMaterialDirectory(dir, 'local').catch(() => {});
+          } else {
+            await storageService.deleteObject(effectiveKey, storage_driver || 'r2').catch(() => {});
+          }
+        }
+        if (cover_object_key) await storageService.deleteObject(cover_object_key, storage_driver).catch(() => {});
       }
 
+      await db.execute('DELETE FROM book_chunks WHERE material_id = ?', [materialId]);
+      await db.execute('DELETE FROM book_chapters WHERE material_id = ?', [materialId]);
+      await db.execute('DELETE FROM book_progress WHERE material_id = ? AND user_id = ?', [materialId, userId]);
+      await db.execute('DELETE FROM book_bookmarks WHERE material_id = ? AND user_id = ?', [materialId, userId]);
+      await db.execute('DELETE FROM book_highlights WHERE material_id = ? AND user_id = ?', [materialId, userId]);
+      await db.execute('DELETE FROM material_processing_jobs WHERE material_id = ? AND user_id = ?', [materialId, userId]);
+
       const res = await db.execute(
-        'DELETE FROM learning_materials WHERE id = ? AND user_id = ? AND material_kind = \'book\'',
+        'DELETE FROM learning_materials WHERE id = ? AND user_id = ? AND material_kind = "book"',
         [materialId, userId]
       );
+
       return (res?.affectedRows || 0) > 0;
     }
 
-    const list = this.demoBooks.get(userId) || [];
-    const idx = list.findIndex((b) => b.id === materialId);
-    if (idx !== -1) {
-      list.splice(idx, 1);
-      this.demoBooks.set(userId, list);
-      return true;
+    const effectiveKey = book.storageKey || book.r2ObjectKey;
+    if (effectiveKey) {
+      await storageService.deleteObject(effectiveKey, book.storageDriver).catch(() => {});
     }
-    return false;
+
+    const list = this.demoBooks.get(userId) || [];
+    const filtered = list.filter((item) => item.id !== materialId);
+    this.demoBooks.set(userId, filtered);
+
+    this.demoChapters.delete(materialId);
+    this.demoChunks.delete(materialId);
+    this.demoProgress.delete(`${userId}:${materialId}`);
+    this.demoBookmarks.delete(`${userId}:${materialId}`);
+    this.demoHighlights.delete(`${userId}:${materialId}`);
+
+    return true;
   }
 
   public async getChapters(materialId: string): Promise<BookChapter[]> {

@@ -305,7 +305,7 @@ export class BookParserService {
 
     while (cursor < text.length) {
       const chunkEnd = Math.min(text.length, cursor + chunkSize);
-      let slice = text.substring(cursor, chunkEnd).trim();
+      const slice = text.substring(cursor, chunkEnd).trim();
 
       if (slice.length > 50) {
         const pageStart = Math.max(1, Math.round((cursor / totalLen) * totalPages));

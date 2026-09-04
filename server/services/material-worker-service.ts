@@ -40,7 +40,8 @@ export class MaterialWorkerService {
       // Lease next pending job atomically
       const rows = await db.query<any>(
         `SELECT j.id, j.material_id, j.user_id, j.job_type, j.attempt, j.max_attempts,
-                m.title, m.file_name, m.r2_object_key, m.detected_mime, m.material_kind
+                m.title, m.file_name, m.original_filename, m.storage_driver, m.storage_key,
+                m.r2_object_key, m.detected_mime, m.material_kind
          FROM material_processing_jobs j
          JOIN learning_materials m ON j.material_id = m.id
          WHERE j.status = 'queued' OR (j.status = 'processing' AND j.lease_until < NOW(3))
@@ -70,15 +71,16 @@ export class MaterialWorkerService {
   }
 
   public async processJob(job: any): Promise<void> {
-    const { id: jobId, material_id: materialId, user_id: userId, title, r2_object_key, detected_mime, material_kind } = job;
+    const { id: jobId, material_id: materialId, user_id: userId, title, storage_driver, storage_key, r2_object_key, detected_mime, material_kind } = job;
 
     try {
-      if (!r2_object_key) {
-        throw new Error('Không tìm thấy tệp lưu trữ trên R2.');
+      const effectiveKey = storage_key || r2_object_key;
+      if (!effectiveKey) {
+        throw new Error('Không tìm thấy tệp lưu trữ.');
       }
 
       // Download file buffer from storage
-      const obj = await storageService.getObject(r2_object_key);
+      const obj = await storageService.getObject(effectiveKey, storage_driver);
       if (!obj || !obj.body) {
         throw new Error('Không thể đọc dữ liệu tệp từ kho lưu trữ.');
       }

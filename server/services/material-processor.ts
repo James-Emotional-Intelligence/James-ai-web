@@ -72,10 +72,11 @@ export class MaterialProcessor {
     try {
       let contentText = material.contentText || '';
 
-      if (!contentText && material.r2ObjectKey) {
-        const obj = await storageService.getObject(material.r2ObjectKey);
+      const effectiveKey = material.storageKey || material.r2ObjectKey;
+      if (!contentText && effectiveKey) {
+        const obj = await storageService.getObject(effectiveKey, material.storageDriver);
         if (obj) {
-          contentText = this.extractTextFromBuffer(obj.body, material.mimeType || 'application/pdf');
+          contentText = this.extractTextFromBuffer(obj.body, material.detectedMime || material.mimeType || 'application/pdf');
         }
       }
 
