@@ -65,21 +65,28 @@ export class VoiceSessionService {
       const model = AiAdapter.getRealtimeModel();
       const safetyId = this.generateSafetyIdentifier(userId);
       const sessionConfig = {
+        type: 'realtime',
         model,
-        voice: AiAdapter.getVoice(),
         instructions:
           'Bạn là Jami - robot AI đồng hành học tập thân thiện dành cho học sinh Việt Nam theo chương trình GDPT 2018. ' +
           'Khi học sinh nói "Jami ơi", bạn đã mở kết nối. ' +
           'Hãy lắng nghe kỹ yêu cầu của học sinh, trả lời bằng tiếng Việt ngắn gọn, ấm áp, tích cực và gọi các công cụ quản lý thời khóa biểu, nhiệm vụ khi cần thiết. ' +
           'Mọi hành động thêm/xóa/sửa dữ liệu phải tạo bản xem trước và hỏi ý kiến học sinh trước khi thực hiện.',
-        input_audio_transcription: {
-          model: AiAdapter.getTranscribeModel(),
-        },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 600,
+        audio: {
+          input: {
+            transcription: {
+              model: AiAdapter.getTranscribeModel(),
+            },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 600,
+            },
+          },
+          output: {
+            voice: AiAdapter.getVoice(),
+          },
         },
         tools: JamiActionService.getToolDefinitions(),
       };
@@ -93,7 +100,7 @@ export class VoiceSessionService {
 
       let response: Response;
       try {
-        response = await fetch(`https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(model)}`, {
+        response = await fetch('https://api.openai.com/v1/realtime/calls', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -162,26 +169,35 @@ export class VoiceSessionService {
     const model = AiAdapter.getRealtimeModel();
     const voice = AiAdapter.getVoice();
     const safetyId = this.generateSafetyIdentifier(userId);
-    const sessionPayload = {
-      session: {
-        model,
-        voice,
-        instructions:
-          'Bạn là Jami - robot AI đồng hành học tập thân thiện dành cho học sinh Việt Nam theo chương trình GDPT 2018. ' +
-          'Khi học sinh nói "Jami ơi", bạn đã mở kết nối. ' +
-          'Hãy lắng nghe kỹ yêu cầu của học sinh, trả lời bằng tiếng Việt ngắn gọn, ấm áp, tích cực và gọi các công cụ quản lý thời khóa biểu, nhiệm vụ khi cần thiết. ' +
-          'Mọi hành động thêm/xóa/sửa dữ liệu phải tạo bản xem trước và hỏi ý kiến học sinh trước khi thực hiện.',
-        input_audio_transcription: {
-          model: AiAdapter.getTranscribeModel(),
+    const sessionConfig = {
+      type: 'realtime',
+      model,
+      instructions:
+        'Bạn là Jami - robot AI đồng hành học tập thân thiện dành cho học sinh Việt Nam theo chương trình GDPT 2018. ' +
+        'Khi học sinh nói "Jami ơi", bạn đã mở kết nối. ' +
+        'Hãy lắng nghe kỹ yêu cầu của học sinh, trả lời bằng tiếng Việt ngắn gọn, ấm áp, tích cực và gọi các công cụ quản lý thời khóa biểu, nhiệm vụ khi cần thiết. ' +
+        'Mọi hành động thêm/xóa/sửa dữ liệu phải tạo bản xem trước và hỏi ý kiến học sinh trước khi thực hiện.',
+      audio: {
+        input: {
+          transcription: {
+            model: AiAdapter.getTranscribeModel(),
+          },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 600,
+          },
         },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 600,
+        output: {
+          voice,
         },
-        tools: JamiActionService.getToolDefinitions(),
       },
+      tools: JamiActionService.getToolDefinitions(),
+    };
+
+    const sessionPayload = {
+      session: sessionConfig,
     };
 
     try {
@@ -190,7 +206,6 @@ export class VoiceSessionService {
 
       let response: Response;
       try {
-        // Try GA endpoint first: /v1/realtime/client_secrets
         response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
           method: 'POST',
           headers: {
@@ -201,20 +216,6 @@ export class VoiceSessionService {
           body: JSON.stringify(sessionPayload),
           signal: controller.signal,
         });
-
-        // Fallback to /v1/realtime/sessions if /client_secrets returns 404
-        if (response.status === 404) {
-          response = await fetch('https://api.openai.com/v1/realtime/sessions', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-              'OpenAI-Safety-Identifier': safetyId,
-            },
-            body: JSON.stringify(sessionPayload.session),
-            signal: controller.signal,
-          });
-        }
       } finally {
         clearTimeout(timeoutId);
       }

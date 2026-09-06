@@ -432,7 +432,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
    * Continuous Wake Word Recognizer ("Jami ơi")
    */
   const startWakeWordRecognizer = useCallback(() => {
-    if (!isHandsFreeRef.current || isSpeakingRef.current) return;
+    if (!isHandsFreeRef.current || isSpeakingRef.current || privacyMode === 'openai_realtime') return;
 
     const SpeechRecognitionClass =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -530,7 +530,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } catch (err: any) {
       console.warn('[VoiceJami] Could not start wake recognizer:', err);
     }
-  }, [speakText, executeCommand, startCommandListening, disableHandsFree]);
+  }, [privacyMode, speakText, executeCommand, startCommandListening, disableHandsFree]);
 
   /**
    * User Gesture: Enable Hands-Free mode & acquire microphone permission
@@ -560,6 +560,31 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           audioEl.autoplay = true;
           remoteAudioElementRef.current = audioEl;
 
+          audioEl.onplay = () => {
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            if (isMountedRef.current) {
+              isSpeakingRef.current = true;
+              setIsSpeaking(true);
+              setState('speaking');
+            }
+          };
+
+          audioEl.onpause = () => {
+            if (isMountedRef.current) {
+              isSpeakingRef.current = false;
+              setIsSpeaking(false);
+              setState('armed');
+            }
+          };
+
+          audioEl.onended = () => {
+            if (isMountedRef.current) {
+              isSpeakingRef.current = false;
+              setIsSpeaking(false);
+              setState('armed');
+            }
+          };
+
           pc.ontrack = (event) => {
             if (event.streams && event.streams[0]) {
               audioEl.srcObject = event.streams[0];
@@ -584,13 +609,38 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 event.type === 'response.output_audio_transcript.delta' ||
                 event.type === 'response.audio_transcript.delta'
               ) {
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
                 setLastReply((prev) => prev + (event.delta || ''));
+                if (isMountedRef.current) {
+                  isSpeakingRef.current = true;
+                  setIsSpeaking(true);
+                  setState('speaking');
+                }
               } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
                 if (event.transcript) {
                   setLastTranscript(event.transcript);
                 }
+              } else if (
+                event.type === 'response.function_call_arguments.done' ||
+                event.type === 'response.output_item.done'
+              ) {
+                const call = event.item?.type === 'function_call' ? event.item : event;
+                if (call.name) {
+                  try {
+                    const args = typeof call.arguments === 'string' ? JSON.parse(call.arguments || '{}') : call.arguments;
+                    if (call.name === 'navigate_to' && args?.route) {
+                      navigate(args.route);
+                    } else if (call.name === 'start_focus_timer') {
+                      navigate('/focus');
+                    }
+                  } catch {}
+                }
               } else if (event.type === 'response.output_audio_transcript.done' || event.type === 'response.done') {
-                setState('armed');
+                if (isMountedRef.current) {
+                  isSpeakingRef.current = false;
+                  setIsSpeaking(false);
+                  setState('armed');
+                }
               } else if (event.type === 'error') {
                 console.warn('[VoiceJami WebRTC] OpenAI Realtime error event:', event.error);
               }
@@ -623,21 +673,19 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       if (!webrtcConnected) {
         setPrivacyMode('browser_web_speech');
+        const greeting = 'Jami đã bật chế độ rảnh tay (Giọng nói của trình duyệt). Bạn chỉ cần gọi "Jami ơi" là Jami sẽ lắng nghe!';
+        setLastReply(greeting);
+        setState('speaking');
+
+        speakText(greeting, () => {
+          if (isHandsFreeRef.current) {
+            setState('armed');
+            startWakeWordRecognizer();
+          }
+        });
+      } else {
+        setLastReply('Jami đã kết nối trực tiếp với OpenAI Realtime. Bạn có thể trò chuyện trực tiếp hoặc nói "Jami ơi"!');
       }
-
-      // 3. Play greeting sound & initialize wake detection
-      const greeting = webrtcConnected
-        ? 'Jami đã kết nối trực tiếp với OpenAI Realtime. Bạn có thể trò chuyện trực tiếp hoặc nói "Jami ơi"!'
-        : 'Jami đã bật chế độ rảnh tay (Giọng nói của trình duyệt). Bạn chỉ cần gọi "Jami ơi" là Jami sẽ lắng nghe!';
-      setLastReply(greeting);
-      setState('speaking');
-
-      speakText(greeting, () => {
-        if (isHandsFreeRef.current) {
-          setState('armed');
-          startWakeWordRecognizer();
-        }
-      });
     } catch (err: any) {
       console.error('[VoiceJami] Permission denied or media error:', err);
       setErrorMessage('Không thể truy cập micro. Vui lòng cấp quyền micro để sử dụng Jami rảnh tay.');
@@ -646,7 +694,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setIsHandsFreeEnabled(false);
       setIsMicActive(false);
     }
-  }, [speakText, startWakeWordRecognizer]);
+  }, [privacyMode, speakText, startWakeWordRecognizer, navigate]);
 
   /**
    * Confirm or reject pending action proposal

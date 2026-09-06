@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { env } from '../config/env';
 
 // Rate Limiting & Quota Store (In-memory sliding window + daily quota + active concurrency)
 interface RateLimitBucket {
@@ -48,7 +49,10 @@ export function createRateLimiter(
       }
       activeConcurrencyMap.set(userId, activeCount + 1);
 
+      let cleanedUp = false;
       const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         const cur = activeConcurrencyMap.get(userId) || 1;
         if (cur <= 1) {
           activeConcurrencyMap.delete(userId);
@@ -116,4 +120,10 @@ export function resetRateLimits() {
   dailyQuotaStore.clear();
   activeConcurrencyMap.clear();
 }
+
+export const aiRateLimiter = createRateLimiter(60 * 1000, 30, 'ai_limit', {
+  useUserId: true,
+  maxConcurrency: env.AI_MAX_CONCURRENCY_PER_USER || 3,
+  dailyQuota: env.AI_DAILY_QUOTA || 100,
+});
 

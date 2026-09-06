@@ -5,10 +5,12 @@ import { storageService } from './storage-service';
 import { materialRepo } from '../repositories/material-repository';
 import { quizRepo } from '../repositories/quiz-repository';
 import { AiAdapter } from './ai-adapter';
+import { bookParserService } from './book-parser-service';
 import crypto from 'crypto';
 
 export class MaterialProcessor {
   private static instance: MaterialProcessor;
+  private static activeProcessing = new Set<string>();
 
   private constructor() {}
 
@@ -22,9 +24,24 @@ export class MaterialProcessor {
   /**
    * Extracts text from raw Buffer based on file MIME type
    */
-  public extractTextFromBuffer(buffer: Buffer, mimeType: string): string {
+  public async extractTextFromBuffer(buffer: Buffer, mimeType: string, title?: string): Promise<string> {
     if (mimeType === 'text/plain' || mimeType === 'text/markdown') {
       return buffer.toString('utf-8');
+    }
+
+    if (mimeType.startsWith('image/')) {
+      return await AiAdapter.extractContentFromImage(buffer, mimeType, title);
+    }
+
+    if (mimeType.includes('epub') || mimeType.includes('word') || mimeType.includes('docx')) {
+      try {
+        const format = mimeType.includes('epub') ? 'epub' : 'docx';
+        const parsed = await bookParserService.parseBookBuffer(buffer, format, title || 'Tài liệu');
+        const chunkTexts = parsed.chunks.map((c) => c.text).join('\n\n');
+        if (chunkTexts.trim()) return chunkTexts.substring(0, 50000);
+      } catch (err: any) {
+        console.warn('[MaterialProcessor] Document format parser fallback:', err.message);
+      }
     }
 
     if (mimeType === 'application/pdf') {
@@ -51,8 +68,7 @@ export class MaterialProcessor {
       return cleaned.substring(0, 50000).trim();
     }
 
-    // For images, return a placeholder describing the visual diagram
-    return `[Tài liệu hình ảnh học tập - Kích thước: ${buffer.length} bytes]`;
+    return `[Tài liệu: ${title || 'Tài liệu học tập'} - Kích thước: ${buffer.length} bytes]`;
   }
 
   /**
@@ -60,23 +76,46 @@ export class MaterialProcessor {
    */
   public async processMaterial(
     userId: string,
-    materialId: string
+    materialId: string,
+    options?: { force?: boolean }
   ): Promise<{ success: boolean; summary?: StructuredMaterialSummary; error?: string }> {
-    const material = await materialRepo.getById(userId, materialId);
-    if (!material) {
-      return { success: false, error: 'Không tìm thấy tài liệu học tập.' };
+    if (MaterialProcessor.activeProcessing.has(materialId)) {
+      console.log(`[MaterialProcessor] Material ${materialId} is currently being processed by another worker. Skipping duplicate invocation.`);
+      return { success: true };
     }
 
-    await materialRepo.updateStatus(materialId, 'processing');
+    MaterialProcessor.activeProcessing.add(materialId);
 
     try {
+      const material = await materialRepo.getById(userId, materialId);
+      if (!material) {
+        return { success: false, error: 'Không tìm thấy tài liệu học tập.' };
+      }
+
+      if (material.processingStatus === 'ready' && (material.summaryJson || material.summary) && !options?.force) {
+        return {
+          success: true,
+          summary: material.summaryJson || {
+            overview: material.summary || '',
+            keyPoints: [],
+            concepts: [],
+          },
+        };
+      }
+
+      await materialRepo.updateStatus(materialId, 'processing');
+
       let contentText = material.contentText || '';
 
       const effectiveKey = material.storageKey || material.r2ObjectKey;
       if (!contentText && effectiveKey) {
         const obj = await storageService.getObject(effectiveKey, material.storageDriver);
         if (obj) {
-          contentText = this.extractTextFromBuffer(obj.body, material.detectedMime || material.mimeType || 'application/pdf');
+          contentText = await this.extractTextFromBuffer(
+            obj.body,
+            material.detectedMime || material.mimeType || 'application/pdf',
+            material.title
+          );
         }
       }
 
@@ -106,6 +145,8 @@ export class MaterialProcessor {
       await materialRepo.updateStatus(materialId, 'error', undefined, undefined, err.message);
       await this.logAiRun(userId, 'material_summarization', 'failed', err.message);
       return { success: false, error: err.message };
+    } finally {
+      MaterialProcessor.activeProcessing.delete(materialId);
     }
   }
 

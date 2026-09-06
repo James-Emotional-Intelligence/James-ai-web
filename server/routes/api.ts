@@ -2961,12 +2961,20 @@ apiRouter.get(['/materials/books/:id/search', '/books/:id/search'], requireAuth,
 
 apiRouter.get(['/materials/books/:id/progress', '/books/:id/progress'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
   const progress = await bookRepo.getProgress(userId, req.params.id);
   res.json({ progress });
 }));
 
 apiRouter.put(['/materials/books/:id/progress', '/books/:id/progress'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
   const parsed = BookProgressUpdateSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
@@ -2977,12 +2985,20 @@ apiRouter.put(['/materials/books/:id/progress', '/books/:id/progress'], requireA
 
 apiRouter.get(['/materials/books/:id/bookmarks', '/books/:id/bookmarks'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
   const bookmarks = await bookRepo.getBookmarks(userId, req.params.id);
   res.json({ bookmarks });
 }));
 
 apiRouter.post(['/materials/books/:id/bookmarks', '/books/:id/bookmarks'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
   const parsed = BookBookmarkCreateSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
@@ -2999,12 +3015,20 @@ apiRouter.delete(['/materials/books/:id/bookmarks/:bookmarkId', '/books/:id/book
 
 apiRouter.get(['/materials/books/:id/highlights', '/books/:id/highlights'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
   const highlights = await bookRepo.getHighlights(userId, req.params.id);
   res.json({ highlights });
 }));
 
 apiRouter.post(['/materials/books/:id/highlights', '/books/:id/highlights'], requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
+  const book = await bookRepo.getBookById(userId, req.params.id);
+  if (!book) {
+    return res.status(404).json({ error: { code: 'BOOK_NOT_FOUND', message: 'Không tìm thấy sách mềm.' } });
+  }
   const parsed = BookHighlightCreateSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.issues } });
@@ -3159,10 +3183,10 @@ apiRouter.post('/materials/upload', requireAuth, uploadDisk.single('file'), asyn
         ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
         [jobId, material.id, userId]
       ).catch(() => {});
+      materialWorker.pollJobs().catch(() => {});
+    } else {
+      materialProcessor.processMaterial(userId, material.id).catch(() => {});
     }
-
-    materialWorker.pollJobs().catch(() => {});
-    materialProcessor.processMaterial(userId, material.id).catch(() => {});
 
     return res.status(201).json({
       success: true,
@@ -3238,9 +3262,20 @@ apiRouter.post('/materials/upload-direct', requireAuth, asyncHandler(async (req:
       sizeBytes: putResult.size,
       sha256: putResult.sha256,
     });
-    materialProcessor.processMaterial(userId, material.id).catch((err) => {
-      console.error('[API] Error processing material after upload:', err);
-    });
+    if (db.isHealthy()) {
+      const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+      await db.execute(
+        `INSERT INTO material_processing_jobs (
+          id, material_id, user_id, job_type, status, progress_percent, created_at
+        ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
+        [jobId, material.id, userId]
+      ).catch(() => {});
+      materialWorker.pollJobs().catch(() => {});
+    } else {
+      materialProcessor.processMaterial(userId, material.id).catch((err) => {
+        console.error('[API] Error processing material after upload:', err);
+      });
+    }
   }
 
   res.json({
@@ -3285,9 +3320,20 @@ apiRouter.post('/materials/:id/finalize', requireAuth, asyncHandler(async (req: 
     });
   }
 
-  materialProcessor.processMaterial(userId, finalized.id).catch((err) => {
-    console.error('[API] Error processing finalized material:', err);
-  });
+  if (db.isHealthy()) {
+    const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    await db.execute(
+      `INSERT INTO material_processing_jobs (
+        id, material_id, user_id, job_type, status, progress_percent, created_at
+      ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
+      [jobId, finalized.id, userId]
+    ).catch(() => {});
+    materialWorker.pollJobs().catch(() => {});
+  } else {
+    materialProcessor.processMaterial(userId, finalized.id).catch((err) => {
+      console.error('[API] Error processing finalized material:', err);
+    });
+  }
 
   res.json({ success: true, material: finalized });
 }));
@@ -3726,14 +3772,20 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
   let attachedMaterialInfo: { id: string; title: string; summary?: string; contentText?: string } | undefined = undefined;
   if (req.body?.materialId) {
     const mat = await materialRepo.getById(userId, req.body.materialId);
-    if (mat) {
-      attachedMaterialInfo = {
-        id: mat.id,
-        title: mat.title,
-        summary: mat.summary,
-        contentText: mat.contentText ? mat.contentText.slice(0, 4000) : undefined,
-      };
+    if (!mat) {
+      return res.status(404).json({
+        error: {
+          code: 'MATERIAL_NOT_FOUND',
+          message: 'Không tìm thấy tài liệu đính kèm hoặc bạn không có quyền truy cập.',
+        },
+      });
     }
+    attachedMaterialInfo = {
+      id: mat.id,
+      title: mat.title,
+      summary: mat.summary,
+      contentText: mat.contentText ? mat.contentText.slice(0, 4000) : undefined,
+    };
   }
 
   const context = {

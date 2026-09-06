@@ -68,29 +68,37 @@ export class R2StorageAdapter implements StorageAdapter {
     const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
 
     if (this.s3Client) {
-      const res = await this.s3Client.send(
-        new PutObjectCommand({
-          Bucket: this.bucketName,
-          Key: input.key,
-          Body: buffer,
-          ContentType: input.contentType,
-          Metadata: {
-            sha256,
-            originalFilename: input.originalFilename ? encodeURIComponent(input.originalFilename) : '',
-          },
-        })
-      );
+      try {
+        const res = await this.s3Client.send(
+          new PutObjectCommand({
+            Bucket: this.bucketName,
+            Key: input.key,
+            Body: buffer,
+            ContentType: input.contentType,
+            Metadata: {
+              sha256,
+              originalFilename: input.originalFilename ? encodeURIComponent(input.originalFilename) : '',
+            },
+          })
+        );
 
-      return {
-        key: input.key,
-        size: buffer.length,
-        sha256,
-        contentType: input.contentType,
-        etag: res.ETag,
-      };
+        return {
+          key: input.key,
+          size: buffer.length,
+          sha256,
+          contentType: input.contentType,
+          etag: res.ETag,
+        };
+      } catch (err: any) {
+        throw new Error(`[R2StorageAdapter] Failed to save object "${input.key}" to R2: ${err.message}`, { cause: err });
+      }
     }
 
-    // In-memory fallback
+    if (env.NODE_ENV === 'production' || env.APP_MODE === 'production' || env.STORAGE_DRIVER === 'r2') {
+      throw new Error('[R2StorageAdapter] Cloudflare R2 credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) are missing. Refusing to write to volatile memory in production.');
+    }
+
+    // In-memory fallback for unit testing / local demo
     this.demoStore.set(input.key, {
       buffer,
       contentType: input.contentType,

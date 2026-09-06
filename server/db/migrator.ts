@@ -187,7 +187,20 @@ export class Migrator {
         appliedMap.set(m.name, m.checksum);
       }
 
-      const migrationsDir = path.join(process.cwd(), 'server', 'db', 'migrations');
+      const candidateDirs = [
+        path.join(process.cwd(), 'server', 'db', 'migrations'),
+        path.join(process.cwd(), 'dist', 'server', 'migrations'),
+        path.join(__dirname, 'migrations'),
+        path.join(__dirname, '..', 'migrations'),
+      ];
+      const migrationsDir = candidateDirs.find((d) => {
+        try {
+          return fs.existsSync(d) && fs.readdirSync(d).filter((f) => f.endsWith('.sql')).length > 0;
+        } catch {
+          return false;
+        }
+      }) || candidateDirs[0];
+
       if (!fs.existsSync(migrationsDir)) {
         if (isProduction) {
           throw new Error(`[JAMI Migrator FATAL] Thư mục migrations không tồn tại tại "${migrationsDir}".`);

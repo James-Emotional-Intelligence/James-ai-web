@@ -170,6 +170,14 @@ async function fetchJson<T>(urlPath: string, options?: RequestInit): Promise<T> 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000);
 
+  if (options?.signal) {
+    if (options.signal.aborted) {
+      controller.abort();
+    } else {
+      options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+  }
+
   let response: Response;
   try {
     response = await fetch(fullUrl, {
