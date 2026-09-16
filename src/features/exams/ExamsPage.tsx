@@ -35,6 +35,8 @@ import {
   ExamStudyPlanReplanProposal,
 } from '../../../shared/types';
 import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportExamsPlanToPdf, exportQuizToPdf } from '../../lib/pdf-export-service';
 import confetti from 'canvas-confetti';
 
 export const ExamsPage: React.FC = () => {
@@ -513,6 +515,15 @@ export const ExamsPage: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <PrintPdfButton
+            onExport={async () => {
+              await exportExamsPlanToPdf(exams, currentStudyPlan);
+            }}
+            label="In kế hoạch ôn thi (PDF)"
+            variant="outline"
+            size="md"
+          />
+
           <button
             onClick={() => setIsMaterialQuizModalOpen(true)}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#101A13] hover:bg-[#142318] text-[#86EFAC] text-xs font-bold border border-[rgba(34,197,94,0.25)] transition-all cursor-pointer"
@@ -554,15 +565,25 @@ export const ExamsPage: React.FC = () => {
               </div>
               <h2 className="text-base sm:text-lg font-bold text-[#F3FAF5] mt-1">{activeQuiz.title}</h2>
             </div>
-            <button
-              onClick={() => {
-                setActiveQuiz(null);
-                setQuizResult(null);
-              }}
-              className="text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] px-3 py-1.5 rounded-xl border border-[rgba(34,197,94,0.2)] hover:bg-[#101A13] transition-all cursor-pointer"
-            >
-              Thoát bài thi
-            </button>
+            <div className="flex items-center gap-2">
+              <PrintPdfButton
+                onExport={async () => {
+                  await exportQuizToPdf(activeQuiz, { showAnswers: !!quizResult });
+                }}
+                label={quizResult ? "In đề thi & Đáp án (PDF)" : "In phiếu đề thi (PDF)"}
+                variant="outline"
+                size="sm"
+              />
+              <button
+                onClick={() => {
+                  setActiveQuiz(null);
+                  setQuizResult(null);
+                }}
+                className="text-xs font-bold text-[#A9B8AE] hover:text-[#F3FAF5] px-3 py-1.5 rounded-xl border border-[rgba(34,197,94,0.2)] hover:bg-[#101A13] transition-all cursor-pointer"
+              >
+                Thoát bài thi
+              </button>
+            </div>
           </div>
 
           {!quizResult ? (

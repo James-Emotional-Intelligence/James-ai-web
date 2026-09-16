@@ -34,6 +34,8 @@ import {
   BookHighlight,
   BookStudyAidResult,
 } from '../../../shared/types';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportMaterialSummaryToPdf } from '../../lib/pdf-export-service';
 import confetti from 'canvas-confetti';
 
 type ActiveSidebarTab = 'toc' | 'bookmarks' | 'highlights' | 'search' | 'study';
@@ -349,6 +351,19 @@ export const BookReaderPage: React.FC = () => {
             <Bookmark className="w-4 h-4 fill-amber-400/30" />
             <span className="hidden sm:inline">Dấu trang</span>
           </button>
+
+          {/* Print PDF Button */}
+          <PrintPdfButton
+            onExport={async () => {
+              if (!book) return;
+              await exportMaterialSummaryToPdf(book, {
+                chapters: chapters.map((c) => ({ title: c.title, startPage: c.startPage, endPage: c.endPage })),
+              });
+            }}
+            label="In tóm tắt (PDF)"
+            variant="outline"
+            size="sm"
+          />
 
           {/* Toggle Sidebar */}
           <button

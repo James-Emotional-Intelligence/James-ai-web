@@ -131,6 +131,38 @@ export function splitSqlStatements(content: string): string[] {
   return statements;
 }
 
+/**
+ * Pure helper function to resolve the active SQL migrations directory.
+ * Cross-platform, handles paths with spaces, and supports both dev (source) and prod (bundled).
+ *
+ * Checks in priority order:
+ * 1. <baseDir>/server/db/migrations (source execution via tsx)
+ * 2. <baseDir>/dist/server/migrations (bundled execution from project root)
+ * 3. <baseDir>/migrations (bundled execution when cwd is dist/server)
+ */
+export function resolveMigrationsDirectory(baseDir: string = process.cwd()): string | null {
+  const candidateDirs = [
+    path.resolve(baseDir, 'server', 'db', 'migrations'),
+    path.resolve(baseDir, 'dist', 'server', 'migrations'),
+    path.resolve(baseDir, 'migrations'),
+  ];
+
+  for (const dir of candidateDirs) {
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+        const sqlFiles = fs.readdirSync(dir).filter((f) => f.endsWith('.sql'));
+        if (sqlFiles.length > 0) {
+          return dir;
+        }
+      }
+    } catch {
+      // Ignore errors and continue to next candidate
+    }
+  }
+
+  return null;
+}
+
 export class Migrator {
   public static async initMigrationTable(): Promise<void> {
     const createTableSql = `
@@ -167,8 +199,8 @@ export class Migrator {
     // Acquire MySQL named lock to prevent concurrent migrations
     let lockAcquired = false;
     try {
-      const lockRes = await db.query<any>('SELECT GET_LOCK("jami_migration_lock", 10) as lockAcquired');
-      if (lockRes && lockRes[0]?.lockAcquired === 1) {
+      const lockRes = await db.query<any>('SELECT GET_LOCK(?, 10) as lockAcquired', ['jami_migration_lock']);
+      if (lockRes && (lockRes[0]?.lockAcquired === 1 || lockRes[0]?.lockAcquired === '1')) {
         lockAcquired = true;
       }
     } catch (lockErr: any) {
@@ -187,25 +219,21 @@ export class Migrator {
         appliedMap.set(m.name, m.checksum);
       }
 
-      const candidateDirs = [
-        path.join(process.cwd(), 'server', 'db', 'migrations'),
-        path.join(process.cwd(), 'dist', 'server', 'migrations'),
-        path.join(__dirname, 'migrations'),
-        path.join(__dirname, '..', 'migrations'),
-      ];
-      const migrationsDir = candidateDirs.find((d) => {
-        try {
-          return fs.existsSync(d) && fs.readdirSync(d).filter((f) => f.endsWith('.sql')).length > 0;
-        } catch {
-          return false;
-        }
-      }) || candidateDirs[0];
+      const migrationsDir = resolveMigrationsDirectory();
 
-      if (!fs.existsSync(migrationsDir)) {
+      if (!migrationsDir) {
+        const candidatePaths = [
+          path.resolve(process.cwd(), 'server', 'db', 'migrations'),
+          path.resolve(process.cwd(), 'dist', 'server', 'migrations'),
+          path.resolve(process.cwd(), 'migrations'),
+        ];
+        const errMsg = `[JAMI Migrator FATAL] Không tìm thấy thư mục migrations chứa các tệp .sql hợp lệ. Đã kiểm tra:\n  - ${candidatePaths.join('\n  - ')}`;
         if (isProduction) {
-          throw new Error(`[JAMI Migrator FATAL] Thư mục migrations không tồn tại tại "${migrationsDir}".`);
+          throw new Error(errMsg);
+        } else {
+          console.warn(errMsg);
+          return { applied: [], alreadyUpToDate: false };
         }
-        return { applied: [], alreadyUpToDate: true };
       }
 
       const files = fs
@@ -218,7 +246,8 @@ export class Migrator {
       for (const file of files) {
         const filePath = path.join(migrationsDir, file);
         const content = fs.readFileSync(filePath, 'utf-8');
-        const checksum = crypto.createHash('sha256').update(content).digest('hex');
+        const normalizedContent = content.replace(/\r\n/g, '\n');
+        const checksum = crypto.createHash('sha256').update(normalizedContent).digest('hex');
 
         if (appliedMap.has(file)) {
           const existingChecksum = appliedMap.get(file);
@@ -276,7 +305,7 @@ export class Migrator {
     } finally {
       if (lockAcquired) {
         try {
-          await db.query('SELECT RELEASE_LOCK("jami_migration_lock")');
+          await db.query('SELECT RELEASE_LOCK(?)', ['jami_migration_lock']);
         } catch {}
       }
     }
@@ -291,9 +320,9 @@ export class Migrator {
       const applied = await this.getAppliedMigrations();
       const appliedNames = new Set(applied.map((m) => m.name));
 
-      const migrationsDir = path.join(process.cwd(), 'server', 'db', 'migrations');
+      const migrationsDir = resolveMigrationsDirectory();
       let files: string[] = [];
-      if (fs.existsSync(migrationsDir)) {
+      if (migrationsDir) {
         files = fs
           .readdirSync(migrationsDir)
           .filter((f) => f.endsWith('.sql'))

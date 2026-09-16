@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api-client';
 import { StudyTask, Subject } from '../../../shared/types';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportTasksToPdf } from '../../lib/pdf-export-service';
 import confetti from 'canvas-confetti';
 
 export const TasksPage: React.FC = () => {
@@ -205,6 +207,15 @@ export const TasksPage: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <PrintPdfButton
+            onExport={async () => {
+              await exportTasksToPdf(tasks);
+            }}
+            label="In danh sách (PDF)"
+            variant="outline"
+            size="md"
+          />
+
           <button
             type="button"
             onClick={handleDownloadTasksCsv}

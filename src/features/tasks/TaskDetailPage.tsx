@@ -38,6 +38,8 @@ import { api } from '../../lib/api-client';
 import { StudyTask, ExecutionGuide, ExecutionStep, TaskEvidence, PreparationChecklistItem } from '../../../shared/types';
 import { GuidedExecutionModal } from './GuidedExecutionModal';
 import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportTaskExecutionGuideToPdf } from '../../lib/pdf-export-service';
 import confetti from 'canvas-confetti';
 
 export const TaskDetailPage: React.FC = () => {
@@ -529,6 +531,16 @@ export const TaskDetailPage: React.FC = () => {
             <Upload className="w-4 h-4" />
             <span>Nộp minh chứng bài làm</span>
           </button>
+
+          <PrintPdfButton
+            onExport={async () => {
+              if (!task) return;
+              await exportTaskExecutionGuideToPdf(task, guide);
+            }}
+            label="In hướng dẫn (PDF)"
+            variant="outline"
+            size="md"
+          />
 
           {!isCompleted && (
             <button

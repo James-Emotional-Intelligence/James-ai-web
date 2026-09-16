@@ -30,6 +30,8 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
 import { LearningMaterial, Subject, Outline, BookProgress } from '../../../shared/types';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportMaterialSummaryToPdf } from '../../lib/pdf-export-service';
 import confetti from 'canvas-confetti';
 
 type ActiveTab = 'materials' | 'books' | 'outlines';
@@ -700,6 +702,15 @@ export const MaterialsPage: React.FC = () => {
                       <span>Đọc sách & Ôn tập</span>
                     </button>
 
+                    <PrintPdfButton
+                      onExport={async () => {
+                        await exportMaterialSummaryToPdf(book);
+                      }}
+                      label="In tóm tắt"
+                      variant="outline"
+                      size="sm"
+                    />
+
                     {book.processingStatus === 'error' && (
                       <button
                         onClick={() => handleRetryBook(book.id)}
@@ -770,6 +781,14 @@ export const MaterialsPage: React.FC = () => {
                       <Download className="w-3.5 h-3.5" />
                       <span>Tải xuống</span>
                     </button>
+                    <PrintPdfButton
+                      onExport={async () => {
+                        await exportMaterialSummaryToPdf(mat);
+                      }}
+                      label="In tóm tắt"
+                      variant="outline"
+                      size="sm"
+                    />
                     <button
                       onClick={() => handleGenerateOutlineFromMaterial(mat)}
                       disabled={generatingOutlineMatId === mat.id}

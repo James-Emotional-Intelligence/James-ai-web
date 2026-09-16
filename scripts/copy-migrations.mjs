@@ -3,16 +3,24 @@ import fs from 'fs';
 import path from 'path';
 import process from 'process';
 
-const src = path.join(process.cwd(), 'server', 'db', 'migrations');
-const dest = path.join(process.cwd(), 'dist', 'server', 'migrations');
+const src = path.resolve(process.cwd(), 'server', 'db', 'migrations');
+const dest = path.resolve(process.cwd(), 'dist', 'server', 'migrations');
 
-if (fs.existsSync(src)) {
-  fs.mkdirSync(dest, { recursive: true });
-  const files = fs.readdirSync(src);
-  for (const file of files) {
-    fs.copyFileSync(path.join(src, file), path.join(dest, file));
-  }
-  console.log(`[copy-migrations] Copied ${files.length} migration files to ${dest}`);
-} else {
-  console.warn(`[copy-migrations] Source directory ${src} not found.`);
+if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) {
+  console.error(`[copy-migrations ERROR] Source migrations directory not found: ${src}`);
+  process.exit(1);
 }
+
+const sqlFiles = fs.readdirSync(src).filter((f) => f.endsWith('.sql'));
+
+if (sqlFiles.length === 0) {
+  console.error(`[copy-migrations ERROR] No .sql migration files found in source: ${src}`);
+  process.exit(1);
+}
+
+fs.mkdirSync(dest, { recursive: true });
+for (const file of sqlFiles) {
+  fs.copyFileSync(path.join(src, file), path.join(dest, file));
+}
+console.log(`[copy-migrations] Copied ${sqlFiles.length} SQL migration files to ${dest}`);
+

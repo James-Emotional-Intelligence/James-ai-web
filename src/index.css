@@ -264,3 +264,98 @@ body {
   animation: jamiRobotIdleFloat 4.2s ease-in-out infinite;
   will-change: transform;
 }
+
+/* ========================================================================= */
+/* PRINT & PDF EXPORT STYLES (@media print)                                   */
+/* ========================================================================= */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm;
+  }
+
+  *, *::before, *::after {
+    background-color: transparent !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt !important;
+    line-height: 1.4 !important;
+  }
+
+  /* Hide Navigation, Floating Robot, Voice Modal, Toasts & Action buttons */
+  header,
+  nav,
+  .no-print,
+  .jami-floating-robot-stage,
+  [data-modal-open="true"] ~ *,
+  button:not(.print-include) {
+    display: none !important;
+  }
+
+  main {
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Page break rules */
+  .print-avoid-break,
+  .jami-card-interactive,
+  .jami-card-hover,
+  table,
+  tr,
+  figure {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Clean contrast for cards & surfaces */
+  div[class*="bg-[#0B120D]"],
+  div[class*="bg-[#050806]"],
+  div[class*="bg-[#101A13]"],
+  div[class*="bg-emerald-950"],
+  div[class*="bg-amber-950"],
+  div[class*="bg-violet-950"],
+  div[class*="bg-cyan-950"],
+  div[class*="bg-rose-950"] {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: #065f46 !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
+
+  p, span, li, td, th {
+    color: #1e293b !important;
+  }
+
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  th, td {
+    border: 1px solid #e2e8f0 !important;
+    padding: 6px 8px !important;
+  }
+
+  th {
+    background: #f1f5f9 !important;
+    font-weight: bold !important;
+  }
+
+  a {
+    text-decoration: none !important;
+    color: inherit !important;
+  }
+}

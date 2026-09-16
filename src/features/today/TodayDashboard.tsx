@@ -59,6 +59,8 @@ import { HaiBaTrungHero } from '../../components/themes/HaiBaTrungHero';
 import { RobotJami } from '../../components/jami/RobotJami';
 import { useTodayGreetingConversation } from './useTodayGreetingConversation';
 import { TodayGreetingInteraction } from './TodayGreetingInteraction';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportTodayPlanToPdf } from '../../lib/pdf-export-service';
 import confetti from 'canvas-confetti';
 
 type TaskFilterType = 'all' | 'pending' | 'in_progress' | 'completed' | 'overdue';
@@ -895,6 +897,12 @@ export const TodayDashboard: React.FC = () => {
               el.scrollIntoView({ behavior: 'smooth' });
             }
           }}
+          onExportPdf={async () => {
+            await exportTodayPlanToPdf(overview, tomorrowPlan, {
+              studentName: overview.studentName,
+              gradeLevel: overview.gradeLevel,
+            });
+          }}
           interactionSlot={
             <TodayGreetingInteraction
               conversation={greetingConversation}
@@ -925,6 +933,18 @@ export const TodayDashboard: React.FC = () => {
 
             {/* Quick Actions in Banner */}
             <div className="flex flex-wrap items-center gap-2.5">
+              <PrintPdfButton
+                onExport={async () => {
+                  await exportTodayPlanToPdf(overview, tomorrowPlan, {
+                    studentName: overview.studentName,
+                    gradeLevel: overview.gradeLevel,
+                  });
+                }}
+                label="In kế hoạch (PDF)"
+                variant="outline"
+                size="md"
+              />
+
               <button
                 type="button"
                 onClick={() => {
@@ -1619,6 +1639,20 @@ export const TodayDashboard: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2 self-end sm:self-auto">
+                {tomorrowPlan && (
+                  <PrintPdfButton
+                    onExport={async () => {
+                      if (!overview) return;
+                      await exportTodayPlanToPdf(overview, tomorrowPlan, {
+                        studentName: overview.studentName,
+                        gradeLevel: overview.gradeLevel,
+                      });
+                    }}
+                    label="In phiếu chuẩn bị"
+                    variant="outline"
+                    size="sm"
+                  />
+                )}
                 <button
                   type="button"
                   onClick={handleOpenTomorrowPlanModal}
@@ -2360,6 +2394,18 @@ export const TodayDashboard: React.FC = () => {
               </button>
 
               <div className="flex items-center gap-2">
+                <PrintPdfButton
+                  onExport={async () => {
+                    if (!overview) return;
+                    await exportTodayPlanToPdf(overview, tomorrowPlan, {
+                      studentName: overview.studentName,
+                      gradeLevel: overview.gradeLevel,
+                    });
+                  }}
+                  label="In kế hoạch (PDF)"
+                  variant="outline"
+                  size="md"
+                />
                 <button
                   type="button"
                   onClick={() => setIsTomorrowPlanModalOpen(false)}

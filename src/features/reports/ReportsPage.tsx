@@ -36,6 +36,8 @@ import {
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/api-client';
 import { ReportOverviewResponse } from '../../../shared/types';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportReportsToPdf } from '../../lib/pdf-export-service';
 
 export const ReportsPage: React.FC = () => {
   const [period, setPeriod] = useState<'week' | 'month'>('week');
@@ -113,15 +115,15 @@ export const ReportsPage: React.FC = () => {
           </div>
 
           {/* Export Buttons */}
-          <button
-            type="button"
-            onClick={handlePrintPdf}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.2)] text-xs font-bold transition-all cursor-pointer"
-            title="In hoặc lưu báo cáo dạng PDF"
-          >
-            <Printer className="w-3.5 h-3.5 text-[#22C55E]" />
-            <span>Xuất PDF</span>
-          </button>
+          <PrintPdfButton
+            onExport={async () => {
+              if (!report) return;
+              await exportReportsToPdf(report, { period });
+            }}
+            label="In báo cáo (PDF)"
+            variant="outline"
+            size="md"
+          />
 
           <button
             type="button"

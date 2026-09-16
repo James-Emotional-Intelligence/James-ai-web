@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, BookOpen, PenLine, Shield, Compass } from 'lucide-react';
+import { Sparkles, BookOpen, PenLine, Shield, Compass, Printer } from 'lucide-react';
 import { HAI_BA_TRUNG_ASSETS } from '../../assets/themes/hai-ba-trung';
 
 interface HaiBaTrungHeroProps {
@@ -8,6 +8,7 @@ interface HaiBaTrungHeroProps {
   todayDateFormatted?: string;
   onOpenStoryModal: () => void;
   onScrollToLessonLogs?: () => void;
+  onExportPdf?: () => void;
   interactionSlot?: React.ReactNode;
 }
 
@@ -17,6 +18,7 @@ export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
   todayDateFormatted,
   onOpenStoryModal,
   onScrollToLessonLogs,
+  onExportPdf,
   interactionSlot,
 }) => {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -63,11 +65,11 @@ export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
 
           {/* Title & Quote */}
           <div className="space-y-2">
-            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-[#F5F4EF] tracking-tight leading-tight">
-              HAI BÀ TRƯNG
-            </h1>
-            <p className="text-xs sm:text-sm text-[#E9E5DC] font-medium leading-relaxed italic border-l-2 border-[#D2A84A]/60 pl-3">
-              “Khí phách Trưng Vương — vững chí học tập, chủ động dẫn đầu.”
+            <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-[#FFF5C2] tracking-tight leading-tight">
+              Khí Phách Hai Bà Trưng
+            </h2>
+            <p className="text-xs sm:text-sm text-[#E8C66A] font-semibold italic">
+              "Vung gươm dệt cội nguồn sông núi • Vững chí vươn tầm tri thức tương lai"
             </p>
           </div>
 
@@ -108,6 +110,18 @@ export const HaiBaTrungHero: React.FC<HaiBaTrungHeroProps> = ({
               >
                 <PenLine className="w-3.5 h-3.5 text-[#D2A84A]" />
                 <span>Nhập bài học & BTVN</span>
+              </button>
+            )}
+
+            {onExportPdf && (
+              <button
+                type="button"
+                onClick={onExportPdf}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-[#102B20] hover:bg-[#163B2C] text-[#E8C66A] hover:text-[#FFF5C2] border border-[#D2A84A]/30 text-xs font-bold transition-all cursor-pointer min-h-[44px]"
+                aria-label="In kế hoạch học tập PDF"
+              >
+                <Printer className="w-3.5 h-3.5 text-[#D2A84A]" />
+                <span>In kế hoạch (PDF)</span>
               </button>
             )}
           </div>

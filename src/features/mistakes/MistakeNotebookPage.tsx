@@ -23,6 +23,8 @@ import {
 import { api } from '../../lib/api-client';
 import { MistakeNotebookEntry, Subject, MistakeReason, MistakeDifficulty, MistakeStatus } from '../../../shared/types';
 import { RobotJami } from '../../components/jami/RobotJami';
+import { PrintPdfButton } from '../../components/common/PrintPdfButton';
+import { exportMistakeNotebookToPdf } from '../../lib/pdf-export-service';
 
 const REASON_LABELS: Record<MistakeReason, { label: string; color: string }> = {
   knowledge_gap: { label: 'Chưa nhớ kiến thức', color: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
@@ -288,6 +290,14 @@ export const MistakeNotebookPage: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <PrintPdfButton
+              onExport={async () => {
+                await exportMistakeNotebookToPdf(mistakes);
+              }}
+              label="In sổ tay lỗi sai (PDF)"
+              variant="outline"
+              size="md"
+            />
             <button
               onClick={handleOpenAdd}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition shadow-lg shadow-emerald-500/20"
