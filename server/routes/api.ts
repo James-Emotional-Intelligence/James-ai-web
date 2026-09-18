@@ -60,7 +60,7 @@ import {
   BookStudyAidRequestSchema,
 } from '../../shared/schemas';
 import { env, isProduction, isProductionRuntime, isDatabaseRequired, isDemoMode } from '../config/env';
-import { createRateLimiter } from '../middleware/rate-limit';
+import { createRateLimiter, aiRateLimiter, authRateLimiter } from '../middleware/rate-limit';
 import { z } from 'zod';
 import { StudyTask, StudentProfile, Material } from '../../shared/types';
 import {
@@ -216,9 +216,6 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
 
   return sendError(req, res, 403, 'FORBIDDEN', 'Yêu cầu quyền quản trị viên (Admin)');
 }
-
-// Rate limiters
-const authRateLimiter = createRateLimiter(60 * 1000, 5, 'auth_limit');
 
 // Multer Disk Storage Configuration (Streaming directly to storage/temporary)
 const tempUploadDir = path.resolve(process.cwd(), env.LOCAL_STORAGE_ROOT || './storage', 'temporary');
@@ -1319,7 +1316,7 @@ apiRouter.get('/tomorrow-plan/current', requireAuth, asyncHandler(async (req: Re
   res.json({ plan });
 }));
 
-apiRouter.post('/tomorrow-plan/generate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/tomorrow-plan/generate', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parseResult = TomorrowPlanGenerateRequestSchema.safeParse(req.body);
   if (!parseResult.success) {
@@ -1338,7 +1335,7 @@ apiRouter.post('/tomorrow-plan/generate', requireAuth, asyncHandler(async (req: 
   res.status(201).json({ plan });
 }));
 
-apiRouter.patch('/tomorrow-plan/:id/energy', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.patch('/tomorrow-plan/:id/energy', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const planId = req.params.id;
   const parseResult = TomorrowPlanEnergyUpdateRequestSchema.safeParse(req.body);
@@ -1404,7 +1401,7 @@ apiRouter.get('/exams/:id/study-plan', requireAuth, asyncHandler(async (req: Req
   res.json({ plan });
 }));
 
-apiRouter.post('/exams/:id/study-plan/generate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/exams/:id/study-plan/generate', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const examId = req.params.id;
   const parseResult = ExamStudyPlanGenerateSchema.safeParse(req.body);
@@ -1580,7 +1577,7 @@ apiRouter.post('/mistakes/:id/review', requireAuth, asyncHandler(async (req: Req
   res.json({ success: true, isCorrect, entry: result.entry, attempt: result.attempt });
 }));
 
-apiRouter.post('/mistakes/:id/similar', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/mistakes/:id/similar', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const mistake = await mistakeRepo.getById(userId, req.params.id);
   if (!mistake) {
@@ -1598,7 +1595,7 @@ apiRouter.post('/mistakes/:id/similar', requireAuth, asyncHandler(async (req: Re
   res.json({ similarQuestion });
 }));
 
-apiRouter.post('/mistakes/:id/explain', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/mistakes/:id/explain', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const mistake = await mistakeRepo.getById(userId, req.params.id);
   if (!mistake) {
@@ -1616,7 +1613,7 @@ apiRouter.post('/mistakes/:id/explain', requireAuth, asyncHandler(async (req: Re
 }));
 
 // Timetable OCR Import from Image (Preview)
-apiRouter.post('/timetables/import-ocr', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/timetables/import-ocr', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Vui lòng cung cấp dữ liệu hình ảnh thời khóa biểu.');
@@ -1679,7 +1676,7 @@ apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async
 }));
 
 // Aliases for /schedules/import-ocr
-apiRouter.post('/schedules/import-ocr', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/schedules/import-ocr', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Vui lòng cung cấp dữ liệu hình ảnh thời khóa biểu.');
@@ -1958,7 +1955,7 @@ apiRouter.delete('/tasks/:id', requireAuth, asyncHandler(async (req: Request, re
   res.json({ success: true });
 }));
 
-apiRouter.post('/tasks/:id/execution-guide/generate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/tasks/:id/execution-guide/generate', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const task = await taskRepo.getById(userId, req.params.id);
   if (!task) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
@@ -1998,7 +1995,7 @@ apiRouter.patch('/tasks/:taskId/checklist/:itemId', requireAuth, asyncHandler(as
 }));
 
 // Generate Steps / Guide alias
-apiRouter.post('/tasks/:taskId/generate-steps', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/tasks/:taskId/generate-steps', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const task = await taskRepo.getById(userId, req.params.taskId);
   if (!task) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
@@ -2075,7 +2072,7 @@ apiRouter.post('/tasks/:taskId/steps/reorder', requireAuth, asyncHandler(async (
   res.json({ success: true, guide });
 }));
 
-apiRouter.post('/tasks/:taskId/explain-step', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/tasks/:taskId/explain-step', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const { stepId, stepTitle, instruction, expectedOutput, plannedMinutes, studentQuestion } = req.body || {};
   const task = await taskRepo.getById(userId, req.params.taskId);
@@ -2096,7 +2093,7 @@ apiRouter.post('/tasks/:taskId/explain-step', requireAuth, asyncHandler(async (r
   res.json({ explanation });
 }));
 
-apiRouter.post('/tasks/:taskId/evaluate-evidence', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/tasks/:taskId/evaluate-evidence', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const { textValue, fileUrl, type } = req.body || {};
   const task = await taskRepo.getById(userId, req.params.taskId);
@@ -2270,7 +2267,7 @@ apiRouter.post('/focus-sessions/:id/abandon', requireAuth, asyncHandler(async (r
 // AI Planner & Voice Goal
 // ==========================================
 
-apiRouter.post('/planner/voice-goal/preview', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/planner/voice-goal/preview', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const { transcript } = req.body;
 
@@ -2478,7 +2475,7 @@ apiRouter.delete('/exams/:id', requireAuth, asyncHandler(async (req: Request, re
   res.json({ success });
 }));
 
-apiRouter.post('/exams/:id/quizzes/generate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/exams/:id/quizzes/generate', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = ExamQuizGenerateSchema.safeParse(req.body || {});
   const options = parsed.success ? parsed.data : {};
@@ -2491,7 +2488,7 @@ apiRouter.post('/exams/:id/quizzes/generate', requireAuth, asyncHandler(async (r
   }
 }));
 
-apiRouter.post('/quizzes/generate', requireAuth, createRateLimiter(60000, 10, 'quiz_generate', { useUserId: true }), asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/quizzes/generate', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = SubjectQuizGenerateSchema.safeParse(req.body || {});
   if (!parsed.success) {
@@ -3397,7 +3394,7 @@ apiRouter.post('/materials/:id/reprocess', requireAuth, asyncHandler(async (req:
   res.json(result);
 }));
 
-apiRouter.post('/materials/:id/quizzes/generate', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/materials/:id/quizzes/generate', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = MaterialQuizGenerateSchema.safeParse(req.body);
   const options = parsed.success ? parsed.data : {};
@@ -3425,9 +3422,12 @@ apiRouter.patch('/materials/:id', requireAuth, asyncHandler(async (req: Request,
   res.json({ material: updated });
 }));
 
-apiRouter.post('/materials/:id/outline', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/materials/:id/outline', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const outline = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, req.body?.chapter);
+  const outline = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, {
+    chapter: req.body?.chapter,
+    customPrompt: req.body?.customPrompt,
+  });
   res.json({ outline });
 }));
 
@@ -3657,7 +3657,7 @@ apiRouter.delete('/jami/messages', requireAuth, asyncHandler(async (req: Request
   res.json({ success });
 }));
 
-apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/jami/chat', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const parsed = JamiChatRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -3863,7 +3863,7 @@ apiRouter.post('/jami/messages/:id/confirm', requireAuth, asyncHandler(async (re
   }
 }));
 
-apiRouter.post('/jami/voice/command', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/jami/voice/command', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const { transcript, clientTurnId, mode, conversationId } = req.body;
 
@@ -3906,13 +3906,13 @@ apiRouter.post('/jami/voice/log', requireAuth, asyncHandler(async (req: Request,
   res.json({ success: true, log });
 }));
 
-apiRouter.post('/jami/realtime/client-secret', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/jami/realtime/client-secret', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const result = await voiceSessionService.createRealtimeClientSecret(userId);
   res.json(result);
 }));
 
-apiRouter.post('/jami/realtime/calls', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/jami/realtime/calls', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const sdpOffer = req.body?.sdpOffer || req.body?.sdp || (typeof req.body === 'string' ? req.body : '');
   if (!sdpOffer) {
@@ -3922,7 +3922,7 @@ apiRouter.post('/jami/realtime/calls', requireAuth, asyncHandler(async (req: Req
   res.json(result);
 }));
 
-apiRouter.post('/voice/realtime/calls', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/voice/realtime/calls', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const sdpOffer = req.body?.sdpOffer || req.body?.sdp || (typeof req.body === 'string' ? req.body : '');
   if (!sdpOffer) {
@@ -3932,7 +3932,7 @@ apiRouter.post('/voice/realtime/calls', requireAuth, asyncHandler(async (req: Re
   res.json(result);
 }));
 
-apiRouter.post('/jami/realtime/session', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+apiRouter.post('/jami/realtime/session', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const result = await voiceSessionService.createRealtimeClientSecret(userId);
   res.json(result);

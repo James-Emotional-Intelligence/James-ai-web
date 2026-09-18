@@ -26,7 +26,20 @@ export function createApp() {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-XSS-Protection', '0');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), payment=()');
     res.setHeader('Vary', 'Origin');
+
+    if (isProduction || req.secure || req.headers['x-forwarded-proto'] === 'https') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    }
+
+    // Comprehensive Content Security Policy
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.openai.com https://*.r2.cloudflarestorage.com wss: ws:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+    );
     next();
   });
 
@@ -182,15 +195,21 @@ export function createApp() {
     }
 
     if (err) {
-      console.error('[Unhandled App Error]:', err);
+      console.error(`[Unhandled App Error ${requestId}]:`, err);
       const status = typeof err.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+      const safeMessage = (isProduction && status >= 500)
+        ? 'Đã xảy ra lỗi nội bộ máy chủ. Vui lòng thử lại sau.'
+        : (err.message || 'Đã xảy ra lỗi nội bộ máy chủ.');
+
+      const safeCode = err.code || (status === 500 ? 'INTERNAL_SERVER_ERROR' : 'APP_ERROR');
+
       return res.status(status).json({
         error: {
-          code: err.code || 'INTERNAL_SERVER_ERROR',
-          message: err.message || 'Đã xảy ra lỗi nội bộ máy chủ.',
+          code: safeCode,
+          message: safeMessage,
           requestId,
         },
-        message: err.message || 'Đã xảy ra lỗi nội bộ máy chủ.',
+        message: safeMessage,
       });
     }
 

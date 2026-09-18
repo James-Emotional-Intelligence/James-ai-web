@@ -2,6 +2,7 @@ import { bookRepo } from '../repositories/book-repository';
 import { mistakeRepo } from '../repositories/mistake-repository';
 import { BookStudyAidResult, BookStudyCitation } from '../../shared/types';
 import { AiAdapter } from './ai-adapter';
+import { wrapUntrustedData } from '../ai/prompt-registry';
 
 export class BookStudyAidService {
   private static instance: BookStudyAidService;
@@ -84,7 +85,7 @@ Chương: ${selectedChapter?.title || 'Toàn bộ'}
 Khái niệm cần giải thích (nếu có): ${params.conceptToExplain || 'Toàn bộ trọng tâm'}
 
 DỮ LIỆU TRÍCH ĐOẠN SÁCH:
-${contextText.substring(0, 12000)}`;
+${wrapUntrustedData(contextText, { maxLength: 12000, tag: 'BOOK_EXCERPTS' })}`;
 
           const completion = await client.chat.completions.create({
             model: AiAdapter.getTextModel(),

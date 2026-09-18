@@ -21,7 +21,7 @@ export interface ActionProposalRecord {
   actionType: string;
   payload: any;
   previewText: string;
-  status: 'pending' | 'confirmed' | 'rejected' | 'expired' | 'failed';
+  status: 'pending' | 'processing' | 'confirmed' | 'rejected' | 'expired' | 'failed';
   expiresAt: string;
   confirmedAt?: string;
   idempotencyKey?: string;
@@ -834,7 +834,25 @@ export class JamiActionService {
     }
 
     if (decision === 'reject') {
-      await this.updateProposalStatus(userId, proposal.id, 'rejected');
+      let rejectClaimed = false;
+      if (db.isHealthy()) {
+        try {
+          const res = await db.execute(
+            `UPDATE jami_action_proposals SET status = 'rejected', updated_at = NOW(3) WHERE id = ? AND user_id = ? AND status = 'pending'`,
+            [proposal.id, userId]
+          );
+          rejectClaimed = (res as any)?.affectedRows > 0;
+        } catch (err: any) {
+          console.warn('[JamiActionService] DB reject proposal error:', err.message);
+        }
+      } else {
+        const list = this.demoProposals.get(userId) || [];
+        const item = list.find((p) => p.id === proposalId);
+        if (item && item.status === 'pending') {
+          item.status = 'rejected';
+          rejectClaimed = true;
+        }
+      }
       return {
         success: true,
         message: 'Đã hủy đề xuất theo yêu cầu của bạn.',
@@ -853,6 +871,52 @@ export class JamiActionService {
       return {
         success: false,
         message: 'Đề xuất đã hết hạn. Vui lòng tạo yêu cầu mới.',
+      };
+    }
+
+    // Atomic Claiming: transition status from 'pending' to 'processing' to prevent concurrent race conditions
+    let claimed = false;
+    if (db.isHealthy()) {
+      try {
+        const claimResult = await db.execute(
+          `UPDATE jami_action_proposals
+           SET status = 'processing', updated_at = NOW(3)
+           WHERE id = ? AND user_id = ? AND status = 'pending' AND (expires_at IS NULL OR expires_at > NOW(3))`,
+          [proposal.id, userId]
+        );
+        if ((claimResult as any)?.affectedRows > 0) {
+          claimed = true;
+        }
+      } catch (err: any) {
+        console.warn('[JamiActionService] DB atomic claim error:', err.message);
+      }
+    } else {
+      const list = this.demoProposals.get(userId) || [];
+      const item = list.find((p) => p.id === proposalId);
+      if (item && item.status === 'pending') {
+        item.status = 'processing';
+        claimed = true;
+      }
+    }
+
+    if (!claimed) {
+      const current = await this.getProposalById(userId, proposalId);
+      if (current?.status === 'confirmed') {
+        return {
+          success: true,
+          message: 'Đề xuất này đã được xác nhận trước đó.',
+          isAlreadyConfirmed: true,
+        };
+      }
+      if (current?.status === 'processing') {
+        return {
+          success: false,
+          message: 'Đề xuất đang được xử lý bởi một yêu cầu khác.',
+        };
+      }
+      return {
+        success: false,
+        message: `Đề xuất không thể xác nhận (trạng thái: ${current?.status || 'không rõ'}).`,
       };
     }
 
@@ -992,7 +1056,11 @@ export class JamiActionService {
     return list.find((p) => p.id === proposalId) || null;
   }
 
-  private async updateProposalStatus(userId: string, proposalId: string, status: 'confirmed' | 'rejected' | 'failed' | 'expired') {
+  private async updateProposalStatus(
+    userId: string,
+    proposalId: string,
+    status: 'processing' | 'confirmed' | 'rejected' | 'failed' | 'expired'
+  ) {
     if (db.isHealthy()) {
       try {
         await db.execute(

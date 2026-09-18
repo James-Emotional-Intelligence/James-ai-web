@@ -6,6 +6,7 @@ import { materialRepo } from '../repositories/material-repository';
 import { quizRepo } from '../repositories/quiz-repository';
 import { AiAdapter } from './ai-adapter';
 import { bookParserService } from './book-parser-service';
+import { wrapUntrustedData } from '../ai/prompt-registry';
 import crypto from 'crypto';
 
 export class MaterialProcessor {
@@ -178,7 +179,7 @@ YÊU CẦU ĐẦU RA JSON BẮT BUỘC:
   "warning": "Cảnh báo nếu chất lượng văn bản thấp hoặc thiếu trang (tùy chọn)"
 }`;
 
-    const userPrompt = `Môn học: ${subjectName}\nTiêu đề tài liệu: ${title}\n\n--- BẮT ĐẦU DỮ LIỆU TÀI LIỆU ---\n${rawContent.substring(0, 15000)}\n--- KẾT THÚC DỮ LIỆU TÀI LIỆU ---`;
+    const userPrompt = `Môn học: ${subjectName}\nTiêu đề tài liệu: ${title}\n\n${wrapUntrustedData(rawContent, { maxLength: 15000, tag: 'DOCUMENT_CONTENT' })}`;
 
     if (AiAdapter.isConfigured()) {
       try {
@@ -264,9 +265,10 @@ QUY TẮC AN NINH:
       "topicRef": "${material.subjectName || 'Kiến thức chung'}"
     }
   ]
-}`;
+}
+`;
 
-    const userPrompt = `Tài liệu: ${material.title} (${material.subjectName || 'Môn học'})\nNội dung tóm tắt:\n${summaryText}`;
+    const userPrompt = `Tài liệu: ${material.title} (${material.subjectName || 'Môn học'})\nNội dung tóm tắt:\n${wrapUntrustedData(summaryText, { maxLength: 8000, tag: 'SUMMARY_CONTENT' })}`;
 
     let questions: Partial<QuizQuestion>[] = [];
 

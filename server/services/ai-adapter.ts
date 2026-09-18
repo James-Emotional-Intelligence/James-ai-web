@@ -9,40 +9,34 @@ import {
   MistakeSimilarQuestionSchema,
 } from '../../shared/schemas';
 import { z } from 'zod';
+import { aiGateway } from '../ai/ai-gateway';
+import { wrapUntrustedData } from '../ai/prompt-registry';
 
 export class AiAdapter {
   private static client: OpenAI | null = null;
 
   public static getClient(): OpenAI | null {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey || apiKey.trim().length < 10 || apiKey.includes('ADD_IN_AI_STUDIO')) {
-      return null;
-    }
-    if (!this.client) {
-      this.client = new OpenAI({ apiKey });
-    }
-    return this.client;
+    return aiGateway.getClient();
   }
 
   public static getTextModel(): string {
-    return process.env.OPENAI_TEXT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    return aiGateway.getDefaultTextModel();
   }
 
   public static getRealtimeModel(): string {
-    return process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
+    return aiGateway.getDefaultRealtimeModel();
   }
 
   public static getTranscribeModel(): string {
-    return process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1';
+    return aiGateway.getDefaultTranscribeModel();
   }
 
   public static getVoice(): string {
-    return process.env.OPENAI_VOICE || 'alloy';
+    return aiGateway.getDefaultVoice();
   }
 
   public static isConfigured(): boolean {
-    const apiKey = process.env.OPENAI_API_KEY;
-    return Boolean(apiKey && apiKey.trim().length > 10 && !apiKey.includes('ADD_IN_AI_STUDIO'));
+    return aiGateway.isAvailable();
   }
 
   /**
@@ -53,49 +47,11 @@ export class AiAdapter {
     mimeType: string = 'image/jpeg',
     title?: string
   ): Promise<string> {
-    const client = this.getClient();
-    if (client) {
+    if (aiGateway.isAvailable()) {
       try {
-        const base64 = imageBuffer.toString('base64');
-        const dataUri = `data:${mimeType};base64,${base64}`;
-
-        const response = await client.chat.completions.create({
-          model: this.getTextModel(),
-          messages: [
-            {
-              role: 'system',
-              content:
-                'Bạn là chuyên gia OCR và trợ lý giáo dục Jami AI chuẩn GDPT 2018. ' +
-                'Hãy đọc kỹ toàn bộ nội dung trong bức ảnh tài liệu/bài tập học sinh gửi. ' +
-                'Trích xuất đầy đủ, trung thực toàn bộ: ' +
-                '1. Tiêu đề, đề bài, câu hỏi, các phương án trắc nghiệm (A, B, C, D) nếu có. ' +
-                '2. Công thức toán/lý/hóa (dùng ký hiệu LaTeX như $x^2$, $\\frac{a}{b}$ khi cần). ' +
-                '3. Mô tả các hình vẽ, đồ thị, bảng biểu quan trọng. ' +
-                'Định dạng đầu ra dưới dạng văn bản Markdown rõ ràng, mạch lạc.',
-            },
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: `Hãy trích xuất và số hóa toàn bộ nội dung của bức ảnh học tập này (Tiêu đề: ${title || 'Bài tập / Tài liệu'}).`,
-                },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: dataUri,
-                    detail: 'high',
-                  },
-                },
-              ],
-            },
-          ],
-          max_tokens: 2500,
-        });
-
-        const extractedText = response.choices[0]?.message?.content?.trim();
-        if (extractedText && extractedText.length > 10) {
-          return extractedText;
+        const res = await aiGateway.executeVision(imageBuffer, mimeType, title);
+        if (res.text && res.text.trim().length > 10) {
+          return res.text.trim();
         }
       } catch (err: any) {
         console.warn('[AiAdapter] Vision OCR extraction error, using fallback:', err.message);
@@ -109,29 +65,18 @@ export class AiAdapter {
    * Process voice audio or raw speech transcript to extract structured study goal
    */
   public static async extractGoalFromText(userText: string): Promise<z.infer<typeof VoiceGoalExtractionSchema>> {
-    const client = this.getClient();
-    if (client) {
+    if (aiGateway.isAvailable()) {
       try {
-        const completion = await client.chat.completions.create({
-          model: this.getTextModel(),
-          messages: [
-            {
-              role: 'system',
-              content:
-                'Bạn là Jami AI, trợ lý học tập cho học sinh Việt Nam theo chuẩn GDPT 2018. Trích xuất mục tiêu học tập từ văn bản của học sinh dưới định dạng JSON chính xác.',
-            },
-            { role: 'user', content: userText },
-          ],
-          response_format: { type: 'json_object' },
-        });
-
-        const content = completion.choices[0]?.message?.content;
-        if (content) {
-          const parsed = JSON.parse(content);
-          return VoiceGoalExtractionSchema.parse({
+        const res = await aiGateway.executeStructured(
+          'goal_extraction',
+          userText,
+          VoiceGoalExtractionSchema
+        );
+        if (res.data) {
+          return {
             transcript: userText,
-            ...parsed,
-          });
+            ...res.data,
+          };
         }
       } catch (err) {
         console.warn('[AI Adapter] OpenAI API error, using safe deterministic fallback', err);
@@ -173,26 +118,15 @@ export class AiAdapter {
    * Decomposes a large goal into manageable study tasks
    */
   public static async decomposeTask(goalSummary: string, subject: string): Promise<z.infer<typeof TaskDecompositionSchema>> {
-    const client = this.getClient();
-    if (client) {
+    if (aiGateway.isAvailable()) {
       try {
-        const completion = await client.chat.completions.create({
-          model: this.getTextModel(),
-          messages: [
-            {
-              role: 'system',
-              content:
-                'Chia nhỏ mục tiêu học tập thành 2-3 nhiệm vụ học tập cụ thể, thực tế theo chuẩn GDPT 2018 dưới dạng JSON.',
-            },
-            { role: 'user', content: `Môn học: ${subject}. Mục tiêu: ${goalSummary}` },
-          ],
-          response_format: { type: 'json_object' },
-        });
-
-        const content = completion.choices[0]?.message?.content;
-        if (content) {
-          const parsed = JSON.parse(content);
-          return TaskDecompositionSchema.parse(parsed);
+        const res = await aiGateway.executeStructured(
+          'task_decomposition',
+          { goalSummary, subject },
+          TaskDecompositionSchema
+        );
+        if (res.data) {
+          return res.data;
         }
       } catch (err) {
         console.warn('[AI Adapter] OpenAI decomposition call failed, falling back to deterministic template', err);
@@ -520,8 +454,8 @@ Trả về JSON có cấu trúc đúng chuẩn:
   ]
 }`;
 
-        const userPrompt = `Phạm vi kiểm tra: ${params.scope || 'Chương trình chuẩn'}
-Chủ đề trọng tâm: ${topicsText}
+        const userPrompt = `Phạm vi kiểm tra: ${wrapUntrustedData(params.scope || 'Chương trình chuẩn')}
+Chủ đề trọng tâm: ${wrapUntrustedData(topicsText)}
 Mốc ôn tập: ${milestone}`;
 
         const completion = await client.chat.completions.create({
@@ -596,10 +530,10 @@ Mốc ôn tập: ${milestone}`;
     if (client && params.userAnswer.trim().length > 0) {
       try {
         const prompt = `Chấm điểm câu trả lời tự luận ngắn của học sinh:
-Câu hỏi: ${params.questionPrompt}
-Đáp án mẫu: ${params.correctAnswer}
-Rubric / Tiêu chí: ${params.rubric || 'Đúng ý nghĩa chính hoặc tương đương'}
-Câu trả lời của học sinh: ${params.userAnswer}
+Câu hỏi: ${wrapUntrustedData(params.questionPrompt)}
+Đáp án mẫu: ${wrapUntrustedData(params.correctAnswer)}
+Rubric / Tiêu chí: ${wrapUntrustedData(params.rubric || 'Đúng ý nghĩa chính hoặc tương đương')}
+Câu trả lời của học sinh: ${wrapUntrustedData(params.userAnswer)}
 
 Trả về JSON:
 {
@@ -661,10 +595,10 @@ Nhiệm vụ: Phân tích nhiệm vụ học tập thành hướng dẫn thực 
 Dữ liệu nhiệm vụ:
 - Môn học: ${subj}
 - Khối lớp: Lớp ${gradeLevel}
-- Tiêu đề: "${task.title}"
-- Mục tiêu: "${task.objective || 'Nắm vững kiến thức và hoàn thành bài tập'}"
+- Tiêu đề: "${wrapUntrustedData(task.title)}"
+- Mục tiêu: "${wrapUntrustedData(task.objective || 'Nắm vững kiến thức và hoàn thành bài tập')}"
 - Tổng thời gian: ${totalMinutes} phút
-${additionalNotes ? `- Ghi chú thêm từ học sinh: "${additionalNotes}"` : ''}
+${additionalNotes ? `- Ghi chú thêm từ học sinh: "${wrapUntrustedData(additionalNotes)}"` : ''}
 
 Quy tắc bắt buộc:
 1. Chia nhiệm vụ thành 3 đến 5 bước nhỏ, mỗi bước có thời gian plannedMinutes cụ thể.
@@ -677,7 +611,7 @@ Quy tắc bắt buộc:
           model: this.getTextModel(),
           messages: [
             { role: 'system', content: systemPrompt },
-            { role: 'user', content: `Hãy tạo hướng dẫn thực hiện chi tiết cho nhiệm vụ "${task.title}".` },
+            { role: 'user', content: `Hãy tạo hướng dẫn thực hiện chi tiết cho nhiệm vụ (Tiêu đề: ${wrapUntrustedData(task.title)}).` },
           ],
           response_format: { type: 'json_object' },
         });
@@ -972,11 +906,11 @@ Trả về đúng định dạng JSON chuẩn:
 Nhiệm vụ: Giải thích chi tiết, dễ hiểu từng bước cho học sinh Việt Nam.
 Thông tin:
 - Môn học: ${subjectName}
-- Bài học: "${taskTitle}"
-- Bước cần giải thích: "${step.title}"
-- Hướng dẫn của bước: "${step.instruction}"
-- Kết quả cần đạt: "${step.expectedOutput}"
-${studentQuestion ? `- Câu hỏi thắc mắc của học sinh: "${studentQuestion}"` : ''}
+- Bài học: "${wrapUntrustedData(taskTitle)}"
+- Bước cần giải thích: "${wrapUntrustedData(step.title)}"
+- Hướng dẫn của bước: "${wrapUntrustedData(step.instruction)}"
+- Kết quả cần đạt: "${wrapUntrustedData(step.expectedOutput)}"
+${studentQuestion ? `- Câu hỏi thắc mắc của học sinh: "${wrapUntrustedData(studentQuestion)}"` : ''}
 
 Hãy trả về JSON với cấu trúc:
 {
@@ -1047,9 +981,9 @@ Hãy trả về JSON với cấu trúc:
         const prompt = `Bạn là Jami - Giám khảo AI đánh giá minh chứng bài làm của học sinh.
 Thông tin:
 - Môn: ${subjectName}
-- Tên bài: "${taskTitle}"
-- Tiêu chí đánh giá: ${JSON.stringify(criteria)}
-- Bài làm / Minh chứng của học sinh: "${evidenceText}"
+- Tên bài: "${wrapUntrustedData(taskTitle)}"
+- Tiêu chí đánh giá: ${wrapUntrustedData(criteria)}
+- Bài làm / Minh chứng của học sinh: "${wrapUntrustedData(evidenceText)}"
 
 Hãy chấm điểm và nhận xét khách quan. Trả về JSON:
 {
@@ -1126,10 +1060,10 @@ Hãy chấm điểm và nhận xét khách quan. Trả về JSON:
         const prompt = `Bạn là Jami - Trợ lý học tập AI. Hãy phân tích dữ liệu học sinh để đề xuất các mục chuẩn bị cho ngày mai (tổng thời gian tối đa ${context.maxMinutes} phút, mức năng lượng: ${context.energyLevel}):
 
 Dữ liệu học tập:
-1. Môn học ngày mai: ${JSON.stringify(context.tomorrowSubjects)}
-2. Ghi chú & Check-in hôm nay: ${JSON.stringify(context.todayCheckins)}
-3. Bài tập đến hạn: ${JSON.stringify(context.dueTasks)}
-4. Bài kiểm tra sắp tới: ${JSON.stringify(context.upcomingExams)}
+1. Môn học ngày mai: ${wrapUntrustedData(context.tomorrowSubjects)}
+2. Ghi chú & Check-in hôm nay: ${wrapUntrustedData(context.todayCheckins)}
+3. Bài tập đến hạn: ${wrapUntrustedData(context.dueTasks)}
+4. Bài kiểm tra sắp tới: ${wrapUntrustedData(context.upcomingExams)}
 
 Quy tắc:
 - Ưu tiên: 1. Bài tập phải nộp ngày mai -> 2. Bài kiểm tra sắp tới -> 3. Phần hôm nay chưa hiểu -> 4. Bài tập về nhà -> 5. Xem trước bài ngày mai -> 6. Chuẩn bị sách vở.
@@ -1194,9 +1128,9 @@ Quy tắc:
       try {
         const prompt = `Bạn là Jami - Trợ lý luyện đề AI. Hãy tạo 1 câu hỏi tương tự cùng dạng kiến thức để học sinh kiểm tra lại mức độ hiểu bài:
 Môn: ${context.subjectName || 'Học tập'}
-Chủ đề: ${context.topic}
-Câu hỏi gốc: "${context.originalQuestion}"
-Đáp án đúng gốc: "${context.correctAnswer}"
+Chủ đề: ${wrapUntrustedData(context.topic)}
+Câu hỏi gốc: "${wrapUntrustedData(context.originalQuestion)}"
+Đáp án đúng gốc: "${wrapUntrustedData(context.correctAnswer)}"
 Độ khó: ${context.difficulty || 'medium'}
 
 Trả về định dạng JSON:
@@ -1252,10 +1186,10 @@ Trả về định dạng JSON:
     if (client) {
       try {
         const prompt = `Giải thích ngắn gọn cho học sinh về câu hỏi này:
-- Câu hỏi: "${context.questionText}"
-- Đáp án học sinh chọn: "${context.selectedAnswer || 'Chưa chọn'}"
-- Đáp án đúng: "${context.correctAnswer}"
-- Lý do sai: "${context.mistakeReason || 'Khác'}"
+- Câu hỏi: "${wrapUntrustedData(context.questionText)}"
+- Đáp án học sinh chọn: "${wrapUntrustedData(context.selectedAnswer || 'Chưa chọn')}"
+- Đáp án đúng: "${wrapUntrustedData(context.correctAnswer)}"
+- Lý do sai: "${wrapUntrustedData(context.mistakeReason || 'Khác')}"
 
 Trả về JSON:
 {
