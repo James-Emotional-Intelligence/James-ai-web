@@ -844,7 +844,9 @@ export class JamiActionService {
         case 'create_reminder':
         case 'preview_create_reminder': {
           const title = String(args?.title || args?.content || '').trim();
-          const scheduledFor = args?.scheduledFor ? new Date(args.scheduledFor).toISOString() : undefined;
+          const scheduledFor = args?.scheduledFor
+            ? new Date(args.scheduledFor).toISOString()
+            : (args?.timeStr ? calculateTargetDateTimeIso(undefined, args.timeStr) : undefined);
           if (!title || !scheduledFor) {
             return { success: false, message: 'Vui lòng cung cấp tiêu đề và thời điểm nhắc hợp lệ.' };
           }
@@ -1280,8 +1282,10 @@ export class JamiActionService {
             dayOfWeek: p.dayOfWeek,
             startLocalTime: p.startLocalTime,
             endLocalTime: p.endLocalTime,
-            room: p.room,
+            location: p.location || p.room,
             teacher: p.teacher,
+            commuteBeforeMinutes: p.commuteBeforeMinutes ?? 0,
+            commuteAfterMinutes: p.commuteAfterMinutes ?? 0,
           });
           resultMsg = `Đã thêm tiết học "${entry.title}" vào thời khóa biểu chính khóa thành công.`;
           clientAction = { type: 'navigate', route: '/timetable' };
@@ -1297,6 +1301,9 @@ export class JamiActionService {
             type: p.type,
             timezone: p.timezone || 'Asia/Ho_Chi_Minh',
             isFixed: true,
+            location: p.location,
+            commuteBeforeMinutes: p.commuteBeforeMinutes ?? 0,
+            commuteAfterMinutes: p.commuteAfterMinutes ?? 0,
             source: 'jami_voice',
           });
           resultMsg = `Đã thêm lịch bận "${event.title}" vào thời khóa biểu thành công.`;
@@ -1342,16 +1349,67 @@ export class JamiActionService {
 
         case 'create_reminder': {
           const p = proposal.payload;
+          const title = p.title || p.content;
+          const scheduledFor = p.scheduledFor
+            ? new Date(p.scheduledFor).toISOString()
+            : (p.timeStr ? calculateTargetDateTimeIso(undefined, p.timeStr) : undefined);
+          if (!title || !scheduledFor) {
+            throw new Error('Payload lời nhắc thiếu tiêu đề hoặc thời điểm nhắc.');
+          }
           await notificationRepo.create(userId, {
             type: 'system',
-            title: `Nhắc nhở: ${p.content}`,
-            body: p.timeStr ? `Lên lịch: ${p.timeStr}` : 'Nhắc nhở học tập từ trợ lý Jami',
-            actionUrl: '/notifications',
-            scheduledFor: p.scheduledFor || (p.dueAt ? new Date(p.dueAt).toISOString() : undefined),
-            dedupeKey: `remind_${userId}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            title: `Nhắc nhở: ${title}`,
+            body: p.body || (p.timeStr ? `Lên lịch: ${p.timeStr}` : 'Nhắc nhở học tập từ trợ lý Jami'),
+            actionUrl: p.actionUrl || '/notifications',
+            scheduledFor,
+            dedupeKey: `remind_${proposal.id}`,
           });
-          resultMsg = `Đã tạo lời nhắc "${p.content}" (${p.timeStr || 'hôm nay'}) vào danh sách thông báo thành công.`;
+          resultMsg = `Đã tạo lời nhắc "${title}" vào danh sách thông báo thành công.`;
           clientAction = { type: 'navigate', route: '/notifications' };
+          break;
+        }
+
+        case 'create_mistake_entry': {
+          const p = proposal.payload;
+          const mistake = await mistakeRepo.create(userId, {
+            subjectId: p.subjectId || null,
+            topic: p.topic || 'Khác',
+            questionText: p.questionText,
+            selectedAnswer: p.selectedAnswer || null,
+            correctAnswer: p.correctAnswer,
+            mistakeReason: p.mistakeReason || 'other',
+            correctExplanation: [p.correctSolution, p.lessonLearned ? `Bài học: ${p.lessonLearned}` : '']
+              .filter(Boolean)
+              .join('\n\n'),
+            difficulty: p.difficulty || 'medium',
+            sourceType: 'manual',
+          });
+          resultMsg = `Đã lưu lỗi sai vào Sổ lỗi sai: "${mistake.topic}".`;
+          clientAction = { type: 'navigate', route: '/reports' };
+          break;
+        }
+
+        case 'cancel_event': {
+          const p = proposal.payload;
+          let ok = false;
+          if (p.eventType === 'task') {
+            const existing = await taskRepo.getById(userId, p.eventId);
+            if (!existing) throw new Error('Nhiệm vụ không tồn tại hoặc không thuộc quyền sở hữu.');
+            const updated = await taskRepo.update(userId, p.eventId, { status: 'cancelled' });
+            ok = Boolean(updated);
+            clientAction = { type: 'navigate', route: '/tasks' };
+          } else if (p.eventType === 'busy_event') {
+            ok = await timetableRepo.deleteBusyEvent(userId, p.eventId);
+            clientAction = { type: 'navigate', route: '/timetable' };
+          } else if (p.eventType === 'timetable_entry') {
+            ok = await timetableRepo.deleteTimetableEntry(userId, p.eventId);
+            clientAction = { type: 'navigate', route: '/timetable' };
+          } else if (p.eventType === 'reminder') {
+            ok = await notificationRepo.delete(userId, p.eventId);
+            clientAction = { type: 'navigate', route: '/notifications' };
+          }
+          if (!ok) throw new Error('Không thể hủy mục đã chọn hoặc mục không tồn tại.');
+          resultMsg = `Đã hủy "${p.label || p.eventId}" thành công.`;
           break;
         }
 

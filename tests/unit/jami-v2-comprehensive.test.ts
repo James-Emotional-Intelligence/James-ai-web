@@ -72,17 +72,10 @@ describe('SUPER PROMPT V2 Comprehensive Test Suite', () => {
   });
 
   describe('2. Canonical Tool Registry & Strict Validation', () => {
-    it('contains all 16 canonical tools with typed schemas', () => {
+    it('contains all 20 canonical tools with typed schemas', () => {
       const expectedTools = [
-        'preview_create_task',
-        'preview_add_busy_event',
-        'preview_replan_tasks',
-        'preview_add_timetable_entry',
-        'preview_create_exam_plan',
-        'preview_create_mistake_entry',
-        'preview_create_reminder',
-        'preview_cancel_event',
         'get_daily_schedule',
+        'get_next_task',
         'get_subject_progress',
         'get_upcoming_exams',
         'get_mistake_summary',
@@ -90,6 +83,17 @@ describe('SUPER PROMPT V2 Comprehensive Test Suite', () => {
         'get_task_details',
         'search_materials',
         'navigate_to',
+        'start_focus_timer',
+        'preview_create_task',
+        'preview_create_scheduled_task',
+        'preview_add_timetable_entry',
+        'preview_add_busy_event',
+        'preview_replan_tasks',
+        'preview_create_exam',
+        'preview_create_mistake_entry',
+        'preview_create_reminder',
+        'preview_mark_task_completed',
+        'preview_cancel_event',
       ];
 
       for (const name of expectedTools) {

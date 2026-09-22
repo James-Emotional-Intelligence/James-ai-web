@@ -7,6 +7,7 @@ import { jamiOrchestrator } from './jami-orchestrator';
 import { jamiRepo } from '../repositories/jami-repository';
 import { aiWalletRepo } from '../repositories/ai-wallet-repository';
 import { vndToMilliVnd, calculateTokenCostMilliVnd } from '../ai/model-pricing';
+import { getAllOpenAiToolDefinitions } from '../ai/tool-registry';
 
 export interface VoiceRequestLogRecord {
   id: string;
@@ -200,7 +201,7 @@ export class VoiceSessionService {
             voice: AiAdapter.getVoice(),
           },
         },
-        tools: JamiActionService.getToolDefinitions(),
+        tools: getAllOpenAiToolDefinitions(),
       };
 
       const formData = new FormData();
@@ -406,7 +407,7 @@ export class VoiceSessionService {
           voice,
         },
       },
-      tools: JamiActionService.getToolDefinitions(),
+      tools: getAllOpenAiToolDefinitions(),
     };
 
     const sessionPayload = {

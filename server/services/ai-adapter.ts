@@ -291,7 +291,12 @@ export class AiAdapter {
             actionIntent = {
               kind: 'mutate',
               toolName: 'preview_replan_tasks',
-              arguments: { reason: `Dời và tối ưu lại các nhiệm vụ học tập của ${studentName}` },
+              arguments: {
+                reason: `Dời và tối ưu lại các nhiệm vụ học tập của ${studentName}`,
+                strategy: 'balanced',
+                daysCount: 7,
+                preserveLocked: true,
+              },
             };
           }
 
@@ -335,6 +340,7 @@ export class AiAdapter {
             subjectName,
             estimatedMinutes: minutes,
             priority: 'high',
+            difficulty: 'medium',
           },
         },
       };
@@ -353,6 +359,9 @@ export class AiAdapter {
           toolName: 'preview_replan_tasks',
           arguments: {
             reason: `Dời và tối ưu lại các nhiệm vụ học tập của ${studentName}`,
+            strategy: 'balanced',
+            daysCount: 7,
+            preserveLocked: true,
           },
         },
       };
@@ -373,10 +382,13 @@ export class AiAdapter {
         citationsToUserMaterial: [],
         actionIntent: {
           kind: 'mutate',
-          toolName: 'create_reminder',
+          toolName: 'preview_create_reminder',
           arguments: {
-            content: `Học môn ${subjectName}`,
-            timeStr,
+            title: `Học môn ${subjectName}`,
+            body: `Thời gian người dùng yêu cầu: ${timeStr}`,
+            scheduledFor: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            priority: 'medium',
+            actionUrl: '/notifications',
           },
         },
       };
