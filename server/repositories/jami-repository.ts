@@ -161,7 +161,7 @@ export class JamiRepository {
         SELECT m.id, m.conversation_id, m.user_id, m.sender, m.text, m.content, m.emotion,
                m.suggested_actions_json, m.requires_confirmation, m.confirmation_summary,
                m.proposal_id, m.is_confirmed, m.client_message_id, m.created_at,
-               p.action_type as prop_action_type, p.arguments_json as prop_args, p.preview_json as prop_preview,
+               p.action_type as prop_action_type, p.payload_json as prop_payload, p.preview_text as prop_preview_text,
                p.status as prop_status, p.expires_at as prop_expires_at
         FROM jami_messages m
         LEFT JOIN jami_action_proposals p ON m.proposal_id = p.id
@@ -191,14 +191,18 @@ export class JamiRepository {
 
         let proposal: JamiActionProposal | undefined = undefined;
         if (r.proposal_id && r.prop_action_type) {
+          let parsedPayload: any = {};
+          try {
+            parsedPayload = typeof r.prop_payload === 'string' ? JSON.parse(r.prop_payload) : (r.prop_payload || {});
+          } catch {}
           proposal = {
             id: r.proposal_id,
             userId,
             conversationId: r.conversation_id,
             messageId: r.id,
             actionType: r.prop_action_type,
-            arguments: typeof r.prop_args === 'string' ? JSON.parse(r.prop_args) : r.prop_args,
-            preview: typeof r.prop_preview === 'string' ? JSON.parse(r.prop_preview) : r.prop_preview,
+            arguments: parsedPayload,
+            preview: r.prop_preview_text || (parsedPayload ? JSON.stringify(parsedPayload) : ''),
             status: r.prop_status || 'pending',
             expiresAt: r.prop_expires_at?.toISOString?.() || String(r.prop_expires_at),
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),

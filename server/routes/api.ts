@@ -58,6 +58,12 @@ import {
   BookBookmarkCreateSchema,
   BookHighlightCreateSchema,
   BookStudyAidRequestSchema,
+  AdminTopUpWalletSchema,
+  AdminDeductWalletSchema,
+  AdminSetUnlimitedWalletSchema,
+  AdminSetWalletStatusSchema,
+  AdminCreateRegistrationCodeSchema,
+  AdminRevokeRegistrationCodeSchema,
 } from '../../shared/schemas';
 import { env, isProduction, isProductionRuntime, isDatabaseRequired, isDemoMode } from '../config/env';
 import { createRateLimiter } from '../middleware/rate-limit';
@@ -105,6 +111,9 @@ import {
   sanitizeFileName,
 } from '../services/storage-service';
 import { materialProcessor } from '../services/material-processor';
+import { aiBillingService } from '../services/ai-billing-service';
+import { registrationCodeService } from '../services/registration-code-service';
+import { aiWalletRepo } from '../repositories/ai-wallet-repository';
 
 export const apiRouter = Router();
 const userRepo = UserRepository.getInstance();
@@ -326,6 +335,13 @@ apiRouter.post('/admin/users/:id/ban', requireAdmin, asyncHandler(async (req: Re
     return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
   }
 
+  if (targetUser.role === 'admin') {
+    const activeAdmins = await userRepo.countActiveAdmins();
+    if (activeAdmins <= 1) {
+      return sendError(req, res, 400, 'CANNOT_BAN_LAST_ADMIN', 'Không thể khóa tài khoản quản trị viên duy nhất của hệ thống.');
+    }
+  }
+
   const updated = await userRepo.setUserStatus(userId, 'banned');
   res.json({ success: true, user: updated, message: `Đã khóa tài khoản ${updated.email} thành công.` });
 }));
@@ -359,6 +375,13 @@ apiRouter.post('/admin/users/:id/role', requireAdmin, asyncHandler(async (req: R
     return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
   }
 
+  if (targetUser.role === 'admin' && role !== 'admin') {
+    const activeAdmins = await userRepo.countActiveAdmins();
+    if (activeAdmins <= 1) {
+      return sendError(req, res, 400, 'CANNOT_DEMOTE_LAST_ADMIN', 'Không thể hạ quyền quản trị viên duy nhất của hệ thống.');
+    }
+  }
+
   const updated = await userRepo.setUserRole(userId, role);
   res.json({ success: true, user: updated, message: `Đã cập nhật quyền thành công.` });
 }));
@@ -376,8 +399,175 @@ apiRouter.delete('/admin/users/:id', requireAdmin, asyncHandler(async (req: Requ
     return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
   }
 
+  if (targetUser.role === 'admin') {
+    const activeAdmins = await userRepo.countActiveAdmins();
+    if (activeAdmins <= 1) {
+      return sendError(req, res, 400, 'CANNOT_DELETE_LAST_ADMIN', 'Không thể xóa tài khoản quản trị viên duy nhất của hệ thống.');
+    }
+  }
+
   await userRepo.deleteUser(userId);
   res.json({ success: true, message: `Đã xóa tài khoản ${targetUser.email} thành công.` });
+}));
+
+// ==========================================
+// Admin AI Wallet & Registration Code Routes
+// ==========================================
+
+apiRouter.get('/admin/users/:id/ai-wallet', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const targetUser = await userRepo.findById(userId);
+  if (!targetUser) {
+    return sendError(req, res, 404, 'USER_NOT_FOUND', 'Người dùng không tồn tại.');
+  }
+  const wallet = await aiWalletRepo.getWallet(userId);
+  const view = await aiBillingService.getWalletView(userId);
+  res.json({ user: targetUser, wallet, view });
+}));
+
+apiRouter.get('/admin/users/:id/ai-wallet/transactions', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+  const resData = await aiBillingService.getTransactions(userId, { limit });
+  res.json(resData);
+}));
+
+apiRouter.post('/admin/users/:id/ai-wallet/top-up', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const adminUserId = (req as any).userId || 'system_admin';
+  const validated = AdminTopUpWalletSchema.safeParse(req.body);
+  if (!validated.success) {
+    return sendError(req, res, 400, 'INVALID_INPUT', 'Dữ liệu nạp ngân sách không hợp lệ.', validated.error.flatten());
+  }
+
+  const result = await aiBillingService.adminTopUp({
+    targetUserId: userId,
+    actorUserId: adminUserId,
+    amountVnd: validated.data.amountVnd,
+    reason: validated.data.reason,
+    idempotencyKey: validated.data.idempotencyKey,
+  });
+
+  res.json({ success: true, ...result, message: `Đã nạp ${validated.data.amountVnd.toLocaleString('vi-VN')}đ thành công.` });
+}));
+
+apiRouter.post('/admin/users/:id/ai-wallet/deduct', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const adminUserId = (req as any).userId || 'system_admin';
+  const validated = AdminDeductWalletSchema.safeParse(req.body);
+  if (!validated.success) {
+    return sendError(req, res, 400, 'INVALID_INPUT', 'Dữ liệu trừ ngân sách không hợp lệ.', validated.error.flatten());
+  }
+
+  const result = await aiBillingService.adminDeduct({
+    targetUserId: userId,
+    actorUserId: adminUserId,
+    amountVnd: validated.data.amountVnd,
+    reason: validated.data.reason,
+    idempotencyKey: validated.data.idempotencyKey,
+  });
+
+  res.json({ success: true, ...result, message: `Đã trừ ${validated.data.amountVnd.toLocaleString('vi-VN')}đ thành công.` });
+}));
+
+apiRouter.patch('/admin/users/:id/ai-wallet/unlimited', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const adminUserId = (req as any).userId || 'system_admin';
+  const validated = AdminSetUnlimitedWalletSchema.safeParse(req.body);
+  if (!validated.success) {
+    return sendError(req, res, 400, 'INVALID_INPUT', 'Dữ liệu gói không giới hạn không hợp lệ.', validated.error.flatten());
+  }
+
+  await aiBillingService.adminSetUnlimited({
+    targetUserId: userId,
+    actorUserId: adminUserId,
+    unlimitedForever: validated.data.unlimitedForever,
+    unlimitedUntil: validated.data.unlimitedUntil,
+    reason: validated.data.reason,
+    idempotencyKey: validated.data.idempotencyKey,
+  });
+
+  res.json({ success: true, message: `Đã cập nhật trạng thái không giới hạn thành công.` });
+}));
+
+apiRouter.patch('/admin/users/:id/ai-wallet/status', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.params.id;
+  const adminUserId = (req as any).userId || 'system_admin';
+  const validated = AdminSetWalletStatusSchema.safeParse(req.body);
+  if (!validated.success) {
+    return sendError(req, res, 400, 'INVALID_INPUT', 'Dữ liệu trạng thái ví không hợp lệ.', validated.error.flatten());
+  }
+
+  await aiBillingService.adminSetStatus({
+    targetUserId: userId,
+    actorUserId: adminUserId,
+    aiEnabled: validated.data.aiEnabled,
+    reason: validated.data.reason,
+    idempotencyKey: validated.data.idempotencyKey,
+  });
+
+  res.json({ success: true, message: `Đã cập nhật trạng thái hoạt động của ví AI thành công.` });
+}));
+
+apiRouter.get('/admin/registration-codes', requireAdmin, asyncHandler(async (_req: Request, res: Response) => {
+  const codes = await registrationCodeService.listCodes();
+  res.json({ codes });
+}));
+
+apiRouter.post('/admin/registration-codes', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const adminUserId = (req as any).userId || 'system_admin';
+  const validated = AdminCreateRegistrationCodeSchema.safeParse(req.body);
+  if (!validated.success) {
+    return sendError(req, res, 400, 'INVALID_INPUT', 'Dữ liệu tạo mã đăng ký không hợp lệ.', validated.error.flatten());
+  }
+
+  const created = await registrationCodeService.createCode(adminUserId, {
+    rewardType: validated.data.rewardType,
+    creditVnd: validated.data.creditVnd,
+    unlimitedForever: validated.data.unlimitedForever,
+    unlimitedUntil: validated.data.unlimitedUntil,
+    maxRedemptions: validated.data.maxRedemptions,
+    startsAt: validated.data.startsAt,
+    expiresAt: validated.data.expiresAt,
+    note: validated.data.note,
+  });
+
+  res.json({
+    success: true,
+    code: created,
+    message: 'Đã tạo mã đăng ký thành công. Hãy sao chép và lưu mã ngay vì mã chỉ hiển thị một lần duy nhất.',
+  });
+}));
+
+apiRouter.post('/admin/registration-codes/:id/revoke', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const codeId = req.params.id;
+  const adminUserId = (req as any).userId || 'system_admin';
+  const validated = AdminRevokeRegistrationCodeSchema.safeParse(req.body);
+  const reason = validated.success ? validated.data.reason : 'Quản trị viên thu hồi mã';
+
+  await registrationCodeService.revokeCode(adminUserId, codeId, reason);
+  res.json({ success: true, message: 'Đã thu hồi mã đăng ký thành công.' });
+}));
+
+// ==========================================
+// User AI Wallet Endpoints
+// ==========================================
+
+apiRouter.get('/ai-wallet/me', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const walletView = await aiBillingService.getWalletView(userId);
+  res.json({
+    wallet: walletView,
+    usdToVndRate: env.AI_USD_TO_VND_RATE || 26000,
+    lowBalanceWarningVnd: env.AI_LOW_BALANCE_WARNING_VND || 2000,
+  });
+}));
+
+apiRouter.get('/ai-wallet/me/transactions', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+  const resData = await aiBillingService.getTransactions(userId, { limit });
+  res.json(resData);
 }));
 
 // ==========================================
@@ -600,7 +790,7 @@ apiRouter.post('/auth/register', authRateLimiter, asyncHandler(async (req: Reque
     return sendError(req, res, 400, 'VALIDATION_ERROR', errorMsg);
   }
 
-  const { email, password, displayName, preferredName, gradeLevel } = parseResult.data;
+  const { email, password, displayName, preferredName, gradeLevel, registrationCode } = parseResult.data;
   const userAgent = req.headers['user-agent'];
   const ipAddress = req.ip || req.socket?.remoteAddress;
 
@@ -613,6 +803,7 @@ apiRouter.post('/auth/register', authRateLimiter, asyncHandler(async (req: Reque
       gradeLevel: Number(gradeLevel) || 9,
       userAgent,
       ipAddress,
+      registrationCode: registrationCode ? registrationCode.trim() : undefined,
     });
 
     authService.setAuthCookie(res, rawToken, true);
@@ -626,6 +817,14 @@ apiRouter.post('/auth/register', authRateLimiter, asyncHandler(async (req: Reque
   } catch (err: any) {
     if (err instanceof EmailAlreadyExistsError || err.code === 'EMAIL_ALREADY_EXISTS' || err.message?.includes('đã được đăng ký')) {
       return sendError(req, res, 409, 'EMAIL_ALREADY_EXISTS', 'Email này đã được đăng ký. Vui lòng chuyển sang trang Đăng nhập.');
+    }
+    if (
+      err.name === 'InvalidRegistrationCodeError' ||
+      err.code === 'INVALID_REGISTRATION_CODE' ||
+      err.message?.includes('Mã không hợp lệ') ||
+      err.message?.includes('không còn khả dụng')
+    ) {
+      return sendError(req, res, 400, 'INVALID_REGISTRATION_CODE', 'Mã ưu đãi không hợp lệ, đã hết hạn hoặc hết lượt sử dụng. Bạn có thể xóa mã để đăng ký nhận 25.000đ mặc định.');
     }
     if (
       err instanceof DatabaseUnavailableError ||
@@ -1593,7 +1792,7 @@ apiRouter.post('/mistakes/:id/similar', requireAuth, asyncHandler(async (req: Re
     originalQuestion: mistake.questionText,
     correctAnswer: mistake.correctAnswer,
     difficulty: mistake.difficulty,
-  });
+  }, userId);
 
   res.json({ similarQuestion });
 }));
@@ -1610,19 +1809,24 @@ apiRouter.post('/mistakes/:id/explain', requireAuth, asyncHandler(async (req: Re
     selectedAnswer: mistake.selectedAnswer,
     correctAnswer: mistake.correctAnswer,
     mistakeReason: mistake.mistakeReason,
-  });
+  }, userId);
 
   res.json(explanation);
 }));
 
 // Timetable OCR Import from Image (Preview)
+<<<<<<< Updated upstream
 apiRouter.post('/timetables/import-ocr', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+=======
+apiRouter.post('/timetables/import-ocr', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+>>>>>>> Stashed changes
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Vui lòng cung cấp dữ liệu hình ảnh thời khóa biểu.');
   }
 
-  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || 'image/jpeg');
+  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || 'image/jpeg', userId);
   res.json({
     success: true,
     timetableName: result.timetableName,
@@ -1649,25 +1853,26 @@ apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async
     await timetableRepo.updateTimetable(userId, activeTimetable.id, { name: timetableName });
   }
 
+  let savedEntries: any[];
   if (replaceExisting) {
-    await timetableRepo.deleteAllEntries(userId, activeTimetable.id);
-  }
-
-  const savedEntries = [];
-  for (const item of entries) {
-    if (!item.title) continue;
-    const entry = await timetableRepo.createTimetableEntry(userId, {
-      timetableId: activeTimetable.id,
-      dayOfWeek: Number(item.dayOfWeek) || 1,
-      title: item.title.trim(),
-      startLocalTime: item.startLocalTime || '07:30',
-      endLocalTime: item.endLocalTime || '08:15',
-      room: item.room?.trim() || undefined,
-      location: item.room?.trim() || undefined,
-      commuteBeforeMinutes: 15,
-      commuteAfterMinutes: 15,
-    });
-    savedEntries.push(entry);
+    savedEntries = await timetableRepo.replaceTimetableEntries(userId, activeTimetable.id, entries);
+  } else {
+    savedEntries = [];
+    for (const item of entries) {
+      if (!item.title) continue;
+      const entry = await timetableRepo.createTimetableEntry(userId, {
+        timetableId: activeTimetable.id,
+        dayOfWeek: Number(item.dayOfWeek) || 1,
+        title: item.title.trim(),
+        startLocalTime: item.startLocalTime || '07:30',
+        endLocalTime: item.endLocalTime || '08:15',
+        room: item.room?.trim() || undefined,
+        location: item.room?.trim() || undefined,
+        commuteBeforeMinutes: 15,
+        commuteAfterMinutes: 15,
+      });
+      savedEntries.push(entry);
+    }
   }
 
   res.status(201).json({
@@ -1679,13 +1884,18 @@ apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async
 }));
 
 // Aliases for /schedules/import-ocr
+<<<<<<< Updated upstream
 apiRouter.post('/schedules/import-ocr', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+=======
+apiRouter.post('/schedules/import-ocr', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+>>>>>>> Stashed changes
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Vui lòng cung cấp dữ liệu hình ảnh thời khóa biểu.');
   }
 
-  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || 'image/jpeg');
+  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || 'image/jpeg', userId);
   res.json({
     success: true,
     timetableName: result.timetableName,
@@ -1711,25 +1921,26 @@ apiRouter.post('/schedules/import-ocr/confirm', requireAuth, asyncHandler(async 
     await timetableRepo.updateTimetable(userId, activeTimetable.id, { name: timetableName });
   }
 
+  let savedEntries: any[];
   if (replaceExisting) {
-    await timetableRepo.deleteAllEntries(userId, activeTimetable.id);
-  }
-
-  const savedEntries = [];
-  for (const item of entries) {
-    if (!item.title) continue;
-    const entry = await timetableRepo.createTimetableEntry(userId, {
-      timetableId: activeTimetable.id,
-      dayOfWeek: Number(item.dayOfWeek) || 1,
-      title: item.title.trim(),
-      startLocalTime: item.startLocalTime || '07:30',
-      endLocalTime: item.endLocalTime || '08:15',
-      room: item.room?.trim() || undefined,
-      location: item.room?.trim() || undefined,
-      commuteBeforeMinutes: 15,
-      commuteAfterMinutes: 15,
-    });
-    savedEntries.push(entry);
+    savedEntries = await timetableRepo.replaceTimetableEntries(userId, activeTimetable.id, entries);
+  } else {
+    savedEntries = [];
+    for (const item of entries) {
+      if (!item.title) continue;
+      const entry = await timetableRepo.createTimetableEntry(userId, {
+        timetableId: activeTimetable.id,
+        dayOfWeek: Number(item.dayOfWeek) || 1,
+        title: item.title.trim(),
+        startLocalTime: item.startLocalTime || '07:30',
+        endLocalTime: item.endLocalTime || '08:15',
+        room: item.room?.trim() || undefined,
+        location: item.room?.trim() || undefined,
+        commuteBeforeMinutes: 15,
+        commuteAfterMinutes: 15,
+      });
+      savedEntries.push(entry);
+    }
   }
 
   res.status(201).json({
@@ -1971,7 +2182,8 @@ apiRouter.post('/tasks/:id/execution-guide/generate', requireAuth, asyncHandler(
     task,
     profile?.gradeLevel || 9,
     task.subjectName,
-    additionalNotes
+    additionalNotes,
+    userId
   );
 
   const savedGuide = await taskRepo.saveExecutionGuide(userId, task.id, generatedGuide);
@@ -2004,7 +2216,7 @@ apiRouter.post('/tasks/:taskId/generate-steps', requireAuth, asyncHandler(async 
   if (!task) return sendError(req, res, 404, 'TASK_NOT_FOUND', 'Không tìm thấy nhiệm vụ học tập');
 
   const profile = await userRepo.getProfile(userId);
-  const guide = await AiAdapter.generateExecutionGuide(task, profile?.gradeLevel || 9, task.subjectName, req.body?.additionalNotes);
+  const guide = await AiAdapter.generateExecutionGuide(task, profile?.gradeLevel || 9, task.subjectName, req.body?.additionalNotes, userId);
   const savedGuide = await taskRepo.saveExecutionGuide(userId, task.id, guide);
 
   res.json({ guide: savedGuide, isDemoMode: !AiAdapter.isConfigured() });
@@ -2090,7 +2302,8 @@ apiRouter.post('/tasks/:taskId/explain-step', requireAuth, asyncHandler(async (r
     },
     task.title,
     task.subjectName || 'Môn học',
-    studentQuestion
+    studentQuestion,
+    userId
   );
 
   res.json({ explanation });
@@ -2112,7 +2325,8 @@ apiRouter.post('/tasks/:taskId/evaluate-evidence', requireAuth, asyncHandler(asy
     task.title,
     task.subjectName || 'Môn học',
     textValue || `Đã đính kèm tệp ${type}: ${fileUrl}`,
-    criteria
+    criteria,
+    userId
   );
 
   res.json({ evaluation });
@@ -2279,7 +2493,7 @@ apiRouter.post('/planner/voice-goal/preview', requireAuth, asyncHandler(async (r
 
   if (AiAdapter.isConfigured()) {
     try {
-      extraction = await AiAdapter.extractGoalFromText(transcript);
+      extraction = await AiAdapter.extractGoalFromText(transcript, userId);
       isDemoMode = false;
     } catch {
       extraction = { subjectName: 'Toán học', goalText: transcript, targetDate: new Date().toISOString() };
@@ -3805,18 +4019,62 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
   const chatRes = await AiAdapter.generateJamiChat(message.trim(), context);
 
   let proposal = chatRes.proposal;
-  const requiresConfirmation = chatRes.requiresConfirmation;
+  let clientAction = chatRes.clientAction;
+  let requiresConfirmation = Boolean(chatRes.requiresConfirmation);
   const confirmationSummary = chatRes.confirmationSummary;
 
-  // If rescheduling or mutation is needed, generate a real proposal in DB
-  if (requiresConfirmation && !proposal) {
-    const proposalRes = await jamiActionService.executeTool(
-      userId,
+  // Execute explicit actionIntent from AI response if provided
+  if (chatRes.actionIntent && chatRes.actionIntent.kind !== 'none') {
+    const { kind, toolName, arguments: toolArgs } = chatRes.actionIntent;
+    const allowedMutations = [
+      'preview_create_task',
+      'preview_add_busy_event',
       'preview_replan',
-      { reason: `Dời và tối ưu lại các nhiệm vụ học tập của ${studentName}` },
-      conversationId
-    );
-    proposal = proposalRes.proposal;
+      'preview_replan_tasks',
+      'preview_create_exam',
+      'mark_task_completed',
+      'create_reminder',
+      'preview_create_reminder',
+    ];
+    const allowedReads = [
+      'get_today_schedule',
+      'get_next_task',
+      'navigate_to',
+      'start_focus_timer',
+      'suggest_priority_task',
+      'open_material',
+      'create_quiz_revision',
+      'read_report',
+    ];
+
+    if (kind === 'mutate' && toolName && allowedMutations.includes(toolName)) {
+      const toolRes = await jamiActionService.executeTool(
+        userId,
+        toolName,
+        toolArgs || {},
+        conversationId
+      );
+      if (toolRes.success) {
+        proposal = toolRes.proposal;
+        requiresConfirmation = true;
+        if (toolRes.message && !chatRes.message) {
+          chatRes.message = toolRes.message;
+        }
+        if (toolRes.clientAction) {
+          clientAction = toolRes.clientAction;
+        }
+      }
+    } else if (kind === 'read' && toolName && allowedReads.includes(toolName)) {
+      const toolRes = await jamiActionService.executeTool(
+        userId,
+        toolName,
+        toolArgs || {},
+        conversationId
+      );
+      if (toolRes.clientAction) {
+        clientAction = toolRes.clientAction;
+      }
+    }
   }
 
   // 4. Save Jami reply message to MySQL with full proposal metadata
@@ -3841,7 +4099,7 @@ apiRouter.post('/jami/chat', requireAuth, asyncHandler(async (req: Request, res:
   res.json({
     userMessage: userMsg,
     replyMessage: jamiMsg,
-    clientAction: chatRes.clientAction,
+    clientAction,
     proposal,
     isDemoMode: isDemo,
   });
@@ -3935,6 +4193,36 @@ apiRouter.post('/voice/realtime/calls', requireAuth, asyncHandler(async (req: Re
 apiRouter.post('/jami/realtime/session', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const result = await voiceSessionService.createRealtimeClientSecret(userId);
+  res.json(result);
+}));
+
+apiRouter.post('/voice/realtime/sessions/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const sessionId = req.params.id;
+  const { actualCostMilliVnd, rawUsage, reason } = req.body || {};
+  const result = await voiceSessionService.finalizeRealtimeSession(userId, sessionId, {
+    actualCostMilliVnd,
+    rawUsage,
+    reason,
+  });
+  if (!result.success) {
+    return sendError(req, res, 400, 'FINALIZE_SESSION_FAILED', result.message);
+  }
+  res.json(result);
+}));
+
+apiRouter.post('/jami/realtime/sessions/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const sessionId = req.params.id;
+  const { actualCostMilliVnd, rawUsage, reason } = req.body || {};
+  const result = await voiceSessionService.finalizeRealtimeSession(userId, sessionId, {
+    actualCostMilliVnd,
+    rawUsage,
+    reason,
+  });
+  if (!result.success) {
+    return sendError(req, res, 400, 'FINALIZE_SESSION_FAILED', result.message);
+  }
   res.json(result);
 }));
 

@@ -52,23 +52,28 @@ describe('Robot Jami 2D Character & Animation Unit Tests', () => {
     });
 
     it('triggers natural blink within expected random timer window and resets', () => {
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
       const { result } = renderHook(() => useNaturalBlink({ state: 'idle' }));
 
       expect(result.current.isBlinking).toBe(false);
       expect(result.current.blinkProgress).toBe(0);
 
+      // Advance to trigger blink (with Math.random = 0.5, delay is 4500ms)
       act(() => {
-        vi.advanceTimersByTime(6600);
+        vi.advanceTimersByTime(4500);
       });
 
-      expect(result.current.blinkProgress).toBeGreaterThanOrEqual(0);
+      expect(result.current.isBlinking).toBe(true);
+      expect(result.current.blinkProgress).toBe(1);
 
+      // Advance through blink duration (135ms)
       act(() => {
-        vi.advanceTimersByTime(500);
+        vi.advanceTimersByTime(200);
       });
 
       expect(result.current.isBlinking).toBe(false);
       expect(result.current.blinkProgress).toBe(0);
+      randomSpy.mockRestore();
     });
 
     it('does not blink when robot is sleeping or disabled', () => {

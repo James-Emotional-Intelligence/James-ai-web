@@ -13,11 +13,16 @@ import {
   ChevronRight,
   Power,
   BookX,
+  Wallet,
+  Infinity as InfinityIcon,
+  ExternalLink,
+  AlertCircle,
 } from 'lucide-react';
-import { User, StudentProfile } from '../../../shared/types';
+import { User, StudentProfile, AiWalletView } from '../../../shared/types';
 import { MODULES_CONFIG } from '../../config/modules';
 import { useVoiceJami } from '../../context/VoiceJamiContext';
 import { useNotifications } from '../../context/NotificationContext';
+import { api } from '../../lib/api-client';
 
 interface TopAppBarProps {
   user?: User;
@@ -95,6 +100,17 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  const [wallet, setWallet] = useState<AiWalletView | null>(null);
+  const [showWalletModal, setShowWalletModal] = useState(false);
+
+  useEffect(() => {
+    if (user) {
+      api.getAiWalletMe()
+        .then((res) => setWallet(res.wallet))
+        .catch(() => {});
+    }
+  }, [user, location.pathname]);
 
   const displayName = user?.preferredName || user?.displayName || 'Học sinh';
   const grade = profile?.gradeLevel || 9;
@@ -185,6 +201,26 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
             <Sparkles className="w-3.5 h-3.5 text-[#050806]" />
             <span className="font-extrabold tracking-wide">Nói mục tiêu</span>
           </button>
+
+          {/* AI Budget Wallet Pill */}
+          {wallet && (
+            <button
+              onClick={() => setShowWalletModal(true)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-sm cursor-pointer ${
+                wallet.isUnlimited
+                  ? 'bg-purple-950/80 hover:bg-purple-900 border-purple-500/40 text-purple-200'
+                  : wallet.isLowBalance
+                  ? 'bg-amber-950/80 hover:bg-amber-900 border-amber-500/40 text-amber-300 animate-pulse'
+                  : 'bg-[#101A13] hover:bg-[#142219] border-[rgba(34,197,94,0.3)] hover:border-[#22C55E] text-[#86EFAC]'
+              }`}
+              title="Xem số dư ngân sách học tập AI và liên hệ nạp thêm"
+            >
+              <Wallet className="w-3.5 h-3.5 text-[#22C55E]" />
+              <span className="font-extrabold tracking-wide">
+                {wallet.isUnlimited ? 'AI Không giới hạn' : wallet.balanceFormatted}
+              </span>
+            </button>
+          )}
 
           {/* Notifications Bell */}
           <Link
@@ -385,6 +421,83 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Student AI Budget & Contact Admin Modal */}
+      {showWalletModal && wallet && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.35)] rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-[#16A34A]/20 text-[#22C55E] border border-[#22C55E]/30">
+                  <Wallet className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[#F3FAF5]">Ví Ngân Sách AI JAMI</h3>
+                  <p className="text-xs text-[#A9B8AE]">Dành riêng cho các tác vụ trợ lý AI thông minh</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowWalletModal(false)}
+                className="p-1.5 text-[#A9B8AE] hover:text-[#F3FAF5] text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Balance Display Card */}
+            <div className="p-4 bg-[#050806] rounded-2xl border border-[rgba(34,197,94,0.25)] text-center space-y-1">
+              <div className="text-xs font-semibold text-[#A9B8AE]">Số dư khả dụng hiện tại:</div>
+              <div className="text-3xl font-black text-[#86EFAC] tracking-tight">
+                {wallet.isUnlimited ? 'Không giới hạn (Unlimited)' : wallet.balanceFormatted}
+              </div>
+              {wallet.isLowBalance && !wallet.isUnlimited && (
+                <div className="text-xs text-amber-400 font-bold flex items-center justify-center gap-1 mt-1">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>Ngân sách AI sắp hết. Vui lòng nạp thêm để không gián đoạn học tập.</span>
+                </div>
+              )}
+            </div>
+
+            {/* Policy & Usage Info */}
+            <div className="text-xs text-[#A9B8AE] space-y-1.5 leading-relaxed bg-[#101A13]/60 p-3.5 rounded-xl border border-[rgba(34,197,94,0.15)]">
+              <div className="font-bold text-[#F3FAF5]">📌 Chính sách ngân sách học tập:</div>
+              <div>• Mỗi học sinh được cấp sẵn <strong className="text-[#86EFAC]">25.000đ</strong> khi tạo tài khoản.</div>
+              <div>• Các tính năng quản lý thời khóa biểu, danh sách việc cần làm, ghi chú và xem tài liệu <strong className="text-[#86EFAC]">hoàn toàn miễn phí</strong>.</div>
+              <div>• Ngân sách chỉ tiêu hao theo số token thực tế khi hỏi đáp JAMI AI, giải thích bài tập hoặc tạo đề ôn thi tự động.</div>
+            </div>
+
+            {/* Contact Admin Actions */}
+            <div className="space-y-2 pt-1">
+              <div className="text-xs font-bold text-[#F3FAF5] text-center">Liên hệ Quản trị viên để nạp thêm ngân sách:</div>
+              <div className="grid grid-cols-2 gap-2">
+                <a
+                  href={wallet.contactAdmin?.zalo || 'https://zalo.me'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="py-2.5 px-3 rounded-xl bg-[#0068FF] hover:bg-[#0055D4] text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-md shadow-blue-600/25"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Nhắn qua Zalo</span>
+                </a>
+                <a
+                  href={`mailto:${wallet.contactAdmin?.email || 'admin@jami.edu.vn'}?subject=Yêu cầu nạp thêm ngân sách AI JAMI (${user?.email})`}
+                  className="py-2.5 px-3 rounded-xl bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border border-[rgba(34,197,94,0.3)] hover:border-[#22C55E] font-bold text-xs transition flex items-center justify-center gap-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Gửi Email Admin</span>
+                </a>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowWalletModal(false)}
+              className="w-full py-2.5 bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] font-bold text-xs rounded-xl transition cursor-pointer border border-[#22C55E]/30"
+            >
+              Đã hiểu
+            </button>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

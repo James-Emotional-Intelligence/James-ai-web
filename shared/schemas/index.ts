@@ -14,6 +14,13 @@ export const RegisterRequestSchema = z
     gradeLevel: z.coerce.number().min(6, { message: 'Khối lớp từ 6 đến 12' }).max(12, { message: 'Khối lớp từ 6 đến 12' }).default(9),
     password: z.string().min(6, { message: 'Mật khẩu phải có ít nhất 6 ký tự' }),
     confirmPassword: z.string().min(6, { message: 'Mật khẩu xác nhận phải có ít nhất 6 ký tự' }),
+    registrationCode: z
+      .string()
+      .trim()
+      .max(64, { message: 'Mã ưu đãi không quá 64 ký tự' })
+      .regex(/^[A-Za-z0-9-_]+$/, { message: 'Mã ưu đãi chỉ gồm chữ cái, số và dấu gạch' })
+      .optional()
+      .or(z.literal('')),
     termsAccepted: z.boolean().refine((val) => val === true, {
       message: 'Vui lòng đồng ý với điều khoản sử dụng và chính sách bảo mật',
     }),
@@ -126,6 +133,13 @@ export const QuizDraftSchema = z.object({
   questions: z.array(QuizQuestionDraftSchema),
 });
 
+export const JamiActionIntentSchema = z.object({
+  kind: z.enum(['none', 'read', 'mutate']).default('none'),
+  toolName: z.string().optional(),
+  arguments: z.record(z.string(), z.any()).optional(),
+  targetRoute: z.string().optional(),
+});
+
 export const JamiResponseSchema = z.object({
   message: z.string(),
   emotion: z.enum([
@@ -145,6 +159,7 @@ export const JamiResponseSchema = z.object({
   requiresConfirmation: z.boolean().default(false),
   confirmationSummary: z.string().optional(),
   citationsToUserMaterial: z.array(z.string()).default([]),
+  actionIntent: JamiActionIntentSchema.optional(),
 });
 
 // ==========================================
@@ -733,6 +748,96 @@ export const BusyEventExceptionCreateSchema = z.object({
   reason: z.string().trim().max(255).optional(),
   exceptionType: z.enum(['cancelled', 'skip']).default('cancelled'),
 });
+
+export const AdminTopUpWalletSchema = z.object({
+  amountVnd: z.number().int().min(1000, { message: 'Số tiền nạp tối thiểu 1.000đ' }).max(100000000, { message: 'Số tiền nạp tối đa 100.000.000đ' }),
+  reason: z.string().trim().min(3, { message: 'Lý do tối thiểu 3 ký tự' }).max(500, { message: 'Lý do tối đa 500 ký tự' }),
+  idempotencyKey: z.string().trim().min(8, { message: 'idempotencyKey tối thiểu 8 ký tự' }).max(150),
+}).strict();
+
+export const AdminDeductWalletSchema = z.object({
+  amountVnd: z.number().int().min(1000, { message: 'Số tiền trừ tối thiểu 1.000đ' }).max(100000000, { message: 'Số tiền trừ tối đa 100.000.000đ' }),
+  reason: z.string().trim().min(3, { message: 'Lý do tối thiểu 3 ký tự' }).max(500, { message: 'Lý do tối đa 500 ký tự' }),
+  idempotencyKey: z.string().trim().min(8, { message: 'idempotencyKey tối thiểu 8 ký tự' }).max(150),
+}).strict();
+
+export const AdminSetUnlimitedWalletSchema = z.object({
+  unlimitedForever: z.boolean(),
+  unlimitedUntil: z.string().datetime({ message: 'Thời hạn không đúng chuẩn ISO date' }).optional().nullable(),
+  reason: z.string().trim().min(3, { message: 'Lý do tối thiểu 3 ký tự' }).max(500, { message: 'Lý do tối đa 500 ký tự' }),
+  idempotencyKey: z.string().trim().min(8, { message: 'idempotencyKey tối thiểu 8 ký tự' }).max(150),
+}).strict();
+
+export const AdminSetWalletStatusSchema = z.object({
+  aiEnabled: z.boolean(),
+  reason: z.string().trim().min(3, { message: 'Lý do tối thiểu 3 ký tự' }).max(500, { message: 'Lý do tối đa 500 ký tự' }),
+  idempotencyKey: z.string().trim().min(8, { message: 'idempotencyKey tối thiểu 8 ký tự' }).max(150),
+}).strict();
+
+export const AdminCreateRegistrationCodeSchema = z.object({
+  rewardType: z.enum(['credit', 'unlimited']),
+  creditVnd: z.number().int().min(1000).max(100000000).optional().nullable(),
+  unlimitedForever: z.boolean().default(false),
+  unlimitedUntil: z.string().datetime().optional().nullable(),
+  maxRedemptions: z.number().int().min(1).max(100000).default(1),
+  startsAt: z.string().datetime().optional().nullable(),
+  expiresAt: z.string().datetime().optional().nullable(),
+  note: z.string().trim().max(500).optional().nullable(),
+}).strict().superRefine((data, ctx) => {
+  if (data.rewardType === 'credit') {
+    if (!data.creditVnd || data.creditVnd <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['creditVnd'],
+        message: 'Mã loại nạp tiền bắt buộc phải có số tiền creditVnd lớn hơn 0',
+      });
+    }
+    if (data.unlimitedForever || data.unlimitedUntil) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rewardType'],
+        message: 'Mã loại credit không được chứa thiết lập vô hạn (unlimited)',
+      });
+    }
+  } else if (data.rewardType === 'unlimited') {
+    if (data.creditVnd && data.creditVnd > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['creditVnd'],
+        message: 'Mã loại unlimited không được chứa số tiền creditVnd',
+      });
+    }
+    if (!data.unlimitedForever && !data.unlimitedUntil) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unlimitedForever'],
+        message: 'Mã loại unlimited phải chọn vĩnh viễn (unlimitedForever) hoặc có ngày hết hạn (unlimitedUntil)',
+      });
+    }
+    if (data.unlimitedUntil && new Date(data.unlimitedUntil).getTime() <= Date.now()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unlimitedUntil'],
+        message: 'Thời hạn vô hạn (unlimitedUntil) phải là ngày trong tương lai',
+      });
+    }
+  }
+
+  if (data.startsAt && data.expiresAt) {
+    if (new Date(data.startsAt).getTime() >= new Date(data.expiresAt).getTime()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expiresAt'],
+        message: 'Ngày kết thúc (expiresAt) phải sau ngày bắt đầu (startsAt)',
+      });
+    }
+  }
+});
+
+export const AdminRevokeRegistrationCodeSchema = z.object({
+  reason: z.string().trim().min(3, { message: 'Lý do thu hồi tối thiểu 3 ký tự' }).max(500),
+}).strict();
+
 
 
 

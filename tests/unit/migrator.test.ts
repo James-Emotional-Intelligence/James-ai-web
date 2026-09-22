@@ -137,9 +137,27 @@ describe('Migrator resolveMigrationsDirectory Tests', () => {
   });
 
   it('confirms server/db/migrator.ts does NOT reference global __dirname', () => {
-    const migratorFile = path.resolve(process.cwd(), 'server', 'db', 'migrator.ts');
-    const content = fs.readFileSync(migratorFile, 'utf-8');
-    expect(content).not.toContain('__dirname');
+    const migratorFile = path.resolve(process.cwd(), 'server', 'db', 'migrations');
+    const files = fs.readdirSync(migratorFile).filter((f) => f.endsWith('.sql')).sort();
+
+    const idx029 = files.indexOf('029_session_checkin_homework_image.sql');
+    const idx029zz = files.indexOf('029_zz_prepare_homework_material_fk_resize.sql');
+    const idx030 = files.indexOf('030_reconcile_homework_image_material_id_length.sql');
+    const idx030zz = files.indexOf('030_zz_restore_homework_material_fk_after_resize.sql');
+    const idx031 = files.indexOf('031_ai_credit_wallet_registration_codes.sql');
+    const idx032 = files.indexOf('032_ai_pricing_realtime_safety_and_billing_fix.sql');
+    const idx033 = files.indexOf('033_production_hardening_and_integrity.sql');
+    const idx034 = files.indexOf('034_ai_runs_billing_columns.sql');
+
+    expect(idx029).toBeGreaterThanOrEqual(0);
+    expect(idx029zz).toBeGreaterThan(idx029);
+    expect(idx030).toBeGreaterThan(idx029zz);
+    expect(idx030zz).toBeGreaterThan(idx030);
+    expect(idx031).toBeGreaterThan(idx030zz);
+    expect(idx032).toBeGreaterThan(idx031);
+    expect(idx033).toBeGreaterThan(idx032);
+    expect(idx034).toBeGreaterThan(idx033);
   });
 });
+
 

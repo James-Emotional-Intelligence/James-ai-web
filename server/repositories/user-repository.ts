@@ -88,6 +88,18 @@ export class UserRepository {
 
     this.demoUsers.set(DEMO_USER.email.toLowerCase(), demoStored);
     this.demoProfiles.set(DEMO_USER.id, { ...DEMO_PROFILE });
+
+    const adminPassword = process.env.DEMO_ADMIN_PASSWORD || 'Minhtriet14';
+    const adminSalt = 'demo_salt_seed_james_1234';
+    const adminHash = crypto.createHash('sha256').update(adminPassword + adminSalt).digest('hex');
+    const adminStored: StoredUser = {
+      ...ADMIN_USER,
+      role: 'admin',
+      passwordHash: adminHash,
+      passwordSalt: adminSalt,
+      passwordScheme: 'sha256',
+    };
+    this.demoUsers.set(ADMIN_USER.email.toLowerCase(), adminStored);
   }
 
   public async hashPassword(password: string): Promise<{ passwordHash: string; passwordSalt: string; scheme: string }> {
@@ -504,6 +516,7 @@ export class UserRepository {
     password: string;
     displayName: string;
     preferredName?: string;
+    role?: 'user' | 'admin';
     gradeLevel?: number;
   }): Promise<{ user: User; profile: StudentProfile }> {
     const normalizedEmail = data.email.trim().toLowerCase();
@@ -517,14 +530,14 @@ export class UserRepository {
     const userId = 'usr_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const { passwordHash, passwordSalt, scheme } = await this.hashPassword(data.password);
     const createdAt = new Date().toISOString();
-    const role = (data as any).role || 'student';
+    const resolvedRole: 'user' | 'admin' = data.role === 'admin' ? 'admin' : 'user';
 
     const user: User = {
       id: userId,
       email: normalizedEmail,
       displayName: data.displayName.trim(),
       preferredName: (data.preferredName || data.displayName.trim().split(/\s+/).pop() || 'Học sinh').trim(),
-      role,
+      role: resolvedRole,
       locale: 'vi-VN',
       timezone: 'Asia/Ho_Chi_Minh',
       ageBand: '14-17',
@@ -559,7 +572,7 @@ export class UserRepository {
               scheme,
               user.displayName,
               user.preferredName,
-              role,
+              user.role || 'user',
               user.locale,
               user.timezone,
               user.ageBand,
@@ -825,10 +838,6 @@ export class UserRepository {
           u.preferredName.toLowerCase().includes(search)
       );
     }
-    if (statusFilter && statusFilter !== 'all') {
-      filtered = filtered.filter((u) => u.status === statusFilter);
-    }
-
     return {
       users: filtered,
       totalCount,
@@ -836,6 +845,20 @@ export class UserRepository {
       bannedCount,
       adminCount,
     };
+  }
+
+  public async countActiveAdmins(): Promise<number> {
+    if (db.isHealthy()) {
+      try {
+        const rows = await db.query<{ count: number }>(
+          `SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND status = 'active'`
+        );
+        return Number(rows[0]?.count || 0);
+      } catch (err: any) {
+        console.warn('[UserRepository] countActiveAdmins query fallback:', err.message);
+      }
+    }
+    return Array.from(this.demoUsers.values()).filter((u) => u.role === 'admin' && u.status === 'active').length;
   }
 
   public async setUserStatus(userId: string, status: 'active' | 'banned' | 'inactive'): Promise<User> {

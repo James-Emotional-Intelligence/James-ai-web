@@ -5,6 +5,7 @@ import { authService } from '../../server/services/auth-service';
 import { timetableRepo } from '../../server/repositories/timetable-repository';
 import { subjectRepo } from '../../server/repositories/subject-repository';
 import { taskRepo } from '../../server/repositories/task-repository';
+import { tomorrowPlanService } from '../../server/services/tomorrow-plan-service';
 
 describe('Tomorrow Preparation Plan Integration Tests ("Jami chuẩn bị ngày mai")', () => {
   const app = createApp();
@@ -27,6 +28,21 @@ describe('Tomorrow Preparation Plan Integration Tests ("Jami chuẩn bị ngày 
 
     const subjects = await subjectRepo.getByUserId(testUserId);
     const subjectId = subjects[0]?.id;
+
+    // Create active timetable with an entry for tomorrow
+    const dates = tomorrowPlanService.getPlanDates('Asia/Ho_Chi_Minh', new Date());
+    const tt = await timetableRepo.createTimetable(testUserId, {
+      name: 'TKB Khối 10',
+      isActive: true,
+    });
+    await timetableRepo.createTimetableEntry(testUserId, {
+      timetableId: tt.id,
+      dayOfWeek: dates.tomorrowDOW,
+      title: 'Ngữ văn 10',
+      startLocalTime: '07:30',
+      endLocalTime: '08:15',
+      subjectId,
+    });
 
     // Create a task due tomorrow
     await taskRepo.create(testUserId, {

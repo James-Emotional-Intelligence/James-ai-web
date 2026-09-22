@@ -931,10 +931,15 @@ export class JamiActionService {
 
         case 'create_reminder': {
           const p = proposal.payload;
-          await notificationRepo.savePushSubscription(userId, {
-            endpoint: 'internal_reminder',
+          await notificationRepo.create(userId, {
+            type: 'system',
+            title: `Nhắc nhở: ${p.content}`,
+            body: p.timeStr ? `Lên lịch: ${p.timeStr}` : 'Nhắc nhở học tập từ trợ lý Jami',
+            actionUrl: '/notifications',
+            scheduledFor: p.scheduledFor || (p.dueAt ? new Date(p.dueAt).toISOString() : undefined),
+            dedupeKey: `remind_${userId}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           });
-          resultMsg = `Đã lưu lời nhắc "${p.content}" (${p.timeStr || 'đã lên lịch'}) vào hệ thống thông báo thành công.`;
+          resultMsg = `Đã tạo lời nhắc "${p.content}" (${p.timeStr || 'hôm nay'}) vào danh sách thông báo thành công.`;
           clientAction = { type: 'navigate', route: '/notifications' };
           break;
         }
@@ -964,7 +969,7 @@ export class JamiActionService {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, user_id, action_type, payload_json, summary, expires_at, status, confirmed_at, idempotency_key, created_at
+          `SELECT id, user_id, conversation_id, action_type, payload_json, preview_text, expires_at, status, confirmed_at, created_at
            FROM jami_action_proposals
            WHERE id = ? AND user_id = ?`,
           [proposalId, userId]
@@ -974,8 +979,9 @@ export class JamiActionService {
           return {
             id: r.id,
             userId: r.user_id,
+            conversationId: r.conversation_id || undefined,
             actionType: r.action_type,
-            previewText: r.summary || '',
+            previewText: r.preview_text || '',
             payload: typeof r.payload_json === 'string' ? JSON.parse(r.payload_json) : r.payload_json,
             status: r.status,
             expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : new Date().toISOString(),
@@ -995,8 +1001,17 @@ export class JamiActionService {
   private async updateProposalStatus(userId: string, proposalId: string, status: 'confirmed' | 'rejected' | 'failed' | 'expired') {
     if (db.isHealthy()) {
       try {
+        let timestampField = 'updated_at = NOW(3)';
+        if (status === 'confirmed') {
+          timestampField = 'confirmed_at = NOW(3), updated_at = NOW(3)';
+        } else if (status === 'rejected') {
+          timestampField = 'rejected_at = NOW(3), updated_at = NOW(3)';
+        } else if (status === 'processing') {
+          timestampField = 'processing_at = NOW(3), updated_at = NOW(3)';
+        }
+
         await db.execute(
-          `UPDATE jami_action_proposals SET status = ?, confirmed_at = NOW(3), updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
+          `UPDATE jami_action_proposals SET status = ?, ${timestampField} WHERE id = ? AND user_id = ?`,
           [status, proposalId, userId]
         );
       } catch (err: any) {
@@ -1008,7 +1023,9 @@ export class JamiActionService {
     const item = list.find((p) => p.id === proposalId);
     if (item) {
       item.status = status;
-      item.confirmedAt = new Date().toISOString();
+      if (status === 'confirmed') {
+        item.confirmedAt = new Date().toISOString();
+      }
     }
   }
 }

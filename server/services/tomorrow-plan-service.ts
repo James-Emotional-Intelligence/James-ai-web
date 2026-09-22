@@ -321,21 +321,16 @@ export class TomorrowPlanService {
       dates.currentTimeStr
     );
 
-    if (availableFreeMinutes <= 0) {
-      return await tomorrowPlanRepo.createOrReplacePlan(
-        userId,
-        {
-          planDate: dates.planDate,
-          targetDate: dates.targetDate,
-          availableStart: eveningStart,
-          availableEnd: eveningEnd,
-          energyLevel,
-          totalMinutes: 0,
-          status: 'empty',
-        },
-        []
-      );
-    }
+    const effectiveFreeMinutes = options?.customAvailableMinutes || (availableFreeMinutes > 0 ? availableFreeMinutes : 60);
+    const effectiveSlots = freeSlots.length > 0
+      ? freeSlots
+      : [{
+          start: '20:00',
+          end: '22:00',
+          startMinutes: 1200,
+          endMinutes: 1320,
+          durationMinutes: 120,
+        }];
 
     // Energy max minutes capacity
     let energyCapMinutes = 50;
@@ -345,8 +340,8 @@ export class TomorrowPlanService {
     else if (energyLevel === 'due_only') energyCapMinutes = 40;
 
     const targetMaxMinutes = options?.customAvailableMinutes
-      ? Math.min(options.customAvailableMinutes, availableFreeMinutes || 60)
-      : Math.min(energyCapMinutes, availableFreeMinutes > 0 ? availableFreeMinutes : energyCapMinutes);
+      ? Math.min(options.customAvailableMinutes, effectiveFreeMinutes || 60)
+      : Math.min(energyCapMinutes, effectiveFreeMinutes > 0 ? effectiveFreeMinutes : energyCapMinutes);
 
     // 1. Fetch Tomorrow's Timetable (Active timetable, not skipped)
     const activeTimetable = await timetableRepo.getActiveTimetable(userId);
@@ -517,7 +512,7 @@ export class TomorrowPlanService {
         upcomingExams: upcomingExams.map((e) => ({ id: e.id, title: e.title, subjectName: e.subjectName, examAt: e.examAt })),
         energyLevel,
         maxMinutes: targetMaxMinutes,
-      });
+      }, userId);
 
       if (aiSuggestions.length > 0) {
         for (const sugg of aiSuggestions) {
@@ -562,7 +557,7 @@ export class TomorrowPlanService {
     // Place selected candidates into timeline slots with 5m breaks
     let currentSlotIndex = 0;
     const currentNowMinutes = dates.currentHour * 60 + dates.currentMinute;
-    let slotCursor = freeSlots.length > 0 ? freeSlots[0].startMinutes : Math.max(currentNowMinutes, timeToMinutes('19:30'));
+    let slotCursor = effectiveSlots.length > 0 ? effectiveSlots[0].startMinutes : Math.max(currentNowMinutes, timeToMinutes('19:30'));
     slotCursor = Math.ceil(slotCursor / 5) * 5;
 
     const finalItems: Array<Omit<TomorrowPreparationItem, 'id' | 'planId' | 'createdAt' | 'updatedAt'>> = [];
@@ -571,13 +566,13 @@ export class TomorrowPlanService {
       const c = selectedCandidates[i];
 
       // Check if current slot has enough room
-      if (freeSlots.length > 0) {
-        const currentSlot = freeSlots[currentSlotIndex];
+      if (effectiveSlots.length > 0) {
+        const currentSlot = effectiveSlots[currentSlotIndex];
         if (currentSlot && slotCursor + c.plannedMinutes > currentSlot.endMinutes) {
           // Move to next free slot if available
-          if (currentSlotIndex < freeSlots.length - 1) {
+          if (currentSlotIndex < effectiveSlots.length - 1) {
             currentSlotIndex++;
-            slotCursor = freeSlots[currentSlotIndex].startMinutes;
+            slotCursor = effectiveSlots[currentSlotIndex].startMinutes;
           }
         }
       }

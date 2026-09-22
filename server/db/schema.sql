@@ -558,6 +558,9 @@ CREATE TABLE IF NOT EXISTS ai_runs (
   latency_ms INT DEFAULT 0,
   prompt_tokens INT DEFAULT 0,
   completion_tokens INT DEFAULT 0,
+  cached_input_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  cost_milli_vnd BIGINT UNSIGNED NULL,
+  pricing_version VARCHAR(64) NOT NULL DEFAULT 'legacy-unpriced',
   estimated_cost DECIMAL(8,6) DEFAULT 0,
   safety_flags_json JSON NULL,
   error_code VARCHAR(50) NULL,
@@ -827,4 +830,173 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
   INDEX idx_notif_deliveries (notification_id),
   FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 51. ai_wallets (Ví ngân sách AI)
+CREATE TABLE IF NOT EXISTS ai_wallets (
+  user_id VARCHAR(36) PRIMARY KEY,
+  balance_milli_vnd BIGINT NOT NULL DEFAULT 0,
+  reserved_milli_vnd BIGINT NOT NULL DEFAULT 0,
+  ai_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  unlimited_forever BOOLEAN NOT NULL DEFAULT FALSE,
+  unlimited_until DATETIME(3) NULL,
+  version BIGINT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 52. ai_wallet_transactions (Sổ cái giao dịch ví AI bất biến)
+CREATE TABLE IF NOT EXISTS ai_wallet_transactions (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  actor_user_id VARCHAR(36) NULL,
+  type VARCHAR(32) NOT NULL,
+  amount_milli_vnd BIGINT NOT NULL,
+  balance_after_milli_vnd BIGINT NOT NULL,
+  reserved_after_milli_vnd BIGINT NOT NULL DEFAULT 0,
+  request_id VARCHAR(100) NULL,
+  ai_run_id VARCHAR(36) NULL,
+  registration_code_id VARCHAR(36) NULL,
+  idempotency_key VARCHAR(150) NOT NULL UNIQUE,
+  reason VARCHAR(500) NULL,
+  metadata_json JSON NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_ai_wallet_tx_user_created (user_id, created_at),
+  INDEX idx_ai_wallet_tx_actor (actor_user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 53. registration_codes (Mã ưu đãi / Mã kích hoạt)
+CREATE TABLE IF NOT EXISTS registration_codes (
+  id VARCHAR(36) PRIMARY KEY,
+  code_hash CHAR(64) NOT NULL UNIQUE,
+  code_prefix VARCHAR(12) NOT NULL,
+  reward_type VARCHAR(20) NOT NULL,
+  credit_milli_vnd BIGINT NULL,
+  unlimited_forever BOOLEAN NOT NULL DEFAULT FALSE,
+  unlimited_until DATETIME(3) NULL,
+  max_redemptions INT NOT NULL DEFAULT 1,
+  redemption_count INT NOT NULL DEFAULT 0,
+  per_user_limit INT NOT NULL DEFAULT 1,
+  starts_at DATETIME(3) NULL,
+  expires_at DATETIME(3) NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_by_admin_id VARCHAR(36) NULL,
+  note VARCHAR(500) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  revoked_at DATETIME(3) NULL,
+  INDEX idx_reg_codes_status (status),
+  INDEX idx_reg_codes_hash (code_hash),
+  FOREIGN KEY (created_by_admin_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 54. registration_code_redemptions (Nhật ký kích hoạt mã)
+CREATE TABLE IF NOT EXISTS registration_code_redemptions (
+  id VARCHAR(36) PRIMARY KEY,
+  code_id VARCHAR(36) NOT NULL,
+  user_id VARCHAR(36) NOT NULL,
+  reward_type VARCHAR(20) NOT NULL,
+  credit_milli_vnd BIGINT NULL,
+  redeemed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_code_user_redemption (code_id, user_id),
+  INDEX idx_reg_redemptions_user (user_id),
+  FOREIGN KEY (code_id) REFERENCES registration_codes(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 55. ai_realtime_sessions (Quản lý phiên WebRTC / Realtime Voice an toàn)
+CREATE TABLE IF NOT EXISTS ai_realtime_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  model VARCHAR(64) NOT NULL DEFAULT 'gpt-realtime',
+  reservation_idempotency_key VARCHAR(150) NOT NULL,
+  reserved_milli_vnd BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  status ENUM('active', 'completed', 'cancelled', 'expired', 'failed') NOT NULL DEFAULT 'active',
+  actual_cost_milli_vnd BIGINT UNSIGNED DEFAULT NULL,
+  pricing_version VARCHAR(64) NOT NULL DEFAULT '2026-09-19-standard',
+  raw_usage_json LONGTEXT DEFAULT NULL,
+  started_at DATETIME(3) NOT NULL,
+  expires_at DATETIME(3) DEFAULT NULL,
+  ended_at DATETIME(3) DEFAULT NULL,
+  reconciled_at DATETIME(3) DEFAULT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_rt_user_created (user_id, created_at),
+  INDEX idx_rt_status (status),
+  INDEX idx_rt_res_idemp (reservation_idempotency_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 56. jami_action_proposals (Quản lý đề xuất thay đổi dữ liệu có xác nhận)
+CREATE TABLE IF NOT EXISTS jami_action_proposals (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  conversation_id VARCHAR(36) NULL,
+  message_id VARCHAR(36) NULL,
+  action_type VARCHAR(50) NOT NULL,
+  payload_json JSON NOT NULL,
+  preview_text TEXT NOT NULL,
+  status VARCHAR(20) DEFAULT 'pending',
+  idempotency_key VARCHAR(64) NULL,
+  expires_at DATETIME(3) NOT NULL,
+  processing_at DATETIME(3) NULL,
+  confirmed_at DATETIME(3) NULL,
+  rejected_at DATETIME(3) NULL,
+  executed_at DATETIME(3) NULL,
+  error_code VARCHAR(50) NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_act_user_status_exp (user_id, status, expires_at),
+  INDEX idx_act_user_idemp (user_id, idempotency_key),
+  INDEX idx_act_conv (conversation_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 57. ai_wallet_reconcile_queue (Durable outbox cho đối soát ví AI)
+CREATE TABLE IF NOT EXISTS ai_wallet_reconcile_queue (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  idempotency_key VARCHAR(150) NOT NULL UNIQUE,
+  reserved_milli_vnd BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  actual_cost_milli_vnd BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  is_unlimited BOOLEAN NOT NULL DEFAULT FALSE,
+  request_id VARCHAR(100) NULL,
+  ai_run_id VARCHAR(64) NULL,
+  reason VARCHAR(255) NOT NULL,
+  metadata_json JSON NULL,
+  status ENUM('pending', 'processing', 'resolved', 'failed') NOT NULL DEFAULT 'pending',
+  retry_count INT NOT NULL DEFAULT 0,
+  last_error TEXT NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_rq_user_status (user_id, status),
+  INDEX idx_rq_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 58. material_processing_jobs (Hàng đợi xử lý tài liệu)
+CREATE TABLE IF NOT EXISTS material_processing_jobs (
+  id VARCHAR(36) PRIMARY KEY,
+  material_id VARCHAR(36) NOT NULL,
+  user_id VARCHAR(36) NOT NULL,
+  job_type VARCHAR(50) NOT NULL DEFAULT 'extract_and_chunk',
+  status VARCHAR(30) DEFAULT 'queued',
+  progress_percent INT DEFAULT 0,
+  attempt INT NOT NULL DEFAULT 0,
+  max_attempts INT NOT NULL DEFAULT 3,
+  lease_until DATETIME(3) NULL,
+  error_code VARCHAR(50) NULL,
+  error_message TEXT NULL,
+  started_at DATETIME(3) NULL,
+  completed_at DATETIME(3) NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_jobs_material (material_id),
+  INDEX idx_jobs_user_status (user_id, status),
+  FOREIGN KEY (material_id) REFERENCES learning_materials(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+
 

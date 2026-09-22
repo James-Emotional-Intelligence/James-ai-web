@@ -105,6 +105,18 @@ const EnvSchema = z.object({
   BOOK_MAX_ZIP_ENTRIES: z.preprocess((val) => (val ? Number(val) : 10000), z.number().default(10000)),
   AI_DAILY_QUOTA: z.preprocess((val) => (val ? Number(val) : 100), z.number().default(100)),
   AI_MAX_CONCURRENCY_PER_USER: z.preprocess((val) => (val ? Number(val) : 3), z.number().default(3)),
+
+  // AI Wallet, Billing & Registration Code Configuration
+  AI_DEFAULT_CREDIT_VND: z.preprocess((val) => (val ? Number(val) : 25000), z.number().default(25000)),
+  AI_USD_TO_VND_RATE: z.preprocess((val) => (val ? Number(val) : 27000), z.number().int().positive().default(27000)),
+  AI_PRICING_TIER: z.enum(['standard']).default('standard'),
+  AI_LOW_BALANCE_WARNING_VND: z.preprocess((val) => (val ? Number(val) : 5000), z.number().default(5000)),
+  AI_REALTIME_SESSION_RESERVE_VND: z.preprocess((val) => (val ? Number(val) : 10000), z.number().default(10000)),
+  AI_GLOBAL_DAILY_BUDGET_VND: z.preprocess((val) => (val ? Number(val) : 5000000), z.number().default(5000000)),
+  AI_USER_DAILY_SPEND_LIMIT_VND: z.preprocess((val) => (val ? Number(val) : 500000), z.number().default(500000)),
+  REGISTRATION_CODE_PEPPER: z.string().min(16).default('jami-registration-code-pepper-secret-32-chars'),
+  ADMIN_CONTACT_ZALO: z.string().default('https://zalo.me/g/jami_support'),
+  ADMIN_CONTACT_EMAIL: z.string().default('admin@jami.edu.vn'),
 });
 
 export type EnvConfig = z.infer<typeof EnvSchema>;
@@ -177,6 +189,15 @@ export function parseEnv(): EnvConfig {
     // 7. Password Reset SMTP Check
     if (parsed.PASSWORD_RESET_ENABLED && (!parsed.SMTP_HOST || !parsed.SMTP_USER)) {
       throw new Error('[JAMI Config ERROR] PASSWORD_RESET_ENABLED=true in production requires SMTP configuration (SMTP_HOST, SMTP_USER).');
+    }
+
+    // 8. Registration Code Pepper Secret Check
+    if (
+      !parsed.REGISTRATION_CODE_PEPPER ||
+      parsed.REGISTRATION_CODE_PEPPER === 'jami-registration-code-pepper-secret-32-chars' ||
+      parsed.REGISTRATION_CODE_PEPPER.length < 32
+    ) {
+      throw new Error('[JAMI Config ERROR] REGISTRATION_CODE_PEPPER must be set to a secure random string of at least 32 characters in Production mode.');
     }
   }
 

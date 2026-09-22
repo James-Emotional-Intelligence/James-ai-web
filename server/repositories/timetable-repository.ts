@@ -662,6 +662,105 @@ export class TimetableRepository {
     return count;
   }
 
+  /**
+   * Atomically replaces all entries in a timetable within a single transaction
+   */
+  public async replaceTimetableEntries(
+    userId: string,
+    timetableId: string,
+    entries: Partial<TimetableEntry>[]
+  ): Promise<TimetableEntry[]> {
+    if (db.isHealthy()) {
+      return db.withTransaction(async (conn) => {
+        const [ttRows]: any = await conn.query(
+          'SELECT id FROM school_timetables WHERE id = ? AND user_id = ?',
+          [timetableId, userId]
+        );
+        if (!ttRows || ttRows.length === 0) {
+          throw new Error('Không tìm thấy thời khóa biểu hoặc không có quyền.');
+        }
+
+        await conn.execute(
+          'DELETE FROM school_timetable_entries WHERE timetable_id = ?',
+          [timetableId]
+        );
+
+        const saved: TimetableEntry[] = [];
+        for (const item of entries) {
+          if (!item.title) continue;
+          const entryId = 'tte_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+          const dayOfWeek = Number(item.dayOfWeek) || 1;
+          const startLocalTime = item.startLocalTime || '07:30';
+          const endLocalTime = item.endLocalTime || '08:15';
+          const location = item.location || item.room || '';
+          const commuteBeforeMinutes = item.commuteBeforeMinutes ?? 15;
+          const commuteAfterMinutes = item.commuteAfterMinutes ?? 15;
+
+          await conn.execute(
+            `INSERT INTO school_timetable_entries
+             (id, timetable_id, subject_id, title, teacher, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              entryId,
+              timetableId,
+              item.subjectId || null,
+              item.title.trim(),
+              item.teacher || null,
+              dayOfWeek,
+              startLocalTime,
+              endLocalTime,
+              location,
+              commuteBeforeMinutes,
+              commuteAfterMinutes,
+            ]
+          );
+
+          saved.push({
+            id: entryId,
+            timetableId,
+            dayOfWeek,
+            subjectId: item.subjectId,
+            title: item.title.trim(),
+            teacher: item.teacher,
+            startLocalTime,
+            endLocalTime,
+            location,
+            room: location,
+            commuteBeforeMinutes,
+            commuteAfterMinutes,
+          });
+        }
+        return saved;
+      });
+    }
+
+    const list = this.demoEntries.get(userId) || [];
+    const remaining = list.filter((e) => e.timetableId !== timetableId);
+    const saved: TimetableEntry[] = [];
+    for (const item of entries) {
+      if (!item.title) continue;
+      const entryId = 'tte_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+      const e: TimetableEntry = {
+        id: entryId,
+        timetableId,
+        dayOfWeek: Number(item.dayOfWeek) || 1,
+        subjectId: item.subjectId,
+        title: item.title.trim(),
+        teacher: item.teacher,
+        startLocalTime: item.startLocalTime || '07:30',
+        endLocalTime: item.endLocalTime || '08:15',
+        location: item.location || item.room || '',
+        room: item.location || item.room || '',
+        commuteBeforeMinutes: item.commuteBeforeMinutes ?? 15,
+        commuteAfterMinutes: item.commuteAfterMinutes ?? 15,
+      };
+      saved.push(e);
+      remaining.push(e);
+    }
+    this.demoEntries.set(userId, remaining);
+    return saved;
+  }
+
   // ==========================================
   // Busy Events CRUD
   // ==========================================

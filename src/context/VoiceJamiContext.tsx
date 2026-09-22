@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { useNavigate } from 'react-router-dom';
 import { api, JamiChatMessageItem } from '../lib/api-client';
 import { isWakeWordDetected } from '../lib/wake-word';
+import { segmentTextByLanguage, findOptimalVoice, SpeechLanguage } from '../lib/speech-language';
 
 export type VoiceState =
   | 'disabled'
@@ -46,7 +47,7 @@ export interface VoiceJamiContextType {
   confirmProposal: (decision?: 'confirm' | 'reject') => Promise<void>;
   cancelCurrentTurn: () => void;
   sendManualCommand: (text: string) => Promise<void>;
-  speak: (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number }) => void;
+  speak: (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number; lang?: SpeechLanguage }) => void;
   stopSpeaking: () => void;
 }
 
@@ -83,89 +84,101 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const isMountedRef = useRef<boolean>(true);
   const isSpeakingRef = useRef<boolean>(false);
   const currentTurnIdRef = useRef<string>('');
+  const activeUtteranceIdRef = useRef<number>(0);
 
   /**
-   * Unified Text-to-Speech Engine using SpeechSynthesis
+   * Unified Text-to-Speech Engine using SpeechSynthesis with Intelligent Language Detection & Voice Selection
    */
   const speak = useCallback(
-    (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number }) => {
+    (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number; lang?: SpeechLanguage }) => {
       if (!('speechSynthesis' in window)) {
         options?.onEnd?.();
         return;
       }
 
-      // Cancel any ongoing speech
+      // Cancel any ongoing speech and advance speech ID to cancel active queue
       window.speechSynthesis.cancel();
+      const currentSpeechId = ++activeUtteranceIdRef.current;
 
-      // Clean markdown, symbols, and code blocks for crisp speech
-      const cleanText = text
-        .replace(/```[\s\S]*?```/g, '')
-        .replace(/`([^`]+)`/g, '$1')
-        .replace(/[*_#~>[\]]/g, '')
-        .replace(/https?:\/\/\S+/g, '')
-        .trim();
-
-      if (!cleanText) {
+      const segments = segmentTextByLanguage(text, options?.lang);
+      if (segments.length === 0) {
         options?.onEnd?.();
         return;
       }
 
-      const utterance = new SpeechSynthesisUtterance(cleanText);
-      utterance.lang = 'vi-VN';
-      utterance.rate = options?.rate || 1.05;
-      utterance.pitch = 1.0;
-
+      const fullCleanText = segments.map((s) => s.text).join(' ');
       const voices = window.speechSynthesis.getVoices();
-      const viVoice = voices.find((v) => v.lang.startsWith('vi') || v.name.includes('Vietnamese'));
-      if (viVoice) {
-        utterance.voice = viVoice;
-      }
+      let currentSegmentIdx = 0;
 
-      utterance.onstart = () => {
-        if (isMountedRef.current) {
+      const speakNextSegment = () => {
+        if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) {
+          return;
+        }
+
+        if (currentSegmentIdx >= segments.length) {
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          setSpeakingMessageId(null);
+          setCurrentUtteranceText('');
+          options?.onEnd?.();
+          return;
+        }
+
+        const segment = segments[currentSegmentIdx];
+        const utterance = new SpeechSynthesisUtterance(segment.text);
+        utterance.lang = segment.lang;
+        utterance.rate = options?.rate || (segment.lang === 'en-US' ? 1.0 : 1.05);
+        utterance.pitch = 1.0;
+
+        const optimalVoice = findOptimalVoice(voices, segment.lang);
+        if (optimalVoice) {
+          utterance.voice = optimalVoice;
+        }
+
+        utterance.onstart = () => {
+          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
           isSpeakingRef.current = true;
           setIsSpeaking(true);
           setSpeakingMessageId(options?.msgId || null);
-          setCurrentUtteranceText(cleanText);
-        }
-      };
+          setCurrentUtteranceText(fullCleanText);
+        };
 
-      utterance.onend = () => {
-        if (isMountedRef.current) {
-          isSpeakingRef.current = false;
-          setIsSpeaking(false);
-          setSpeakingMessageId(null);
-          setCurrentUtteranceText('');
-        }
-        options?.onEnd?.();
-      };
+        utterance.onend = () => {
+          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
+          currentSegmentIdx++;
+          speakNextSegment();
+        };
 
-      utterance.onerror = () => {
-        if (isMountedRef.current) {
-          isSpeakingRef.current = false;
-          setIsSpeaking(false);
-          setSpeakingMessageId(null);
-          setCurrentUtteranceText('');
-        }
-        options?.onEnd?.();
+        utterance.onerror = () => {
+          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
+          currentSegmentIdx++;
+          speakNextSegment();
+        };
+
+        window.speechSynthesis.speak(utterance);
       };
 
       // Workaround for Chrome SpeechSynthesis pause bug
       const resumeInterval = setInterval(() => {
+        if (activeUtteranceIdRef.current !== currentSpeechId) {
+          clearInterval(resumeInterval);
+          return;
+        }
         if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
           window.speechSynthesis.pause();
           window.speechSynthesis.resume();
-        } else {
+        } else if (!window.speechSynthesis.speaking) {
           clearInterval(resumeInterval);
         }
       }, 5000);
 
-      window.speechSynthesis.speak(utterance);
+      speakNextSegment();
     },
     []
   );
 
   const stopSpeaking = useCallback(() => {
+    activeUtteranceIdRef.current++;
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -176,8 +189,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, []);
 
   const speakText = useCallback(
-    (text: string, onEnd?: () => void) => {
-      speak(text, { onEnd });
+    (text: string, onEnd?: () => void, lang?: SpeechLanguage) => {
+      speak(text, { onEnd, lang });
     },
     [speak]
   );
@@ -186,6 +199,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
    * Release hardware resources cleanly
    */
   const cleanupHardware = useCallback(() => {
+    activeUtteranceIdRef.current++;
     if (speechRecognitionRef.current) {
       try {
         speechRecognitionRef.current.onresult = null;

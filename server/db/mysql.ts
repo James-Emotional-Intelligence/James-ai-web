@@ -202,7 +202,11 @@ class MySQLClient {
     }
 
     try {
-      const [result] = await this.pool.execute(sql, params);
+      const isPreparedUnsupported = !params || params.length === 0 ||
+        /^\s*(PREPARE|EXECUTE|DEALLOCATE|SET|SIGNAL|CREATE|ALTER|DROP)\b/i.test(sql);
+      const [result] = isPreparedUnsupported
+        ? await this.pool.query(sql, params)
+        : await this.pool.execute(sql, params);
       return result;
     } catch (err: any) {
       const isTransient =
