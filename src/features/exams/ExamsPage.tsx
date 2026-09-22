@@ -37,7 +37,7 @@ import {
 import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportExamsPlanToPdf, exportQuizToPdf } from '../../lib/pdf-export-service';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 export const ExamsPage: React.FC = () => {
   const [exams, setExams] = useState<Exam[]>([]);

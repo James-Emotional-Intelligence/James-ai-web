@@ -60,6 +60,17 @@ export class AiBillingService {
   }
 
   /**
+   * Retrieves paginated transaction history
+   */
+  public async getTransactions(
+    userId: string,
+    options?: { limit?: number; cursor?: string } | number
+  ): Promise<{ transactions: AiWalletTransaction[]; nextCursor?: string }> {
+    const opts = typeof options === 'number' ? { limit: options } : options;
+    return aiWalletRepo.getTransactions(userId, opts);
+  }
+
+  /**
    * Pre-execution reservation: checks balance & reserves estimated max token cost
    */
   public async reserveForAiExecution(params: {
@@ -262,13 +273,28 @@ export class AiBillingService {
   }
 
   /**
-   * Get Transactions
+   * Starts background recurring runner for reconciliation outbox queue
    */
-  public async getTransactions(
-    userId: string,
-    options?: { limit?: number; cursor?: string }
-  ): Promise<{ transactions: AiWalletTransaction[]; nextCursor?: string }> {
-    return aiWalletRepo.getTransactions(userId, options);
+  private reconcileWorkerTimer: NodeJS.Timeout | null = null;
+
+  public startReconcileQueueWorker(intervalMs = 30000): void {
+    if (this.reconcileWorkerTimer) return;
+    this.reconcileWorkerTimer = setInterval(async () => {
+      try {
+        await aiWalletRepo.processReconcileQueue();
+      } catch (err: any) {
+        console.warn('[AiBillingService] Error during reconcile queue worker tick:', err.message);
+      }
+    }, intervalMs);
+    // Initial run immediately
+    aiWalletRepo.processReconcileQueue().catch(() => {});
+  }
+
+  public stopReconcileQueueWorker(): void {
+    if (this.reconcileWorkerTimer) {
+      clearInterval(this.reconcileWorkerTimer);
+      this.reconcileWorkerTimer = null;
+    }
   }
 }
 

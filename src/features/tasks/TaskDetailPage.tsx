@@ -40,7 +40,7 @@ import { GuidedExecutionModal } from './GuidedExecutionModal';
 import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportTaskExecutionGuideToPdf } from '../../lib/pdf-export-service';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 export const TaskDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();

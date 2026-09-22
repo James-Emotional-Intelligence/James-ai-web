@@ -3,9 +3,10 @@ import { db } from '../db/mysql';
 import { env } from '../config/env';
 import { AiAdapter } from './ai-adapter';
 import { jamiActionService, JamiActionService } from './jami-action-service';
+import { jamiOrchestrator } from './jami-orchestrator';
 import { jamiRepo } from '../repositories/jami-repository';
 import { aiWalletRepo } from '../repositories/ai-wallet-repository';
-import { vndToMilliVnd } from '../ai/model-pricing';
+import { vndToMilliVnd, calculateTokenCostMilliVnd } from '../ai/model-pricing';
 
 export interface VoiceRequestLogRecord {
   id: string;
@@ -631,9 +632,47 @@ export class VoiceSessionService {
       return { success: true, message: 'Phiên thoại đã được kết thúc trước đó.' };
     }
 
-    const actualCost = options?.actualCostMilliVnd !== undefined
-      ? BigInt(options.actualCostMilliVnd.toString())
-      : 0n;
+    // Server-authoritative cost calculation: compute from usage tokens or elapsed duration, clamped to reservation
+    let calculatedCost = 0n;
+    if (options?.rawUsage) {
+      try {
+        const u = options.rawUsage;
+        const promptTokens = u.input_tokens || u.promptTokens || u.total_tokens?.input_tokens || 0;
+        const completionTokens = u.output_tokens || u.completionTokens || u.total_tokens?.output_tokens || 0;
+        const audioIn = u.input_token_details?.audio_tokens || u.audioInputTokens || 0;
+        const audioOut = u.output_token_details?.audio_tokens || u.audioOutputTokens || 0;
+        const cached = u.input_token_details?.cached_tokens || u.cachedTokens || 0;
+        if (promptTokens > 0 || completionTokens > 0 || audioIn > 0 || audioOut > 0) {
+          calculatedCost = calculateTokenCostMilliVnd('gpt-realtime', {
+            promptTokens,
+            completionTokens,
+            audioInputTokens: audioIn,
+            audioOutputTokens: audioOut,
+            cachedTokens: cached,
+          }).costMilliVnd;
+        }
+      } catch (err: any) {
+        console.warn('[VoiceSessionService] Error calculating usage-based cost:', err.message);
+      }
+    }
+
+    if (calculatedCost === 0n && options?.actualCostMilliVnd !== undefined) {
+      const clientCost = BigInt(options.actualCostMilliVnd.toString());
+      if (clientCost > 0n) {
+        calculatedCost = clientCost;
+      }
+    }
+
+    // Default duration-based safety charge if no usage tokens reported
+    if (calculatedCost === 0n) {
+      const memSess = this.inMemorySessions.get(sessionId);
+      const startTime = memSess?.startedAt ? memSess.startedAt.getTime() : Date.now();
+      const elapsedMinutes = Math.max(0.1, (Date.now() - startTime) / 60000);
+      calculatedCost = BigInt(Math.ceil(elapsedMinutes * 300_000));
+    }
+
+    // Clamp actual cost to reserved amount to prevent overdraft
+    const actualCost = calculatedCost <= sessionData.reservedMilliVnd ? calculatedCost : sessionData.reservedMilliVnd;
 
     await aiWalletRepo.reconcileCredit({
       userId,
@@ -745,6 +784,28 @@ export class VoiceSessionService {
     }
 
     return { sweptCount: count };
+  }
+
+  private sweeperTimer: NodeJS.Timeout | null = null;
+
+  public startStaleSessionSweeper(intervalMs = 300000): void {
+    if (this.sweeperTimer) return;
+    this.sweeperTimer = setInterval(async () => {
+      try {
+        await this.sweepStaleSessions();
+      } catch (err: any) {
+        console.warn('[VoiceSessionService] Error in stale session sweeper tick:', err.message);
+      }
+    }, intervalMs);
+    // Initial run immediately
+    this.sweepStaleSessions().catch(() => {});
+  }
+
+  public stopStaleSessionSweeper(): void {
+    if (this.sweeperTimer) {
+      clearInterval(this.sweeperTimer);
+      this.sweeperTimer = null;
+    }
   }
 
   /**
@@ -965,37 +1026,34 @@ export class VoiceSessionService {
       };
     }
 
-    // Use AI Gateway via AiAdapter with full billing protection
-    if (AiAdapter.isConfigured()) {
-      try {
-        const aiReply = await AiAdapter.generateJamiChat(cleanTranscript, { userId });
-        const replyMsg = await jamiRepo.saveMessage(userId, {
-          sender: 'jami',
-          text: aiReply.message,
-          emotion: aiReply.emotion || 'speaking',
-          requiresConfirmation: aiReply.requiresConfirmation,
-          confirmationSummary: aiReply.confirmationSummary,
-          proposalId: aiReply.proposal?.id,
-        });
+    // Use unified Jami Orchestrator with tool execution and context
+    try {
+      const turnResult = await jamiOrchestrator.processTurn({
+        userId,
+        message: cleanTranscript,
+        conversationId: options?.conversationId,
+        source: 'voice',
+      });
 
-        await this.logVoiceRequest(userId, {
-          purpose: 'general_chat',
-          transcript: cleanTranscript,
-          mode: options?.mode || 'openai_text',
-          clientTurnId: options?.clientTurnId,
-        });
+      await this.logVoiceRequest(userId, {
+        purpose: 'general_voice_command',
+        transcript: cleanTranscript,
+        mode: options?.mode || (AiAdapter.isConfigured() ? 'openai_text' : 'local_fallback'),
+        clientTurnId: options?.clientTurnId,
+      });
 
-        return {
-          replyText: aiReply.message,
-          emotion: aiReply.emotion || 'speaking',
-          requiresConfirmation: aiReply.requiresConfirmation,
-          proposal: aiReply.proposal,
-          clientAction: aiReply.clientAction,
-          replyMessage: replyMsg,
-        };
-      } catch (err: any) {
-        console.warn('[VoiceSessionService] AI Gateway chat error, falling back to local handler:', err.message);
-      }
+      return {
+        replyText: turnResult.replyMessage.text,
+        emotion: turnResult.replyMessage.emotion || 'speaking',
+        requiresConfirmation: Boolean(turnResult.replyMessage.requiresConfirmation),
+        confirmationSummary: turnResult.replyMessage.confirmationSummary,
+        proposal: turnResult.proposal,
+        clientAction: turnResult.clientAction,
+        replyMessage: turnResult.replyMessage,
+        success: true,
+      };
+    } catch (err: any) {
+      console.warn('[VoiceSessionService] Orchestrator voice turn error, falling back:', err.message);
     }
 
     // Local heuristic fallback for common learning commands
@@ -1024,12 +1082,12 @@ export class VoiceSessionService {
       emotion = 'speaking';
       clientAction = repRes.clientAction;
     } else {
-      const aiReply = await AiAdapter.generateJamiChat(cleanTranscript, { userId });
-      replyText = aiReply.message;
-      emotion = aiReply.emotion || 'speaking';
+      replyText = 'Jami đã ghi nhận câu hỏi của bạn. Hãy kiểm tra lại các nhiệm vụ và lịch học trên ứng dụng nhé!';
+      emotion = 'speaking';
     }
 
     const replyMsg = await jamiRepo.saveMessage(userId, {
+      conversationId: options?.conversationId,
       sender: 'jami',
       text: replyText,
       emotion,

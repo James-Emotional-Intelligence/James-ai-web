@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { StudyTask, ExecutionStep } from '../../../shared/types';
 import { api } from '../../lib/api-client';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 interface GuidedExecutionModalProps {
   task: StudyTask;

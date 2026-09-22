@@ -1056,13 +1056,30 @@ export const api = {
 
   // Realtime WebRTC
   sendRealtimeSdpOffer: (sdpOffer: string) =>
-    fetchJson<{ mode: 'openai_realtime' | 'demo_fallback'; sdpAnswer?: string; model?: string; message?: string }>(
+    fetchJson<{ mode: 'openai_realtime' | 'demo_fallback'; sdpAnswer?: string; model?: string; message?: string; sessionId?: string }>(
       '/jami/realtime/calls',
       {
         method: 'POST',
         body: JSON.stringify({ sdpOffer }),
       }
     ),
+  executeRealtimeToolCall: (name: string, callId: string, args: any, conversationId?: string) =>
+    fetchJson<{
+      success: boolean;
+      message: string;
+      requiresConfirmation?: boolean;
+      proposal?: any;
+      clientAction?: { type: string; route?: string; sessionId?: string; params?: any };
+      data?: any;
+    }>('/jami/realtime/tool-call', {
+      method: 'POST',
+      body: JSON.stringify({ name, call_id: callId, arguments: args, conversationId }),
+    }),
+  finalizeRealtimeSession: (sessionId: string, data?: { rawUsage?: any; reason?: string }) =>
+    fetchJson<{ success: boolean; message: string }>(`/jami/realtime/sessions/${sessionId}/finalize`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    }),
 
   // Outlines (6.2)
   getOutlines: (subjectId?: string) =>

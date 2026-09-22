@@ -17,7 +17,7 @@ import {
 import { api } from '../../lib/api-client';
 import { ScheduleProposal } from '../../../shared/types';
 import { formatTimeVN, formatDateVN } from '../../lib/utils';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 interface VoiceGoalModalProps {
   isOpen: boolean;

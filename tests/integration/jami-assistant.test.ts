@@ -125,4 +125,28 @@ describe('Jami Assistant Integration Tests', () => {
 
     expect(confirmRes.status).toBe(400);
   });
+
+  it('6. POST /api/v1/jami/messages/:id/confirm rejects with 409 PROPOSAL_MISSING when message has no proposal', async () => {
+    // Send standard conversational message that does not generate an action proposal
+    const chatRes = await request(app)
+      .post('/api/v1/jami/chat')
+      .set('Cookie', [userASession])
+      .send({
+        conversationId,
+        message: 'Xin chào Jami, hôm nay thời tiết thế nào?',
+      });
+
+    expect(chatRes.status).toBe(200);
+    const standardMessageId = chatRes.body.replyMessage.id;
+    expect(chatRes.body.replyMessage.proposalId).toBeUndefined();
+
+    // Attempting to confirm a message without a proposal must fail closed (409)
+    const confirmRes = await request(app)
+      .post(`/api/v1/jami/messages/${standardMessageId}/confirm`)
+      .set('Cookie', [userASession])
+      .send({ decision: 'confirm' });
+
+    expect(confirmRes.status).toBe(409);
+    expect(confirmRes.body.error?.code).toBe('PROPOSAL_MISSING');
+  });
 });

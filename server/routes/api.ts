@@ -101,6 +101,8 @@ import { runDbDoctor } from '../db/doctor';
 import { Migrator } from '../db/migrator';
 import { voiceSessionService } from '../services/voice-session-service';
 import { jamiActionService } from '../services/jami-action-service';
+import { jamiOrchestrator } from '../services/jami-orchestrator';
+import { executeRegisteredTool } from '../ai/tool-registry';
 import { notificationScheduler } from '../services/notification-scheduler-service';
 import {
   storageService,
@@ -3870,236 +3872,18 @@ apiRouter.post('/jami/chat', requireAuth, aiRateLimiter, asyncHandler(async (req
     return sendError(req, res, 400, 'VALIDATION_ERROR', parsed.error.issues[0]?.message || 'Nội dung tin nhắn không hợp lệ');
   }
 
-  const { message, clientMessageId } = parsed.data;
-  let conversationId = parsed.data.conversationId;
+  const { message, clientMessageId, conversationId, materialId } = parsed.data;
 
-  // Resolve or create conversation
-  if (!conversationId) {
-    const existingList = await jamiRepo.getConversations(userId);
-    if (existingList.length > 0) {
-      conversationId = existingList[0].id;
-    } else {
-      const newConv = await jamiRepo.createConversation(userId, 'Hội thoại chính');
-      conversationId = newConv.id;
-    }
-  }
-
-  // 1. Save user message to MySQL
-  const userMsg = await jamiRepo.saveMessage(userId, {
-    conversationId,
-    sender: 'user',
-    text: message.trim(),
-    clientMessageId,
-  });
-
-  // 2. Build real user context from MySQL
-  const user = (req as any).user;
-  const profile = await userRepo.getProfile(userId);
-  const studentName = user.preferredName || user.displayName || 'bạn';
-  const activeTimetable = await timetableRepo.getActiveTimetable(userId);
-  const timetableEntries = activeTimetable?.id
-    ? await timetableRepo.getTimetableEntries(userId, activeTimetable.id)
-    : await timetableRepo.getTimetableEntries(userId);
-  const tasks = await taskRepo.getByUserId(userId);
-  const exams = await examRepo.getByUserId(userId);
-  const materials = await materialRepo.getByUserId(userId);
-
-  const pendingTasks = tasks
-    .filter((t) => t.status === 'pending')
-    .map((t) => ({
-      id: t.id,
-      title: t.title,
-      subject: t.subjectName,
-      estimatedMinutes: t.estimatedMinutes,
-      dueAt: t.dueAt,
-    }));
-
-  const now = new Date();
-  const todayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-
-  const upcomingExams = exams
-    .filter((e) => {
-      const examDate = new Date(e.examAt);
-      const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
-      return e.status === 'upcoming' && examDayMs >= todayStartMs;
-    })
-    .map((e) => {
-      const examDate = new Date(e.examAt);
-      const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
-      const daysLeft = Math.max(0, Math.round((examDayMs - todayStartMs) / (1000 * 3600 * 24)));
-      return {
-        id: e.id,
-        title: e.title,
-        subject: e.subjectName,
-        daysLeft,
-        examAt: e.examAt,
-      };
-    });
-
-  const userTimezone = user?.timezone || 'Asia/Ho_Chi_Minh';
-  const todayParts = (() => {
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: userTimezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      weekday: 'short',
-    });
-    const parts = formatter.formatToParts(now);
-    const m: Record<string, string> = {};
-    for (const p of parts) m[p.type] = p.value;
-    const dateKey = `${m.year}-${m.month}-${m.day}`;
-    const weekdayMap: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
-    return { dateKey, dayOfWeek: weekdayMap[m.weekday] || 1 };
-  })();
-
-  const todayExceptions = await timetableRepo.getExceptions(userId, todayParts.dateKey, todayParts.dateKey);
-  const skippedEntryIds = new Set(todayExceptions.map((exc) => exc.timetableEntryId));
-
-  const todaySessions = timetableEntries
-    .filter((e) => Number(e.dayOfWeek) === todayParts.dayOfWeek && !skippedEntryIds.has(e.id))
-    .map((e) => ({
-      title: e.title,
-      time: `${e.startLocalTime} - ${e.endLocalTime}`,
-      subject: e.subjectName,
-    }));
-
-  // Fetch recent class session check-ins for rich context
-  const recentCheckins = await sessionCheckinRepo.getCheckins(userId);
-  const recentCheckinSummary = recentCheckins.slice(-5).map((c) => ({
-    date: c.occurrenceDate,
-    learnedContent: c.learnedContent,
-    homework: c.homework,
-    reflection: c.reflection,
-    understandingLevel: c.understandingLevel,
-    attendanceStatus: c.attendanceStatus,
-  }));
-
-  let attachedMaterialInfo: { id: string; title: string; summary?: string; contentText?: string } | undefined = undefined;
-  if (req.body?.materialId) {
-    const mat = await materialRepo.getById(userId, req.body.materialId);
-    if (!mat) {
-      return res.status(404).json({
-        error: {
-          code: 'MATERIAL_NOT_FOUND',
-          message: 'Không tìm thấy tài liệu đính kèm hoặc bạn không có quyền truy cập.',
-        },
-      });
-    }
-    attachedMaterialInfo = {
-      id: mat.id,
-      title: mat.title,
-      summary: mat.summary,
-      contentText: mat.contentText ? mat.contentText.slice(0, 4000) : undefined,
-    };
-  }
-
-  const context = {
+  const result = await jamiOrchestrator.processTurn({
     userId,
+    message,
     conversationId,
-    studentName,
-    gradeLevel: profile?.gradeLevel || 9,
-    todaySessions,
-    pendingTasks,
-    upcomingExams,
-    latestMaterialTitle: materials[0]?.title,
-    attachedMaterial: attachedMaterialInfo,
-    recentCheckins: recentCheckinSummary,
-  };
-
-  // 3. Process chat message with real context
-  const chatRes = await AiAdapter.generateJamiChat(message.trim(), context);
-
-  let proposal = chatRes.proposal;
-  let clientAction = chatRes.clientAction;
-  let requiresConfirmation = Boolean(chatRes.requiresConfirmation);
-  const confirmationSummary = chatRes.confirmationSummary;
-
-  // Execute explicit actionIntent from AI response if provided
-  if (chatRes.actionIntent && chatRes.actionIntent.kind !== 'none') {
-    const { kind, toolName, arguments: toolArgs } = chatRes.actionIntent;
-    const allowedMutations = [
-      'create_task',
-      'preview_create_task',
-      'add_busy_event',
-      'preview_add_busy_event',
-      'replan',
-      'replan_tasks',
-      'preview_replan',
-      'preview_replan_tasks',
-      'create_exam',
-      'preview_create_exam',
-      'mark_task_completed',
-      'create_reminder',
-      'preview_create_reminder',
-    ];
-    const allowedReads = [
-      'get_today_schedule',
-      'get_next_task',
-      'navigate_to',
-      'start_focus_timer',
-      'suggest_priority_task',
-      'open_material',
-      'create_quiz_revision',
-      'read_report',
-    ];
-
-    if (kind === 'mutate' && toolName && allowedMutations.includes(toolName)) {
-      const toolRes = await jamiActionService.executeTool(
-        userId,
-        toolName,
-        toolArgs || {},
-        conversationId
-      );
-      if (toolRes.success) {
-        proposal = toolRes.proposal;
-        requiresConfirmation = true;
-        if (toolRes.message && !chatRes.message) {
-          chatRes.message = toolRes.message;
-        }
-        if (toolRes.clientAction) {
-          clientAction = toolRes.clientAction;
-        }
-      }
-    } else if (kind === 'read' && toolName && allowedReads.includes(toolName)) {
-      const toolRes = await jamiActionService.executeTool(
-        userId,
-        toolName,
-        toolArgs || {},
-        conversationId
-      );
-      if (toolRes.clientAction) {
-        clientAction = toolRes.clientAction;
-      }
-    }
-  }
-
-  // 4. Save Jami reply message to MySQL with full proposal metadata
-  const jamiMsg = await jamiRepo.saveMessage(userId, {
-    conversationId,
-    sender: 'jami',
-    text: chatRes.message,
-    emotion: chatRes.emotion || 'speaking',
-    suggestedActions: [
-      { label: 'Xem lịch học hôm nay', action: 'navigate', route: '/today' },
-      { label: 'Bắt đầu Hẹn giờ tập trung', action: 'navigate', route: '/focus' },
-      { label: 'Làm bài luyện tập AI', action: 'navigate', route: '/exams' },
-    ],
-    requiresConfirmation,
-    confirmationSummary: confirmationSummary || (requiresConfirmation ? chatRes.message : undefined),
-    proposalId: proposal?.id,
-    proposal,
+    clientMessageId,
+    source: 'text',
+    materialId,
   });
 
-  const isDemo = !AiAdapter.isConfigured();
-
-  res.json({
-    userMessage: userMsg,
-    replyMessage: jamiMsg,
-    clientAction,
-    proposal,
-    isDemoMode: isDemo,
-  });
+  res.json(result);
 }));
 
 apiRouter.post('/jami/messages/:id/confirm', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -4109,12 +3893,18 @@ apiRouter.post('/jami/messages/:id/confirm', requireAuth, asyncHandler(async (re
 
   try {
     const confirmationResult = await jamiRepo.confirmMessageAction(userId, req.params.id, decision);
+    if (confirmationResult.actionResult && confirmationResult.actionResult.success === false) {
+      return sendError(req, res, 400, 'CONFIRMATION_FAILED', confirmationResult.actionResult.message || 'Không thể thực hiện xác nhận.');
+    }
     res.json({
       success: true,
       ...confirmationResult,
     });
   } catch (err: any) {
-    sendError(req, res, 400, 'CONFIRMATION_FAILED', err.message || 'Không thể thực hiện xác nhận.');
+    const isMissingProposal = err.message?.includes('PROPOSAL_MISSING');
+    const status = isMissingProposal ? 409 : 400;
+    const code = isMissingProposal ? 'PROPOSAL_MISSING' : 'CONFIRMATION_FAILED';
+    sendError(req, res, status, code, err.message || 'Không thể thực hiện xác nhận.');
   }
 }));
 
@@ -4220,6 +4010,28 @@ apiRouter.post('/jami/realtime/sessions/:id/finalize', requireAuth, asyncHandler
   if (!result.success) {
     return sendError(req, res, 400, 'FINALIZE_SESSION_FAILED', result.message);
   }
+  res.json(result);
+}));
+
+apiRouter.post('/jami/realtime/tool-call', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { name, arguments: toolArgs, conversationId } = req.body || {};
+  if (!name || typeof name !== 'string') {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Tên công cụ (tool name) không được để trống.');
+  }
+  const parsedArgs = typeof toolArgs === 'string' ? JSON.parse(toolArgs || '{}') : (toolArgs || {});
+  const result = await executeRegisteredTool(userId, name, parsedArgs, { conversationId });
+  res.json(result);
+}));
+
+apiRouter.post('/voice/realtime/tool-call', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { name, arguments: toolArgs, conversationId } = req.body || {};
+  if (!name || typeof name !== 'string') {
+    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Tên công cụ (tool name) không được để trống.');
+  }
+  const parsedArgs = typeof toolArgs === 'string' ? JSON.parse(toolArgs || '{}') : (toolArgs || {});
+  const result = await executeRegisteredTool(userId, name, parsedArgs, { conversationId });
   res.json(result);
 }));
 

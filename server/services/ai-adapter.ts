@@ -10,13 +10,43 @@ import {
 } from '../../shared/schemas';
 import { z } from 'zod';
 import { aiGateway } from '../ai/ai-gateway';
-import { wrapUntrustedData } from '../ai/prompt-registry';
 import {
   AiCreditExhaustedError,
   AiCreditInsufficientError,
   AiDisabledForUserError,
 } from '../repositories/ai-wallet-repository';
+import { env, isProduction } from '../config/env';
 import { ModelPricingUnavailableError } from '../ai/model-pricing';
+
+function handleAiError(operation: string, err: any): never {
+  if (
+    err instanceof AiCreditExhaustedError ||
+    err instanceof AiCreditInsufficientError ||
+    err instanceof AiDisabledForUserError ||
+    err instanceof ModelPricingUnavailableError ||
+    err?.status === 402 ||
+    err?.status === 403
+  ) {
+    throw err;
+  }
+  const code = err?.code || (err?.status === 429 ? 'AI_RATE_LIMITED' : 'AI_UPSTREAM_ERROR');
+  const message = err?.message || `Lỗi khi gọi dịch vụ AI cho "${operation}".`;
+  const error = new Error(message);
+  (error as any).code = code;
+  (error as any).status = err?.status || (code === 'AI_RATE_LIMITED' ? 429 : 500);
+  throw error;
+}
+
+function ensureAiAvailable(operation: string): void {
+  if (!aiGateway.isAvailable()) {
+    if (isProduction) {
+      const err = new Error(`Dịch vụ AI chưa được cấu hình (thiếu OPENAI_API_KEY) để thực hiện "${operation}".`);
+      (err as any).code = 'AI_NOT_CONFIGURED';
+      (err as any).status = 503;
+      throw err;
+    }
+  }
+}
 
 export class AiAdapter {
   private static client: OpenAI | null = null;
@@ -54,24 +84,18 @@ export class AiAdapter {
     title?: string,
     userId?: string
   ): Promise<string> {
+    ensureAiAvailable('Trích xuất nội dung ảnh');
     if (aiGateway.isAvailable()) {
       try {
         const res = await aiGateway.executeVision(imageBuffer, mimeType, title, { userId });
         if (res.text && res.text.trim().length > 10) {
           return res.text.trim();
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Trích xuất nội dung ảnh', new Error(res.error));
         }
-        console.warn('[AiAdapter] Vision OCR extraction error, using fallback:', err.message);
+      } catch (err: any) {
+        handleAiError('Trích xuất nội dung ảnh', err);
       }
     }
 
@@ -85,6 +109,7 @@ export class AiAdapter {
     userText: string,
     userId?: string
   ): Promise<z.infer<typeof VoiceGoalExtractionSchema>> {
+    ensureAiAvailable('Trích xuất mục tiêu');
     if (aiGateway.isAvailable()) {
       try {
         const res = await aiGateway.executeStructured(
@@ -99,18 +124,11 @@ export class AiAdapter {
             ...res.data,
           };
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Trích xuất mục tiêu', new Error(res.error));
         }
-        console.warn('[AI Adapter] OpenAI goal extraction error, using safe deterministic fallback:', err.message);
+      } catch (err: any) {
+        handleAiError('Trích xuất mục tiêu', err);
       }
     }
 
@@ -153,6 +171,7 @@ export class AiAdapter {
     subject: string,
     userId?: string
   ): Promise<z.infer<typeof TaskDecompositionSchema>> {
+    ensureAiAvailable('Phân rã nhiệm vụ');
     if (aiGateway.isAvailable()) {
       try {
         const res = await aiGateway.executeStructured(
@@ -164,18 +183,11 @@ export class AiAdapter {
         if (res.data) {
           return res.data;
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Phân rã nhiệm vụ', new Error(res.error));
         }
-        console.warn('[AI Adapter] OpenAI decomposition call failed, falling back to deterministic template:', err.message);
+      } catch (err: any) {
+        handleAiError('Phân rã nhiệm vụ', err);
       }
     }
 
@@ -242,6 +254,7 @@ export class AiAdapter {
     }
   ): Promise<z.infer<typeof JamiResponseSchema> & { proposal?: any; clientAction?: any }> {
     const studentName = context?.studentName || 'bạn';
+    ensureAiAvailable('Trò chuyện Jami');
 
     if (aiGateway.isAvailable()) {
       try {
@@ -251,6 +264,9 @@ export class AiAdapter {
             userMessage,
             studentName,
             gradeLevel: context?.gradeLevel || 9,
+            currentTimeVn: (context as any)?.currentTimeVn || new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }),
+            currentIso: (context as any)?.currentIso || new Date().toISOString(),
+            currentDayOfWeek: (context as any)?.currentDayOfWeek || 'Thứ 3 (dayOfWeek: 2)',
             todaySessions: context?.todaySessions || [],
             pendingTasks: context?.pendingTasks || [],
             upcomingExams: context?.upcomingExams || [],
@@ -287,23 +303,42 @@ export class AiAdapter {
             actionIntent,
           };
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Trò chuyện Jami', new Error(res.error));
         }
-        console.warn('[AI Adapter] OpenAI chat call failed, using dynamic context fallback:', err.message);
+      } catch (err: any) {
+        handleAiError('Trò chuyện Jami', err);
       }
     }
 
     // Dynamic Context Fallback
     const msg = userMessage.toLowerCase();
+
+    if (msg.includes('xếp') || msg.includes('thêm lịch') || msg.includes('tạo nhiệm vụ') || ((msg.includes('học') || msg.includes('ôn')) && (msg.includes('toán') || msg.includes('văn') || msg.includes('anh') || msg.includes('lý') || msg.includes('hóa')))) {
+      const minutesMatch = userMessage.match(/(\d+)\s*(?:phút|p)/i);
+      const minutes = minutesMatch ? parseInt(minutesMatch[1], 10) : 45;
+      const subjectMatch = userMessage.match(/(toán|văn|anh|lý|hóa|sinh|sử|địa|tin|công nghệ)/i);
+      const subjectName = subjectMatch ? (subjectMatch[0].charAt(0).toUpperCase() + subjectMatch[0].slice(1)) : 'Toán học';
+
+      return {
+        message: `Jami đã chuẩn bị tạo ca học môn ${subjectName} (${minutes} phút) cho ${studentName}. Bạn có đồng ý lưu vào kế hoạch không?`,
+        emotion: 'reminding',
+        suggestedActions: ['Xác nhận lưu', 'Đổi thời gian khác', 'Hủy bỏ'],
+        requiresConfirmation: true,
+        confirmationSummary: `Tạo nhiệm vụ học môn ${subjectName} (${minutes} phút)`,
+        citationsToUserMaterial: [],
+        actionIntent: {
+          kind: 'mutate',
+          toolName: 'preview_create_task',
+          arguments: {
+            title: `Học môn ${subjectName}`,
+            subjectName,
+            estimatedMinutes: minutes,
+            priority: 'high',
+          },
+        },
+      };
+    }
 
     if (msg.includes('dời') || msg.includes('đổi lịch') || msg.includes('bận')) {
       return {
@@ -509,6 +544,7 @@ export class AiAdapter {
     const milestone = params.milestone || 'D-7';
     const topicsText = (params.topics || []).join(', ') || params.scope || 'Kiến thức trọng tâm';
 
+    ensureAiAvailable('Tạo đề kiểm tra');
     if (aiGateway.isAvailable()) {
       try {
         const res = await aiGateway.executeStructured(
@@ -529,18 +565,11 @@ export class AiAdapter {
         if (res.data && res.data.questions && res.data.questions.length > 0) {
           return res.data;
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Tạo đề kiểm tra', new Error(res.error));
         }
-        console.warn('[AI Adapter] OpenAI Quiz Draft generation failed, using safe fallback:', err.message);
+      } catch (err: any) {
+        handleAiError('Tạo đề kiểm tra', err);
       }
     }
 
@@ -591,6 +620,7 @@ export class AiAdapter {
       return { isCorrect: true, scorePercent: 100, feedback: 'Đáp án chính xác tuyệt đối!' };
     }
 
+    ensureAiAvailable('Chấm điểm câu hỏi tự luận');
     if (aiGateway.isAvailable() && params.userAnswer.trim().length > 0) {
       try {
         const GradingSchema = z.object({
@@ -611,18 +641,11 @@ export class AiAdapter {
             feedback: String(res.data.feedback || 'Đã chấm điểm theo rubric.'),
           };
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Chấm điểm câu hỏi tự luận', new Error(res.error));
         }
-        console.warn('[AI Adapter] AI short answer grading error:', err.message);
+      } catch (err: any) {
+        handleAiError('Chấm điểm câu hỏi tự luận', err);
       }
     }
 
@@ -648,6 +671,7 @@ export class AiAdapter {
     const subj = subjectName || task.subjectName || 'Học tập';
     const totalMinutes = task.estimatedMinutes || 45;
 
+    ensureAiAvailable('Tạo hướng dẫn thực thi nhiệm vụ');
     if (aiGateway.isAvailable()) {
       try {
         const GuideSchema = z.object({
@@ -735,18 +759,11 @@ export class AiAdapter {
             nextAction: parsed.nextAction || 'Chuyển sang làm bài kiểm tra thử hoặc ôn tập chủ đề tiếp theo.',
           };
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Tạo hướng dẫn thực thi nhiệm vụ', new Error(res.error));
         }
-        console.warn('[AI Adapter] OpenAI execution guide generation error, falling back to deterministic guide:', err.message);
+      } catch (err: any) {
+        handleAiError('Tạo hướng dẫn thực thi nhiệm vụ', err);
       }
     }
 
@@ -826,6 +843,7 @@ export class AiAdapter {
       teacher?: string;
     }>;
   }> {
+    ensureAiAvailable('Nhận diện thời khóa biểu từ ảnh');
     if (aiGateway.isAvailable()) {
       try {
         const TimetableSchema = z.object({
@@ -875,19 +893,15 @@ export class AiAdapter {
               entries,
             };
           }
+          if (structRes.error) {
+            handleAiError('Nhận diện thời khóa biểu từ ảnh', new Error(structRes.error));
+          }
+        }
+        if (ocrRes.error) {
+          handleAiError('Nhận diện thời khóa biểu từ ảnh', new Error(ocrRes.error));
         }
       } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
-        }
-        console.warn('[AI Adapter] Timetable OCR extraction error:', err.message);
+        handleAiError('Nhận diện thời khóa biểu từ ảnh', err);
       }
     }
 
@@ -949,6 +963,7 @@ export class AiAdapter {
     example: string;
     keyTips: string[];
   }> {
+    ensureAiAvailable('Giải thích bước thực hiện');
     if (aiGateway.isAvailable()) {
       try {
         const StepSchema = z.object({
@@ -980,18 +995,11 @@ export class AiAdapter {
             keyTips: Array.isArray(res.data.keyTips) ? res.data.keyTips : ['Đọc kĩ yêu cầu đề bài trước khi ghi chép', 'Kiểm tra lại kết quả mong đợi'],
           };
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Giải thích bước thực hiện', new Error(res.error));
         }
-        console.warn('[AI Adapter] AI step explanation call failed, using deterministic template:', err.message);
+      } catch (err: any) {
+        handleAiError('Giải thích bước thực hiện', err);
       }
     }
 
@@ -1027,6 +1035,7 @@ export class AiAdapter {
     strengths: string[];
     missingPoints: string[];
   }> {
+    ensureAiAvailable('Đánh giá minh chứng nhiệm vụ');
     if (aiGateway.isAvailable()) {
       try {
         const EvidenceSchema = z.object({
@@ -1055,18 +1064,11 @@ export class AiAdapter {
             missingPoints: Array.isArray(res.data.missingPoints) ? res.data.missingPoints : [],
           };
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Đánh giá minh chứng nhiệm vụ', new Error(res.error));
         }
-        console.warn('[AI Adapter] AI evidence evaluation failed, using deterministic fallback:', err.message);
+      } catch (err: any) {
+        handleAiError('Đánh giá minh chứng nhiệm vụ', err);
       }
     }
 
@@ -1106,6 +1108,7 @@ export class AiAdapter {
     },
     userId?: string
   ): Promise<z.infer<typeof TomorrowPlanAiSuggestionsResponseSchema>['suggestions']> {
+    ensureAiAvailable('Gợi ý kế hoạch ngày mai');
     if (aiGateway.isAvailable()) {
       try {
         const res = await aiGateway.executeStructured(
@@ -1118,18 +1121,11 @@ export class AiAdapter {
         if (res.data && res.data.suggestions.length > 0) {
           return res.data.suggestions;
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Gợi ý kế hoạch ngày mai', new Error(res.error));
         }
-        console.warn('[AI Adapter] AI tomorrow plan suggestion generation failed, falling back to rule-based engine:', err.message);
+      } catch (err: any) {
+        handleAiError('Gợi ý kế hoạch ngày mai', err);
       }
     }
 
@@ -1149,6 +1145,7 @@ export class AiAdapter {
     },
     userId?: string
   ): Promise<z.infer<typeof MistakeSimilarQuestionSchema>> {
+    ensureAiAvailable('Tạo câu hỏi tương tự từ sổ lỗi sai');
     if (aiGateway.isAvailable()) {
       try {
         const res = await aiGateway.executeStructured(
@@ -1161,18 +1158,11 @@ export class AiAdapter {
         if (res.data) {
           return res.data;
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Tạo câu hỏi tương tự từ sổ lỗi sai', new Error(res.error));
         }
-        console.warn('[AI Adapter] Generate similar mistake question failed, falling back:', err.message);
+      } catch (err: any) {
+        handleAiError('Tạo câu hỏi tương tự từ sổ lỗi sai', err);
       }
     }
 
@@ -1197,6 +1187,7 @@ export class AiAdapter {
     },
     userId?: string
   ): Promise<{ explanation: string; tips: string[] }> {
+    ensureAiAvailable('Giải thích lỗi sai');
     if (aiGateway.isAvailable()) {
       try {
         const MistakeSchema = z.object({
@@ -1217,18 +1208,11 @@ export class AiAdapter {
             tips: Array.isArray(res.data.tips) ? res.data.tips : ['Đọc kỹ đề bài trước khi chọn đáp án', 'Kiểm tra lại công thức'],
           };
         }
-      } catch (err: any) {
-        if (
-          err instanceof AiCreditExhaustedError ||
-          err instanceof AiCreditInsufficientError ||
-          err instanceof AiDisabledForUserError ||
-          err instanceof ModelPricingUnavailableError ||
-          err?.status === 402 ||
-          err?.status === 403
-        ) {
-          throw err;
+        if (res.error) {
+          handleAiError('Giải thích lỗi sai', new Error(res.error));
         }
-        console.warn('[AI Adapter] Explain mistake failed, falling back:', err.message);
+      } catch (err: any) {
+        handleAiError('Giải thích lỗi sai', err);
       }
     }
 

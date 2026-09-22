@@ -32,7 +32,7 @@ import { api } from '../../lib/api-client';
 import { LearningMaterial, Subject, Outline, BookProgress } from '../../../shared/types';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportMaterialSummaryToPdf } from '../../lib/pdf-export-service';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 type ActiveTab = 'materials' | 'books' | 'outlines';
 type ModalMode = 'upload' | 'upload_book' | 'note' | 'create_outline' | null;

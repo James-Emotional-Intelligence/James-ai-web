@@ -333,30 +333,16 @@ export class JamiRepository {
     }
 
     if (!targetMessage.proposalId) {
-      if (db.isHealthy()) {
-        await db.execute(
-          `UPDATE jami_messages SET is_confirmed = 1 WHERE id = ? AND user_id = ?`,
-          [messageId, userId]
-        );
-      }
-      targetMessage.isConfirmed = true;
+      throw new Error('PROPOSAL_MISSING: Tin nhắn này không chứa đề xuất hành động hợp lệ để xác nhận.');
+    }
 
-      const replyText = decision === 'confirm'
-        ? 'Đã ghi nhận xác nhận của bạn.'
-        : 'Đã hủy thao tác theo yêu cầu của bạn.';
-
-      await this.saveMessage(userId, {
-        conversationId: targetMessage.conversationId,
-        sender: 'jami',
-        text: replyText,
-        emotion: decision === 'confirm' ? 'celebrating' : 'speaking',
-      });
-
+    if (targetMessage.isConfirmed) {
       return {
         message: targetMessage,
         actionResult: {
           success: true,
-          message: replyText,
+          message: 'Đề xuất này đã được xác nhận trước đó.',
+          isAlreadyConfirmed: true,
         },
       };
     }

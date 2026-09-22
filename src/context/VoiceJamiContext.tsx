@@ -85,6 +85,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const isSpeakingRef = useRef<boolean>(false);
   const currentTurnIdRef = useRef<string>('');
   const activeUtteranceIdRef = useRef<number>(0);
+  const activeRealtimeSessionIdRef = useRef<string | null>(null);
 
   /**
    * Unified Text-to-Speech Engine using SpeechSynthesis with Intelligent Language Detection & Voice Selection
@@ -224,6 +225,12 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
+    }
+
+    if (activeRealtimeSessionIdRef.current) {
+      const sessId = activeRealtimeSessionIdRef.current;
+      activeRealtimeSessionIdRef.current = null;
+      api.finalizeRealtimeSession(sessId, { reason: 'Người dùng ngắt kết nối hoặc thoát chế độ thoại' }).catch(() => {});
     }
 
     if (peerConnectionRef.current) {
@@ -636,18 +643,51 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 }
               } else if (
                 event.type === 'response.function_call_arguments.done' ||
-                event.type === 'response.output_item.done'
+                (event.type === 'response.output_item.done' && event.item?.type === 'function_call')
               ) {
                 const call = event.item?.type === 'function_call' ? event.item : event;
-                if (call.name) {
-                  try {
-                    const args = typeof call.arguments === 'string' ? JSON.parse(call.arguments || '{}') : call.arguments;
-                    if (call.name === 'navigate_to' && args?.route) {
-                      navigate(args.route);
-                    } else if (call.name === 'start_focus_timer') {
-                      navigate('/focus');
+                const toolName = call.name || event.name;
+                const callId = call.call_id || event.call_id;
+                const rawArgs = call.arguments || event.arguments;
+
+                if (toolName) {
+                  api.executeRealtimeToolCall(toolName, callId, rawArgs).then((result) => {
+                    if (result.proposal) {
+                      setPendingProposal(result.proposal);
+                      setState('confirmation_pending');
                     }
-                  } catch {}
+                    if (result.clientAction?.route) {
+                      navigate(result.clientAction.route);
+                    }
+                    if (dc.readyState === 'open' && callId) {
+                      dc.send(JSON.stringify({
+                        type: 'conversation.item.create',
+                        item: {
+                          type: 'function_call_output',
+                          call_id: callId,
+                          output: JSON.stringify(result),
+                        },
+                      }));
+                      dc.send(JSON.stringify({
+                        type: 'response.create',
+                      }));
+                    }
+                  }).catch((err) => {
+                    console.warn('[VoiceJami WebRTC] Tool execution failed:', err);
+                    if (dc.readyState === 'open' && callId) {
+                      dc.send(JSON.stringify({
+                        type: 'conversation.item.create',
+                        item: {
+                          type: 'function_call_output',
+                          call_id: callId,
+                          output: JSON.stringify({ success: false, error: err.message }),
+                        },
+                      }));
+                      dc.send(JSON.stringify({
+                        type: 'response.create',
+                      }));
+                    }
+                  });
                 }
               } else if (event.type === 'response.output_audio_transcript.done' || event.type === 'response.done') {
                 if (isMountedRef.current) {
@@ -669,6 +709,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             const sdpRes = await api.sendRealtimeSdpOffer(offer.sdp);
             if (sdpRes.mode === 'openai_realtime' && sdpRes.sdpAnswer) {
               await pc.setRemoteDescription({ type: 'answer', sdp: sdpRes.sdpAnswer });
+              activeRealtimeSessionIdRef.current = sdpRes.sessionId || null;
               setPrivacyMode('openai_realtime');
               webrtcConnected = true;
               setState('armed');

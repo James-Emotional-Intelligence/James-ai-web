@@ -15,7 +15,7 @@ import {
 import { api } from '../../lib/api-client';
 import { JamiMessageItem } from '../../../shared/types';
 import { JamiState } from './RobotJami';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 import { useVoiceJami } from '../../context/VoiceJamiContext';
 
 interface JamiCommandCenterProps {
@@ -116,12 +116,14 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
   const handleConfirmAction = async (msgId: string) => {
     try {
       const res = await api.confirmJamiAction(msgId);
-      if (res.success) {
+      if (res.success && res.actionResult?.success !== false) {
         setMessages((prev) =>
           prev.map((m) => (m.id === msgId ? { ...m, isConfirmed: true } : m))
         );
         confetti({ particleCount: 80, spread: 60 });
         if (onDataUpdated) onDataUpdated();
+      } else {
+        alert(res.actionResult?.message || 'Không thể xác nhận thao tác.');
       }
     } catch (err: any) {
       alert(err.message || 'Không thể xác nhận thao tác.');

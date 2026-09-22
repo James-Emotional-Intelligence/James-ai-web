@@ -12,7 +12,7 @@ import {
   Bot,
 } from 'lucide-react';
 import { api } from '../../lib/api-client';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 export const OnboardingPage: React.FC = () => {
   const navigate = useNavigate();

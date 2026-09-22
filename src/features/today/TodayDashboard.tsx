@@ -61,7 +61,7 @@ import { useTodayGreetingConversation } from './useTodayGreetingConversation';
 import { TodayGreetingInteraction } from './TodayGreetingInteraction';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportTodayPlanToPdf } from '../../lib/pdf-export-service';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 type TaskFilterType = 'all' | 'pending' | 'in_progress' | 'completed' | 'overdue';
 

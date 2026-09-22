@@ -10,6 +10,8 @@ import { DemoRepository } from './server/repositories/demo-repository';
 import { env, isProduction } from './server/config/env';
 
 import { materialWorker } from './server/services/material-worker-service';
+import { aiBillingService } from './server/services/ai-billing-service';
+import { voiceSessionService } from './server/services/voice-session-service';
 
 async function startServer() {
   const app = createApp();
@@ -35,8 +37,11 @@ async function startServer() {
       }
       await UserRepository.getInstance().syncWithMySQL();
       console.log('[JAMI AI] MySQL Database fully integrated and active.');
-      // Start background durable worker for processing learning materials & soft books
+      // Start background durable workers for processing learning materials, reconcile queue, and stale sessions
       materialWorker.start();
+      aiBillingService.startReconcileQueueWorker(30000);
+      voiceSessionService.startStaleSessionSweeper(300000);
+      console.log('[JAMI AI] Background workers (MaterialWorker, ReconcileOutbox, StaleSweeper) started.');
     } else {
       if (isProduction) {
         throw new Error('[JAMI AI Startup] Failed to connect to MySQL database in Production mode.');

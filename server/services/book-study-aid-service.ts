@@ -4,6 +4,7 @@ import { BookStudyAidResult, BookStudyCitation } from '../../shared/types';
 import { AiAdapter } from './ai-adapter';
 import { wrapUntrustedData } from '../ai/prompt-registry';
 import { aiGateway } from '../ai/ai-gateway';
+import { env, isProduction } from '../config/env';
 import { z } from 'zod';
 
 export class BookStudyAidService {
@@ -129,9 +130,20 @@ export class BookStudyAidService {
             citations,
           };
         }
+        if (gatewayResult.error) {
+          throw new Error(`AI Study Aid error: ${gatewayResult.error}`);
+        }
       } catch (err: any) {
-        console.warn('[BookStudyAidService] AI Gateway call failed, falling back to deterministic template:', err.message);
+        if (isProduction) {
+          throw err;
+        }
+        console.warn('[BookStudyAidService] AI Gateway call failed, falling back to deterministic template in demo mode:', err.message);
       }
+    } else if (isProduction) {
+      const err = new Error('Dịch vụ AI chưa được cấu hình (thiếu OPENAI_API_KEY) để tạo trợ thủ học tập sách mềm.');
+      (err as any).code = 'AI_NOT_CONFIGURED';
+      (err as any).status = 503;
+      throw err;
     }
 
     // 2. High Quality Deterministic Fallback for Demo Mode

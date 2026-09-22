@@ -14,7 +14,7 @@ import { api } from '../../lib/api-client';
 import { useNotifications } from '../../context/NotificationContext';
 import { useTheme, AppTheme } from '../../context/ThemeContext';
 import { HAI_BA_TRUNG_ASSETS } from '../../assets/themes/hai-ba-trung';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 export const SettingsPage: React.FC = () => {
   const { showToast } = useNotifications();

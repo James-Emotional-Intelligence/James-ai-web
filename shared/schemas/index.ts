@@ -133,12 +133,197 @@ export const QuizDraftSchema = z.object({
   questions: z.array(QuizQuestionDraftSchema),
 });
 
-export const JamiActionIntentSchema = z.object({
-  kind: z.enum(['none', 'read', 'mutate']).default('none'),
-  toolName: z.string().optional(),
-  arguments: z.record(z.string(), z.any()).optional(),
-  targetRoute: z.string().optional(),
+// ==========================================
+// Canonical 16 Jami AI Tools Schemas
+// ==========================================
+
+export const PreviewCreateTaskArgsSchema = z.object({
+  title: z.string().trim().min(1, 'Tiêu đề nhiệm vụ không được để trống'),
+  subjectName: z.string().optional(),
+  estimatedMinutes: z.coerce.number().int().min(5).max(480).default(45),
+  priority: z.enum(['low', 'medium', 'high']).default('medium'),
+  difficulty: z.enum(['easy', 'medium', 'hard']).default('medium'),
+  dueAt: z.string().datetime({ offset: true }).optional(),
+  notes: z.string().optional(),
 });
+
+export const PreviewCreateScheduledTaskArgsSchema = z.object({
+  title: z.string().trim().min(1, 'Tiêu đề ca học không được để trống'),
+  subjectName: z.string().optional(),
+  scheduledStartAt: z.string().datetime({ offset: true }),
+  scheduledEndAt: z.string().datetime({ offset: true }).optional(),
+  estimatedMinutes: z.coerce.number().int().min(5).max(480).default(45),
+  priority: z.enum(['low', 'medium', 'high']).default('medium'),
+  notes: z.string().optional(),
+}).refine((data) => !data.scheduledEndAt || new Date(data.scheduledEndAt).getTime() > new Date(data.scheduledStartAt).getTime(), {
+  message: 'Thời gian kết thúc phải sau thời gian bắt đầu',
+  path: ['scheduledEndAt'],
+});
+
+export const PreviewAddBusyEventArgsSchema = z.object({
+  title: z.string().trim().min(1, 'Tiêu đề sự kiện bận không được để trống'),
+  startsAt: z.string().datetime({ offset: true }),
+  endsAt: z.string().datetime({ offset: true }),
+  type: z.enum(['extra_class', 'meal', 'sleep', 'commute', 'personal']).default('personal'),
+  isAllDay: z.boolean().default(false),
+  notes: z.string().optional(),
+  commuteBeforeMinutes: z.coerce.number().int().min(0).max(180).default(0),
+  commuteAfterMinutes: z.coerce.number().int().min(0).max(180).default(0),
+}).refine((data) => new Date(data.endsAt).getTime() > new Date(data.startsAt).getTime(), {
+  message: 'Thời gian kết thúc phải sau thời gian bắt đầu',
+  path: ['endsAt'],
+});
+
+export const PreviewReplanTasksArgsSchema = z.object({
+  reason: z.string().trim().min(1).default('Yêu cầu sắp xếp lại lịch học'),
+  strategy: z.enum(['balanced', 'urgent_first', 'deep_work']).default('balanced'),
+  daysCount: z.coerce.number().int().min(1).max(30).default(7),
+  targetDate: z.string().optional(),
+  preserveLocked: z.boolean().default(true),
+});
+
+export const PreviewAddTimetableEntryArgsSchema = z.object({
+  timetableId: z.string().optional(),
+  title: z.string().trim().min(1, 'Tiêu đề tiết học không được để trống'),
+  subjectName: z.string().optional(),
+  teacher: z.string().optional(),
+  dayOfWeek: z.coerce.number().min(1).max(7),
+  startLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  endLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  location: z.string().optional(),
+  room: z.string().optional(),
+  commuteBeforeMinutes: z.coerce.number().min(0).max(180).default(15),
+  commuteAfterMinutes: z.coerce.number().min(0).max(180).default(15),
+}).refine((data) => data.endLocalTime > data.startLocalTime, {
+  message: 'Giờ kết thúc phải sau giờ bắt đầu',
+  path: ['endLocalTime'],
+});
+
+export const PreviewCreateExamArgsSchema = z.object({
+  title: z.string().trim().min(1, 'Tiêu đề kỳ kiểm tra không được để trống'),
+  subjectName: z.string().trim().min(1, 'Tên môn học không được để trống'),
+  examAt: z.string().datetime({ offset: true }),
+  importance: z.enum(['low', 'medium', 'high', 'critical']).default('high'),
+  targetScore: z.coerce.number().min(0).max(10).optional(),
+  scopeText: z.string().optional(),
+  topics: z.array(z.object({
+    name: z.string().trim().min(1),
+    weight: z.coerce.number().min(0).optional(),
+  })).default([]),
+});
+export const PreviewCreateExamPlanArgsSchema = PreviewCreateExamArgsSchema;
+
+export const PreviewCreateMistakeEntryArgsSchema = z.object({
+  subjectName: z.string().optional(),
+  topic: z.string().optional(),
+  questionText: z.string().min(1, 'Nội dung câu hỏi không được để trống'),
+  selectedAnswer: z.string().optional(),
+  correctAnswer: z.string().min(1, 'Đáp án đúng không được để trống'),
+  mistakeReason: z.string().optional(),
+  correctSolution: z.string().min(1, 'Lời giải chuẩn xác không được để trống'),
+  lessonLearned: z.string().optional(),
+  severity: z.enum(['minor', 'medium', 'critical']).default('medium'),
+});
+
+export const PreviewCreateReminderArgsSchema = z.object({
+  title: z.string().min(1, 'Nội dung nhắc nhở không được để trống'),
+  body: z.string().optional(),
+  scheduledFor: z.string().datetime({ offset: true }),
+  priority: z.enum(['low', 'medium', 'high']).default('medium'),
+  actionUrl: z.string().regex(/^\/[A-Za-z0-9/_-]*$/).optional(),
+});
+
+export const PreviewMarkTaskCompletedArgsSchema = z.object({
+  taskId: z.string().optional(),
+  taskTitle: z.string().optional(),
+}).refine((data) => Boolean(data.taskId || data.taskTitle), {
+  message: 'Cần có taskId hoặc taskTitle',
+  path: ['taskId'],
+});
+
+export const PreviewCancelEventArgsSchema = z.object({
+  eventType: z.enum(['busy_event', 'timetable_entry', 'task', 'reminder']),
+  eventId: z.string().min(1, 'Mã sự kiện cần hủy không được để trống'),
+  reason: z.string().optional(),
+});
+
+export const GetDailyScheduleArgsSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+export const GetSubjectProgressArgsSchema = z.object({
+  subject: z.string().optional(),
+  subjectName: z.string().optional(),
+});
+
+export const GetUpcomingExamsArgsSchema = z.object({
+  daysAhead: z.coerce.number().min(1).max(365).default(30),
+});
+
+export const GetMistakeSummaryArgsSchema = z.object({
+  subject: z.string().optional(),
+  subjectName: z.string().optional(),
+});
+
+export const GetUnreadNotificationsArgsSchema = z.object({
+  limit: z.coerce.number().min(1).max(50).default(10),
+});
+
+export const GetTaskDetailsArgsSchema = z.object({
+  taskId: z.string().min(1, 'Mã nhiệm vụ không được để trống'),
+});
+
+export const SearchMaterialsArgsSchema = z.object({
+  query: z.string().min(1, 'Từ khóa tìm kiếm không được để trống'),
+  limit: z.coerce.number().min(1).max(20).default(5),
+});
+
+export const NavigateToArgsSchema = z.object({
+  route: z.enum([
+    '/today',
+    '/timetable',
+    '/tasks',
+    '/focus',
+    '/exams',
+    '/materials',
+    '/reports',
+    '/notifications',
+    '/settings',
+    '/jami',
+  ]),
+  reason: z.string().optional(),
+});
+
+export const GetNextTaskArgsSchema = z.object({});
+
+export const StartFocusTimerArgsSchema = z.object({
+  plannedMinutes: z.coerce.number().min(5).max(180).default(25),
+  taskId: z.string().optional(),
+});
+
+export const JamiActionIntentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('none') }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('get_daily_schedule'), arguments: GetDailyScheduleArgsSchema.default({}) }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('get_next_task'), arguments: GetNextTaskArgsSchema.default({}) }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('get_subject_progress'), arguments: GetSubjectProgressArgsSchema.default({}) }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('get_upcoming_exams'), arguments: GetUpcomingExamsArgsSchema.default({}) }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('get_mistake_summary'), arguments: GetMistakeSummaryArgsSchema.default({}) }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('get_unread_notifications'), arguments: GetUnreadNotificationsArgsSchema.default({}) }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('get_task_details'), arguments: GetTaskDetailsArgsSchema }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('search_materials'), arguments: SearchMaterialsArgsSchema }),
+  z.object({ kind: z.literal('read'), toolName: z.literal('navigate_to'), arguments: NavigateToArgsSchema }),
+  z.object({ kind: z.literal('immediate'), toolName: z.literal('start_focus_timer'), arguments: StartFocusTimerArgsSchema.default({}) }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_create_task'), arguments: PreviewCreateTaskArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_create_scheduled_task'), arguments: PreviewCreateScheduledTaskArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_add_timetable_entry'), arguments: PreviewAddTimetableEntryArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_add_busy_event'), arguments: PreviewAddBusyEventArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_replan_tasks'), arguments: PreviewReplanTasksArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_create_exam'), arguments: PreviewCreateExamArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_create_mistake_entry'), arguments: PreviewCreateMistakeEntryArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_create_reminder'), arguments: PreviewCreateReminderArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_mark_task_completed'), arguments: PreviewMarkTaskCompletedArgsSchema }),
+  z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_cancel_event'), arguments: PreviewCancelEventArgsSchema }),
+]);
 
 export const JamiResponseSchema = z.object({
   message: z.string(),

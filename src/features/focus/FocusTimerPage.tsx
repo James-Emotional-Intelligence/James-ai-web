@@ -19,7 +19,7 @@ import {
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
 import { FocusSession, StudyTask } from '../../../shared/types';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 type TimerMode = '15' | '25' | '45' | '60' | 'custom' | '45_10' | '25_5';
 type TimerPhase = 'work' | 'break';

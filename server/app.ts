@@ -38,7 +38,7 @@ export function createApp() {
     // Comprehensive Content Security Policy
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.openai.com https://*.r2.cloudflarestorage.com wss: ws:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.openai.com https://*.r2.cloudflarestorage.com wss: ws:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
     );
     next();
   });

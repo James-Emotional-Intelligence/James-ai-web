@@ -6,8 +6,8 @@ import { materialRepo } from '../repositories/material-repository';
 import { quizRepo } from '../repositories/quiz-repository';
 import { AiAdapter } from './ai-adapter';
 import { bookParserService } from './book-parser-service';
-import { wrapUntrustedData } from '../ai/prompt-registry';
 import { aiGateway } from '../ai/ai-gateway';
+import { env, isProduction } from '../config/env';
 import { z } from 'zod';
 import crypto from 'crypto';
 
@@ -170,9 +170,20 @@ export class MaterialProcessor {
         if (result.data) {
           return result.data;
         }
+        if (result.error) {
+          throw new Error(`AI Summarization error: ${result.error}`);
+        }
       } catch (err: any) {
-        console.warn('[MaterialProcessor] AI Gateway summarization error, falling back to local extractor:', err.message);
+        if (isProduction) {
+          throw err;
+        }
+        console.warn('[MaterialProcessor] AI Gateway summarization error, falling back to local extractor in demo mode:', err.message);
       }
+    } else if (isProduction) {
+      const err = new Error('Dịch vụ AI chưa được cấu hình (thiếu OPENAI_API_KEY) để tóm tắt tài liệu.');
+      (err as any).code = 'AI_NOT_CONFIGURED';
+      (err as any).status = 503;
+      throw err;
     }
 
     // Heuristic structured summary generator for offline / fallback
@@ -243,10 +254,20 @@ export class MaterialProcessor {
 
         if (result.data && Array.isArray(result.data.questions) && result.data.questions.length > 0) {
           questions = result.data.questions as any;
+        } else if (result.error) {
+          throw new Error(`AI Quiz Generation error: ${result.error}`);
         }
       } catch (err: any) {
-        console.warn('[MaterialProcessor] AI Gateway quiz generation error, falling back to heuristic builder:', err.message);
+        if (isProduction) {
+          throw err;
+        }
+        console.warn('[MaterialProcessor] AI Gateway quiz generation error, falling back to heuristic builder in demo mode:', err.message);
       }
+    } else if (isProduction) {
+      const err = new Error('Dịch vụ AI chưa được cấu hình (thiếu OPENAI_API_KEY) để tạo đề ôn tập.');
+      (err as any).code = 'AI_NOT_CONFIGURED';
+      (err as any).status = 503;
+      throw err;
     }
 
     // Heuristic generator fallback

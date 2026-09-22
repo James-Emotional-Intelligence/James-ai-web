@@ -288,6 +288,24 @@ export class AiWalletRepository {
           throw new AiDisabledForUserError();
         }
 
+        // 1. Global daily hard budget check applies to ALL accounts (including unlimited / admin)
+        const globalDailyBudgetVnd = env.AI_GLOBAL_DAILY_BUDGET_VND;
+        if (globalDailyBudgetVnd && globalDailyBudgetVnd > 0) {
+          const globalDailyLimitMilliVnd = vndToMilliVnd(globalDailyBudgetVnd);
+          const [globalSpendRows]: any = await conn.query(
+            `SELECT COALESCE(SUM(ABS(amount_milli_vnd)), 0) as spent
+             FROM ai_wallet_transactions
+             WHERE type IN ('ai_charge', 'unlimited_usage') AND created_at >= CURDATE()`
+          );
+          const globalSpentToday = BigInt(globalSpendRows[0]?.spent || 0);
+          if (globalSpentToday + estimatedCostMilliVnd > globalDailyLimitMilliVnd) {
+            const err = new Error(`Hệ thống đã đạt hạn mức ngân sách AI toàn cục trong ngày. Vui lòng thử lại sau.`);
+            (err as any).code = 'AI_BUDGET_EXCEEDED';
+            (err as any).status = 429;
+            throw err;
+          }
+        }
+
         const now = new Date();
         const isUnlimited = Boolean(w.unlimited_forever || (w.unlimited_until && new Date(w.unlimited_until) > now));
         if (isUnlimited) {
@@ -295,7 +313,7 @@ export class AiWalletRepository {
           return;
         }
 
-        // Check user daily spend limit if configured
+        // 2. Check user daily spend limit if configured
         const userDailyLimitVnd = env.AI_USER_DAILY_SPEND_LIMIT_VND;
         if (userDailyLimitVnd && userDailyLimitVnd > 0) {
           const userDailyLimitMilliVnd = vndToMilliVnd(userDailyLimitVnd);
@@ -308,21 +326,6 @@ export class AiWalletRepository {
           const userSpentToday = BigInt(userSpendRows[0]?.spent || 0);
           if (userSpentToday + estimatedCostMilliVnd > userDailyLimitMilliVnd) {
             throw new Error(`Đã vượt quá hạn mức chi tiêu AI hàng ngày của tài khoản (${formatVnd(userDailyLimitVnd)}/ngày). Vui lòng thử lại vào ngày mai.`);
-          }
-        }
-
-        // Check global daily budget if configured
-        const globalDailyBudgetVnd = env.AI_GLOBAL_DAILY_BUDGET_VND;
-        if (globalDailyBudgetVnd && globalDailyBudgetVnd > 0) {
-          const globalDailyLimitMilliVnd = vndToMilliVnd(globalDailyBudgetVnd);
-          const [globalSpendRows]: any = await conn.query(
-            `SELECT COALESCE(SUM(ABS(amount_milli_vnd)), 0) as spent
-             FROM ai_wallet_transactions
-             WHERE type IN ('ai_charge', 'unlimited_usage') AND created_at >= CURDATE()`
-          );
-          const globalSpentToday = BigInt(globalSpendRows[0]?.spent || 0);
-          if (globalSpentToday + estimatedCostMilliVnd > globalDailyLimitMilliVnd) {
-            throw new Error(`Hệ thống đã đạt hạn mức ngân sách AI toàn cục trong ngày. Vui lòng thử lại sau.`);
           }
         }
 
@@ -544,8 +547,12 @@ export class AiWalletRepository {
           const queueId = 'recq_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
           await db.execute(
             `INSERT INTO ai_wallet_reconcile_queue
-             (id, user_id, reservation_idempotency_key, reserved_milli_vnd, actual_cost_milli_vnd, is_unlimited, request_id, ai_run_id, reason, metadata_json, error_message, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(3), NOW(3))`,
+             (id, user_id, idempotency_key, reserved_milli_vnd, actual_cost_milli_vnd, is_unlimited, request_id, ai_run_id, reason, metadata_json, last_error, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(3), NOW(3))
+             ON DUPLICATE KEY UPDATE
+             retry_count = retry_count + 1,
+             last_error = VALUES(last_error),
+             updated_at = NOW(3)`,
             [
               queueId,
               userId,
@@ -555,7 +562,7 @@ export class AiWalletRepository {
               isUnlimited ? 1 : 0,
               requestId || null,
               aiRunId || null,
-              reason || null,
+              reason || 'Failed reconcileCredit retry outbox',
               metadata ? JSON.stringify(metadata) : null,
               err.message || 'Transaction error during reconcileCredit',
             ]
@@ -1029,6 +1036,82 @@ export class AiWalletRepository {
     });
 
     return { transactions, nextCursor };
+  }
+
+  /**
+   * Durable Worker: Processes pending reconciliation outbox items with exponential backoff
+   */
+  public async processReconcileQueue(batchSize = 20): Promise<{ processedCount: number; resolvedCount: number; failedCount: number }> {
+    if (!db.isHealthy()) {
+      return { processedCount: 0, resolvedCount: 0, failedCount: 0 };
+    }
+
+    let processedCount = 0;
+    let resolvedCount = 0;
+    let failedCount = 0;
+
+    try {
+      const rows = await db.query<any>(
+        `SELECT id, user_id, idempotency_key, reserved_milli_vnd, actual_cost_milli_vnd, is_unlimited, request_id, ai_run_id, reason, metadata_json, retry_count
+         FROM ai_wallet_reconcile_queue
+         WHERE status = 'pending' OR (status = 'processing' AND updated_at < DATE_SUB(NOW(3), INTERVAL 5 MINUTE))
+         ORDER BY created_at ASC
+         LIMIT ?`,
+        [batchSize]
+      );
+
+      for (const row of rows) {
+        processedCount++;
+        // Claim row
+        const claimResult: any = await db.execute(
+          `UPDATE ai_wallet_reconcile_queue
+           SET status = 'processing', updated_at = NOW(3)
+           WHERE id = ? AND status IN ('pending', 'processing')`,
+          [row.id]
+        );
+
+        if (!claimResult || claimResult.affectedRows === 0) {
+          continue;
+        }
+
+        try {
+          await this.reconcileCredit({
+            userId: row.user_id,
+            reservedMilliVnd: BigInt(row.reserved_milli_vnd || '0'),
+            actualCostMilliVnd: BigInt(row.actual_cost_milli_vnd || '0'),
+            isUnlimited: Boolean(row.is_unlimited),
+            idempotencyKey: row.idempotency_key,
+            requestId: row.request_id || undefined,
+            aiRunId: row.ai_run_id || undefined,
+            reason: row.reason || 'Reconciled via outbox worker',
+            metadata: row.metadata_json ? (typeof row.metadata_json === 'string' ? JSON.parse(row.metadata_json) : row.metadata_json) : undefined,
+            success: true,
+          });
+
+          await db.execute(
+            `UPDATE ai_wallet_reconcile_queue
+             SET status = 'resolved', last_error = NULL, updated_at = NOW(3)
+             WHERE id = ?`,
+            [row.id]
+          );
+          resolvedCount++;
+        } catch (execErr: any) {
+          failedCount++;
+          const nextRetry = (row.retry_count || 0) + 1;
+          const finalStatus = nextRetry >= 5 ? 'failed' : 'pending';
+          await db.execute(
+            `UPDATE ai_wallet_reconcile_queue
+             SET status = ?, retry_count = ?, last_error = ?, updated_at = NOW(3)
+             WHERE id = ?`,
+            [finalStatus, nextRetry, execErr.message || 'Worker reconciliation retry failed', row.id]
+          );
+        }
+      }
+    } catch (err: any) {
+      console.warn('[AiWalletRepository] Error running reconcile outbox worker:', err.message);
+    }
+
+    return { processedCount, resolvedCount, failedCount };
   }
 }
 

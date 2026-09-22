@@ -58,6 +58,87 @@ export const ALLOWED_NAVIGATE_ROUTES = [
 
 export type AllowedNavigateRoute = (typeof ALLOWED_NAVIGATE_ROUTES)[number];
 
+/**
+ * Maps Vietnamese weekday text or raw inputs to canonical dayOfWeek (1=Thứ 2, 2=Thứ 3, ..., 6=Thứ 7, 7=Chủ Nhật)
+ */
+export function resolveVietnameseDayOfWeek(input: any, defaultJsDay?: number): number {
+  if (input === undefined || input === null || input === '') {
+    const jsDay = defaultJsDay !== undefined ? defaultJsDay : new Date().getDay();
+    return jsDay === 0 ? 7 : jsDay;
+  }
+
+  const str = String(input).trim().toLowerCase();
+
+  if (str.includes('chủ nhật') || str.includes('chu nhat') || str === 'cn' || str === 'sun' || str.includes('sunday')) {
+    return 7;
+  }
+  if (str.includes('thứ 2') || str.includes('thu 2') || str.includes('thứ hai') || str.includes('thu hai') || str === 't2' || str.includes('mon')) {
+    return 1;
+  }
+  if (str.includes('thứ 3') || str.includes('thu 3') || str.includes('thứ ba') || str.includes('thu ba') || str === 't3' || str.includes('tue')) {
+    return 2;
+  }
+  if (str.includes('thứ 4') || str.includes('thu 4') || str.includes('thứ tư') || str.includes('thu tu') || str === 't4' || str.includes('wed')) {
+    return 3;
+  }
+  if (str.includes('thứ 5') || str.includes('thu 5') || str.includes('thứ năm') || str.includes('thu nam') || str === 't5' || str.includes('thu')) {
+    return 4;
+  }
+  if (str.includes('thứ 6') || str.includes('thu 6') || str.includes('thứ sáu') || str.includes('thu sau') || str === 't6' || str.includes('fri')) {
+    return 5;
+  }
+  if (str.includes('thứ 7') || str.includes('thu 7') || str.includes('thứ bảy') || str.includes('thu bay') || str === 't7' || str.includes('sat')) {
+    return 6;
+  }
+
+  const num = Number(input);
+  if (!isNaN(num) && num >= 1 && num <= 7) {
+    return num;
+  }
+
+  const jsDay = new Date().getDay();
+  return jsDay === 0 ? 7 : jsDay;
+}
+
+/**
+ * Calculates concrete ISO timestamp for a target day of week in current week
+ */
+export function calculateTargetDateTimeIso(
+  targetDow?: number,
+  timeStr?: string,
+  explicitIso?: string
+): string {
+  if (explicitIso) {
+    const parsed = new Date(explicitIso);
+    if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 2000) {
+      return parsed.toISOString();
+    }
+  }
+
+  const now = new Date();
+  const currentJsDay = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const currentCanonicalDow = currentJsDay === 0 ? 7 : currentJsDay; // 1=T2 .. 7=CN
+  const dow = targetDow && targetDow >= 1 && targetDow <= 7 ? targetDow : currentCanonicalDow;
+
+  // Compute offset from current day in current week
+  const dayDifference = dow - currentCanonicalDow;
+  const targetDate = new Date(now);
+  targetDate.setDate(now.getDate() + dayDifference);
+
+  let hours = 19;
+  let minutes = 0;
+  if (timeStr) {
+    const match = timeStr.match(/(\d{1,2})[:h](\d{2})?/i);
+    if (match) {
+      hours = Math.min(23, Math.max(0, parseInt(match[1], 10)));
+      minutes = match[2] ? Math.min(59, Math.max(0, parseInt(match[2], 10))) : 0;
+    }
+  }
+
+  targetDate.setHours(hours, minutes, 0, 0);
+  return targetDate.toISOString();
+}
+
 export class JamiActionService {
   private static instance: JamiActionService;
   private demoProposals: Map<string, ActionProposalRecord[]> = new Map();
@@ -143,8 +224,45 @@ export class JamiActionService {
             estimatedMinutes: { type: 'number', description: 'Thời lượng ước tính (phút)' },
             priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Mức độ ưu tiên' },
             dueAt: { type: 'string', description: 'Hạn chót theo ISO string hoặc ngày cụ thể' },
+            startsAt: { type: 'string', description: 'Giờ bắt đầu học cụ thể (tùy chọn, ISO string)' },
+            endsAt: { type: 'string', description: 'Giờ kết thúc học cụ thể (tùy chọn, ISO string)' },
           },
           required: ['title'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'preview_create_scheduled_task',
+        description: 'Tạo bản xem trước lịch tự học/ca học bài có giờ cụ thể trong ngày và yêu cầu học sinh xác nhận.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Tiêu đề ca học tập (ví dụ: Tự học Toán - Ôn tập hàm số)' },
+            subjectName: { type: 'string', description: 'Tên môn học' },
+            scheduledStartAt: { type: 'string', description: 'Thời gian bắt đầu học (ISO string)' },
+            scheduledEndAt: { type: 'string', description: 'Thời gian kết thúc học (ISO string)' },
+            estimatedMinutes: { type: 'number', description: 'Thời lượng học (phút)' },
+            priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Mức độ ưu tiên' },
+          },
+          required: ['title', 'scheduledStartAt'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'preview_create_timetable_entry',
+        description: 'Thêm tiết học chính khóa trên lớp vào bảng Thời khóa biểu trường (Thứ 2 đến Thứ 7).',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Tên môn học hoặc tiết học (ví dụ: Toán học, Tiếng Anh)' },
+            subjectName: { type: 'string', description: 'Tên môn học' },
+            dayOfWeek: { type: 'number', description: 'Thứ trong tuần (1: Thứ 2, 2: Thứ 3, ..., 6: Thứ 7, 7: Chủ nhật)' },
+            startLocalTime: { type: 'string', description: 'Giờ bắt đầu theo định dạng HH:mm (ví dụ: 07:30)' },
+            endLocalTime: { type: 'string', description: 'Giờ kết thúc theo định dạng HH:mm (ví dụ: 08:15)' },
+            room: { type: 'string', description: 'Phòng học (tùy chọn)' },
+            teacher: { type: 'string', description: 'Tên giáo viên (tùy chọn)' },
+          },
+          required: ['title', 'dayOfWeek', 'startLocalTime', 'endLocalTime'],
         },
       },
       {
@@ -406,6 +524,8 @@ export class JamiActionService {
           const estimatedMinutes = Math.min(180, Math.max(15, Number(args?.estimatedMinutes) || 45));
           const priority = (args?.priority === 'high' || args?.priority === 'low') ? args.priority : 'medium';
           const subjectName = args?.subjectName || 'Toán học';
+          const startsAt = args?.startsAt || args?.scheduledStartAt;
+          const endsAt = args?.endsAt || args?.scheduledEndAt || (startsAt ? new Date(new Date(startsAt).getTime() + estimatedMinutes * 60 * 1000).toISOString() : undefined);
 
           // Look up subject ID
           const subjects = await subjectRepo.getByUserId(userId);
@@ -418,10 +538,15 @@ export class JamiActionService {
             estimatedMinutes,
             priority,
             difficulty: args?.difficulty || 'medium',
-            dueAt: args?.dueAt || new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
+            dueAt: args?.dueAt || (startsAt ? startsAt : new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString()),
+            scheduledStartAt: startsAt ? new Date(startsAt).toISOString() : undefined,
+            scheduledEndAt: endsAt ? new Date(endsAt).toISOString() : undefined,
           };
 
-          const previewText = `Tạo nhiệm vụ "${title}" môn ${payload.subjectName} (${estimatedMinutes} phút, mức ưu tiên ${priority}). Bạn có đồng ý lưu không?`;
+          const timeNote = startsAt
+            ? ` vào lúc ${new Date(startsAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} ngày ${new Date(startsAt).toLocaleDateString('vi-VN')}`
+            : '';
+          const previewText = `Tạo nhiệm vụ "${title}" môn ${payload.subjectName} (${estimatedMinutes} phút, mức ưu tiên ${priority}${timeNote}). Bạn có đồng ý lưu không?`;
 
           const proposal = await this.saveProposal(userId, {
             actionType: 'create_task',
@@ -438,10 +563,109 @@ export class JamiActionService {
           };
         }
 
+        case 'create_scheduled_task':
+        case 'preview_create_scheduled_task':
+        case 'create_schedule':
+        case 'add_schedule':
+        case 'schedule_study_session':
+        case 'create_study_session': {
+          const title = String(args?.title || args?.topic || 'Tự học bài').trim();
+          const subjectName = args?.subjectName || 'Toán học';
+          const estimatedMinutes = Math.min(180, Math.max(15, Number(args?.estimatedMinutes) || 45));
+          const priority = (args?.priority === 'high' || args?.priority === 'low') ? args.priority : 'medium';
+
+          const targetDow = (args?.dayOfWeek !== undefined || args?.day !== undefined || args?.dayName !== undefined)
+            ? resolveVietnameseDayOfWeek(args?.dayOfWeek ?? args?.day ?? args?.dayName)
+            : undefined;
+          const startsAt = calculateTargetDateTimeIso(targetDow, args?.timeStr || args?.startLocalTime, args?.scheduledStartAt || args?.startsAt);
+          const endsAt = args?.scheduledEndAt || args?.endsAt || new Date(new Date(startsAt).getTime() + estimatedMinutes * 60 * 1000).toISOString();
+
+          const subjects = await subjectRepo.getByUserId(userId);
+          const subject = subjects.find((s) => s.name.toLowerCase().includes(subjectName.toLowerCase())) || subjects[0];
+
+          const payload = {
+            title,
+            subjectId: subject?.id || 'sub_toan',
+            subjectName: subject?.name || subjectName,
+            estimatedMinutes,
+            priority,
+            difficulty: args?.difficulty || 'medium',
+            dueAt: endsAt,
+            scheduledStartAt: new Date(startsAt).toISOString(),
+            scheduledEndAt: new Date(endsAt).toISOString(),
+          };
+
+          const startTimeStr = new Date(startsAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+          const dateStr = new Date(startsAt).toLocaleDateString('vi-VN');
+          const previewText = `Thêm ca tự học "${title}" (${payload.subjectName}) lúc ${startTimeStr} ngày ${dateStr} (${estimatedMinutes} phút). Bạn có xác nhận xếp vào thời khóa biểu không?`;
+
+          const proposal = await this.saveProposal(userId, {
+            actionType: 'create_scheduled_task',
+            conversationId,
+            payload,
+            previewText,
+          });
+
+          return {
+            success: true,
+            requiresConfirmation: true,
+            message: previewText,
+            proposal,
+          };
+        }
+
+        case 'create_timetable_entry':
+        case 'preview_create_timetable_entry':
+        case 'add_timetable_entry': {
+          const title = String(args?.title || args?.subjectName || 'Tiết học').trim();
+          const subjectName = args?.subjectName || title;
+          const rawDow = args?.dayOfWeek ?? args?.day ?? args?.dayName ?? args?.title;
+          const dayOfWeek = resolveVietnameseDayOfWeek(rawDow);
+          const startLocalTime = String(args?.startLocalTime || args?.startTime || '07:30').trim();
+          const endLocalTime = String(args?.endLocalTime || args?.endTime || '08:15').trim();
+          const room = args?.room || args?.location || '';
+          const teacher = args?.teacher || '';
+
+          const subjects = await subjectRepo.getByUserId(userId);
+          const subject = subjects.find((s) => s.name.toLowerCase().includes(subjectName.toLowerCase())) || subjects[0];
+
+          const payload = {
+            title,
+            subjectId: subject?.id || 'sub_toan',
+            subjectName: subject?.name || subjectName,
+            dayOfWeek,
+            startLocalTime,
+            endLocalTime,
+            room,
+            teacher,
+          };
+
+          const dayNames = ['', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
+          const dayLabel = dayNames[dayOfWeek] || `Thứ ${dayOfWeek}`;
+          const previewText = `Thêm tiết học "${payload.title}" (${payload.subjectName}) vào ${dayLabel} (${startLocalTime} - ${endLocalTime}). Bạn có đồng ý lưu vào thời khóa biểu chính khóa không?`;
+
+          const proposal = await this.saveProposal(userId, {
+            actionType: 'create_timetable_entry',
+            conversationId,
+            payload,
+            previewText,
+          });
+
+          return {
+            success: true,
+            requiresConfirmation: true,
+            message: previewText,
+            proposal,
+          };
+        }
+
         case 'add_busy_event':
         case 'preview_add_busy_event': {
           const title = String(args?.title || '').trim();
-          const startsAt = args?.startsAt ? new Date(args.startsAt).toISOString() : new Date().toISOString();
+          const targetDow = (args?.dayOfWeek !== undefined || args?.day !== undefined || args?.dayName !== undefined)
+            ? resolveVietnameseDayOfWeek(args?.dayOfWeek ?? args?.day ?? args?.dayName)
+            : undefined;
+          const startsAt = calculateTargetDateTimeIso(targetDow, args?.timeStr || args?.startLocalTime, args?.startsAt);
           const endsAt = args?.endsAt
             ? new Date(args.endsAt).toISOString()
             : new Date(new Date(startsAt).getTime() + 90 * 60 * 1000).toISOString();
@@ -929,7 +1153,8 @@ export class JamiActionService {
       let clientAction: any = { type: 'refresh' };
 
       switch (proposal.actionType) {
-        case 'create_task': {
+        case 'create_task':
+        case 'create_scheduled_task': {
           const p = proposal.payload;
           const task = await taskRepo.createTask(userId, {
             title: p.title,
@@ -938,9 +1163,30 @@ export class JamiActionService {
             priority: p.priority,
             difficulty: p.difficulty,
             dueAt: p.dueAt,
+            scheduledStartAt: p.scheduledStartAt,
+            scheduledEndAt: p.scheduledEndAt,
           });
-          resultMsg = `Đã tạo nhiệm vụ "${task.title}" môn ${p.subjectName || ''} thành công.`;
-          clientAction = { type: 'navigate', route: '/tasks' };
+          resultMsg = p.scheduledStartAt
+            ? `Đã tạo và xếp lịch học "${task.title}" (${p.subjectName || ''}) vào thời khóa biểu thành công.`
+            : `Đã tạo nhiệm vụ "${task.title}" môn ${p.subjectName || ''} thành công.`;
+          clientAction = { type: 'navigate', route: p.scheduledStartAt ? '/timetable' : '/tasks' };
+          break;
+        }
+
+        case 'create_timetable_entry': {
+          const p = proposal.payload;
+          const entry = await timetableRepo.createTimetableEntry(userId, {
+            title: p.title,
+            subjectId: p.subjectId,
+            subjectName: p.subjectName,
+            dayOfWeek: p.dayOfWeek,
+            startLocalTime: p.startLocalTime,
+            endLocalTime: p.endLocalTime,
+            room: p.room,
+            teacher: p.teacher,
+          });
+          resultMsg = `Đã thêm tiết học "${entry.title}" vào thời khóa biểu chính khóa thành công.`;
+          clientAction = { type: 'navigate', route: '/timetable' };
           break;
         }
 

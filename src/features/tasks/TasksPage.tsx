@@ -22,7 +22,7 @@ import { api } from '../../lib/api-client';
 import { StudyTask, Subject } from '../../../shared/types';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportTasksToPdf } from '../../lib/pdf-export-service';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 export const TasksPage: React.FC = () => {
   const navigate = useNavigate();

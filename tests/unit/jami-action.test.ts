@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { jamiActionService, ALLOWED_NAVIGATE_ROUTES } from '../../server/services/jami-action-service';
+import { jamiActionService, ALLOWED_NAVIGATE_ROUTES, resolveVietnameseDayOfWeek } from '../../server/services/jami-action-service';
 import { taskRepo } from '../../server/repositories/task-repository';
 import { focusRepo } from '../../server/repositories/focus-repository';
 import { timetableRepo } from '../../server/repositories/timetable-repository';
@@ -157,5 +157,104 @@ describe('Jami Action Service Unit Tests', () => {
     const confirmRes = await jamiActionService.handleProposalDecision(userId, 'confirm', previewRes.proposal?.id);
     expect(confirmRes.success).toBe(true);
     expect(confirmRes.clientAction?.route).toBe('/notifications');
+  });
+
+  it('creates scheduled task with specific start and end times and routes to /timetable', async () => {
+    const startTime = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+    const previewRes = await jamiActionService.executeTool(userId, 'preview_create_scheduled_task', {
+      title: 'Tự học Toán - Chuyên đề Hàm số',
+      subjectName: 'Toán học',
+      scheduledStartAt: startTime,
+      estimatedMinutes: 60,
+      priority: 'high',
+    });
+
+    expect(previewRes.success).toBe(true);
+    expect(previewRes.requiresConfirmation).toBe(true);
+    expect(previewRes.proposal).toBeDefined();
+
+    const confirmRes = await jamiActionService.handleProposalDecision(userId, 'confirm', previewRes.proposal?.id);
+    expect(confirmRes.success).toBe(true);
+    expect(confirmRes.clientAction?.route).toBe('/timetable');
+
+    const tasks = await taskRepo.getByUserId(userId);
+    const createdTask = tasks.find((t) => t.title === 'Tự học Toán - Chuyên đề Hàm số');
+    expect(createdTask).toBeDefined();
+    expect(createdTask?.scheduledStartAt).toBeDefined();
+    expect(new Date(createdTask!.scheduledStartAt!).getTime()).toBe(new Date(startTime).getTime());
+  });
+
+  it('creates school timetable entry and routes to /timetable', async () => {
+    const previewRes = await jamiActionService.executeTool(userId, 'preview_create_timetable_entry', {
+      title: 'Vật lý 10',
+      subjectName: 'Vật lý',
+      dayOfWeek: 3,
+      startLocalTime: '08:00',
+      endLocalTime: '08:45',
+      room: 'Phòng 204',
+      teacher: 'Thầy Hưng',
+    });
+
+    expect(previewRes.success).toBe(true);
+    expect(previewRes.requiresConfirmation).toBe(true);
+
+    const confirmRes = await jamiActionService.handleProposalDecision(userId, 'confirm', previewRes.proposal?.id);
+    expect(confirmRes.success).toBe(true);
+    expect(confirmRes.clientAction?.route).toBe('/timetable');
+
+    const entries = await timetableRepo.getTimetableEntries(userId);
+    const createdEntry = entries.find((e) => e.title === 'Vật lý 10' && e.dayOfWeek === 3);
+    expect(createdEntry).toBeDefined();
+    expect(createdEntry?.startLocalTime).toBe('08:00');
+    expect(createdEntry?.endLocalTime).toBe('08:45');
+  });
+
+  it('creates busy event for extra classes and routes to /timetable', async () => {
+    const startsAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    const endsAt = new Date(Date.now() + 26 * 3600 * 1000).toISOString();
+    const previewRes = await jamiActionService.executeTool(userId, 'preview_add_busy_event', {
+      title: 'Học thêm Hóa học',
+      startsAt,
+      endsAt,
+      type: 'extra_class',
+    });
+
+    expect(previewRes.success).toBe(true);
+    const confirmRes = await jamiActionService.handleProposalDecision(userId, 'confirm', previewRes.proposal?.id);
+    expect(confirmRes.success).toBe(true);
+    expect(confirmRes.clientAction?.route).toBe('/timetable');
+
+    const events = await timetableRepo.getBusyEvents(userId);
+    const createdEvent = events.find((e) => e.title === 'Học thêm Hóa học');
+    expect(createdEvent).toBeDefined();
+  });
+
+  it('correctly maps Vietnamese weekday names to canonical 1..7 indices (Thứ 2=1 .. Thứ 7=6, CN=7)', () => {
+    expect(resolveVietnameseDayOfWeek('Thứ 2')).toBe(1);
+    expect(resolveVietnameseDayOfWeek('Thứ hai')).toBe(1);
+    expect(resolveVietnameseDayOfWeek('t2')).toBe(1);
+
+    expect(resolveVietnameseDayOfWeek('Thứ 3')).toBe(2);
+    expect(resolveVietnameseDayOfWeek('Thứ ba')).toBe(2);
+    expect(resolveVietnameseDayOfWeek('t3')).toBe(2);
+
+    expect(resolveVietnameseDayOfWeek('Thứ 4')).toBe(3);
+    expect(resolveVietnameseDayOfWeek('Thứ tư')).toBe(3);
+    expect(resolveVietnameseDayOfWeek('t4')).toBe(3);
+
+    expect(resolveVietnameseDayOfWeek('Thứ 5')).toBe(4);
+    expect(resolveVietnameseDayOfWeek('Thứ năm')).toBe(4);
+    expect(resolveVietnameseDayOfWeek('t5')).toBe(4);
+
+    expect(resolveVietnameseDayOfWeek('Thứ 6')).toBe(5);
+    expect(resolveVietnameseDayOfWeek('Thứ sáu')).toBe(5);
+    expect(resolveVietnameseDayOfWeek('t6')).toBe(5);
+
+    expect(resolveVietnameseDayOfWeek('Thứ 7')).toBe(6);
+    expect(resolveVietnameseDayOfWeek('Thứ bảy')).toBe(6);
+    expect(resolveVietnameseDayOfWeek('t7')).toBe(6);
+
+    expect(resolveVietnameseDayOfWeek('Chủ nhật')).toBe(7);
+    expect(resolveVietnameseDayOfWeek('CN')).toBe(7);
   });
 });

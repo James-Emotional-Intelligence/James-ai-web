@@ -33,7 +33,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api-client';
 import { JamiConversation, JamiMessageItem, LearningMaterial } from '../../../shared/types';
 import { MaterialFilePickerModal, SelectedFileResult } from '../../components/common/MaterialFilePickerModal';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 import { RobotJami, JamiState } from '../../components/jami/RobotJami';
 import { useVoiceJami } from '../../context/VoiceJamiContext';
 
@@ -377,13 +377,24 @@ export const JamiAssistantPage: React.FC = () => {
     setConfirmingMsgId(msg.id);
     try {
       const res = await api.confirmJamiAction(msg.id, decision);
+      if (res.actionResult && res.actionResult.success === false) {
+        throw new Error(res.actionResult.message || 'Thao tác không thành công.');
+      }
+
       setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, isConfirmed: true } : m))
       );
 
       if (decision === 'confirm') {
         confetti({ particleCount: 70, spread: 60 });
-        speakText('Đã thực hiện và cập nhật thành công vào hệ thống!');
+        const successMessage = res.actionResult?.message || 'Đã thực hiện và cập nhật thành công vào hệ thống!';
+        speakText(successMessage);
+
+        if (res.actionResult?.clientAction?.route) {
+          setTimeout(() => {
+            navigate(res.actionResult.clientAction.route);
+          }, 1500);
+        }
       } else {
         speakText('Đã hủy thao tác theo yêu cầu của bạn.');
       }

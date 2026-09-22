@@ -36,7 +36,7 @@ import {
 } from '../../../shared/types';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportMaterialSummaryToPdf } from '../../lib/pdf-export-service';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 type ActiveSidebarTab = 'toc' | 'bookmarks' | 'highlights' | 'search' | 'study';
 

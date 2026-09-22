@@ -48,7 +48,7 @@ import { doesEventOccurOnLocalDate } from '../../../shared/utils/recurrence-util
 import { formatTimeVN, formatDateVN, formatDateShortVN, formatDateFullVN, formatBytes } from '../../lib/utils';
 import { generateWeekOptions } from '../../lib/week-utils';
 import { exportTimetableToPdf } from '../../lib/timetable-pdf-export';
-import confetti from 'canvas-confetti';
+import confetti from '../../lib/safe-confetti';
 
 export const getSubjectColorTheme = (title: string, subjectName?: string) => {
   const text = `${title} ${subjectName || ''}`.toLowerCase();
