@@ -65,6 +65,25 @@ export class JamiOrchestrator {
       }
     }
 
+    if (clientMessageId) {
+      const existingMessages = await jamiRepo.getMessages(userId, conversationId, 100);
+      const existingUserIndex = existingMessages.findIndex((m) => m.clientMessageId === clientMessageId);
+      if (existingUserIndex >= 0) {
+        const existingReply = existingMessages
+          .slice(existingUserIndex + 1)
+          .find((m) => m.sender === 'jami') || existingMessages[existingMessages.length - 1];
+        if (existingReply?.sender === 'jami') {
+          return {
+            userMessage: existingMessages[existingUserIndex],
+            replyMessage: existingReply,
+            proposal: existingReply.proposal,
+            clientAction: undefined,
+            isDemoMode: !AiAdapter.isConfigured(),
+          };
+        }
+      }
+    }
+
     // 2. Save user message to MySQL (idempotent if clientMessageId is present)
     const userMsg = await jamiRepo.saveMessage(userId, {
       conversationId,

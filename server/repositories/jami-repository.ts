@@ -236,6 +236,47 @@ export class JamiRepository {
   }
 
   public async saveMessage(userId: string, msg: Partial<JamiMessageItem>): Promise<JamiMessageItem> {
+    if (msg.clientMessageId) {
+      if (db.isHealthy()) {
+        const existingRows = await db.query<any>(
+          `SELECT id, conversation_id, user_id, sender, text, emotion, suggested_actions_json,
+                  requires_confirmation, confirmation_summary, proposal_id, is_confirmed,
+                  client_message_id, created_at
+           FROM jami_messages
+           WHERE user_id = ? AND client_message_id = ?
+           LIMIT 1`,
+          [userId, msg.clientMessageId]
+        );
+        if (existingRows.length > 0) {
+          const r = existingRows[0];
+          let suggestedActions: any[] = [];
+          try {
+            suggestedActions = r.suggested_actions_json
+              ? (typeof r.suggested_actions_json === 'string' ? JSON.parse(r.suggested_actions_json) : r.suggested_actions_json)
+              : [];
+          } catch {}
+          return {
+            id: r.id,
+            conversationId: r.conversation_id || undefined,
+            userId: r.user_id,
+            sender: r.sender === 'user' ? 'user' : 'jami',
+            text: r.text || '',
+            emotion: r.emotion || 'idle',
+            suggestedActions,
+            requiresConfirmation: Boolean(r.requires_confirmation),
+            confirmationSummary: r.confirmation_summary || undefined,
+            proposalId: r.proposal_id || undefined,
+            isConfirmed: Boolean(r.is_confirmed),
+            clientMessageId: r.client_message_id || undefined,
+            createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+          };
+        }
+      } else {
+        const existing = (this.demoMessages.get(userId) || []).find((m) => m.clientMessageId === msg.clientMessageId);
+        if (existing) return existing;
+      }
+    }
+
     const id = msg.id || 'msg_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const createdAt = msg.createdAt || new Date().toISOString();
 
