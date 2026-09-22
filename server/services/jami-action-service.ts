@@ -9,6 +9,7 @@ import { reportRepo } from '../repositories/report-repository';
 import { subjectRepo } from '../repositories/subject-repository';
 import { plannerRepo } from '../repositories/planner-repository';
 import { notificationRepo } from '../repositories/notification-repository';
+import { mistakeRepo } from '../repositories/mistake-repository';
 import { UserRepository } from '../repositories/user-repository';
 import { DeterministicScheduler } from './scheduler';
 
@@ -521,11 +522,9 @@ export class JamiActionService {
           if (!title) {
             return { success: false, message: 'Vui lòng cung cấp tiêu đề cho nhiệm vụ học tập.' };
           }
-          const estimatedMinutes = Math.min(180, Math.max(15, Number(args?.estimatedMinutes) || 45));
+          const estimatedMinutes = Math.min(480, Math.max(5, Number(args?.estimatedMinutes) || 45));
           const priority = (args?.priority === 'high' || args?.priority === 'low') ? args.priority : 'medium';
-          const subjectName = args?.subjectName || 'Toán học';
-          const startsAt = args?.startsAt || args?.scheduledStartAt;
-          const endsAt = args?.endsAt || args?.scheduledEndAt || (startsAt ? new Date(new Date(startsAt).getTime() + estimatedMinutes * 60 * 1000).toISOString() : undefined);
+          const subjectName = args?.subjectName || '';
 
           // Look up subject ID
           const subjects = await subjectRepo.getByUserId(userId);
@@ -533,20 +532,16 @@ export class JamiActionService {
 
           const payload = {
             title,
-            subjectId: subject?.id || 'sub_toan',
+            subjectId: subject?.id,
             subjectName: subject?.name || subjectName,
             estimatedMinutes,
             priority,
             difficulty: args?.difficulty || 'medium',
-            dueAt: args?.dueAt || (startsAt ? startsAt : new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString()),
-            scheduledStartAt: startsAt ? new Date(startsAt).toISOString() : undefined,
-            scheduledEndAt: endsAt ? new Date(endsAt).toISOString() : undefined,
+            dueAt: args?.dueAt ? new Date(args.dueAt).toISOString() : undefined,
+            notes: args?.notes,
           };
 
-          const timeNote = startsAt
-            ? ` vào lúc ${new Date(startsAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} ngày ${new Date(startsAt).toLocaleDateString('vi-VN')}`
-            : '';
-          const previewText = `Tạo nhiệm vụ "${title}" môn ${payload.subjectName} (${estimatedMinutes} phút, mức ưu tiên ${priority}${timeNote}). Bạn có đồng ý lưu không?`;
+          const previewText = `Tạo nhiệm vụ "${title}"${payload.subjectName ? ` môn ${payload.subjectName}` : ''} (${estimatedMinutes} phút, mức ưu tiên ${priority}). Bạn có đồng ý lưu không?`;
 
           const proposal = await this.saveProposal(userId, {
             actionType: 'create_task',
@@ -571,7 +566,7 @@ export class JamiActionService {
         case 'create_study_session': {
           const title = String(args?.title || args?.topic || 'Tự học bài').trim();
           const subjectName = args?.subjectName || 'Toán học';
-          const estimatedMinutes = Math.min(180, Math.max(15, Number(args?.estimatedMinutes) || 45));
+          const estimatedMinutes = Math.min(480, Math.max(5, Number(args?.estimatedMinutes) || 45));
           const priority = (args?.priority === 'high' || args?.priority === 'low') ? args.priority : 'medium';
 
           const targetDow = (args?.dayOfWeek !== undefined || args?.day !== undefined || args?.dayName !== undefined)
@@ -585,7 +580,7 @@ export class JamiActionService {
 
           const payload = {
             title,
-            subjectId: subject?.id || 'sub_toan',
+            subjectId: subject?.id,
             subjectName: subject?.name || subjectName,
             estimatedMinutes,
             priority,
@@ -616,6 +611,7 @@ export class JamiActionService {
 
         case 'create_timetable_entry':
         case 'preview_create_timetable_entry':
+        case 'preview_add_timetable_entry':
         case 'add_timetable_entry': {
           const title = String(args?.title || args?.subjectName || 'Tiết học').trim();
           const subjectName = args?.subjectName || title;
@@ -631,13 +627,16 @@ export class JamiActionService {
 
           const payload = {
             title,
-            subjectId: subject?.id || 'sub_toan',
+            subjectId: subject?.id,
             subjectName: subject?.name || subjectName,
             dayOfWeek,
             startLocalTime,
             endLocalTime,
             room,
+            location: args?.location || room,
             teacher,
+            commuteBeforeMinutes: args?.commuteBeforeMinutes ?? 0,
+            commuteAfterMinutes: args?.commuteAfterMinutes ?? 0,
           };
 
           const dayNames = ['', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
@@ -677,6 +676,10 @@ export class JamiActionService {
             type: args?.type || 'personal',
             timezone: 'Asia/Ho_Chi_Minh',
             isFixed: true,
+            isAllDay: Boolean(args?.isAllDay),
+            notes: args?.notes,
+            commuteBeforeMinutes: args?.commuteBeforeMinutes ?? 0,
+            commuteAfterMinutes: args?.commuteAfterMinutes ?? 0,
           };
 
           const startTimeStr = new Date(startsAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
@@ -752,22 +755,32 @@ export class JamiActionService {
         }
 
         case 'create_exam':
+        case 'create_exam_plan':
         case 'preview_create_exam': {
           const title = String(args?.title || '').trim();
-          const examAt = args?.examAt ? new Date(args.examAt).toISOString() : new Date(Date.now() + 7 * 86400000).toISOString();
-          const subjectName = args?.subjectName || 'Toán học';
+          const examAtInput = args?.examAt || args?.examDate;
+          const examAt = examAtInput ? new Date(examAtInput).toISOString() : new Date(Date.now() + 7 * 86400000).toISOString();
+          const subjectName = args?.subjectName || args?.subject || '';
 
           const subjects = await subjectRepo.getByUserId(userId);
           const subject = subjects.find((s) => s.name.toLowerCase().includes(subjectName.toLowerCase())) || subjects[0];
+          const topicPayload = Array.isArray(args?.topics)
+            ? args.topics.map((topic: any, index: number) => ({
+                id: topic?.id,
+                name: typeof topic === 'string' ? topic : String(topic?.name || `Chủ đề ${index + 1}`),
+                weight: typeof topic === 'object' && topic?.weight !== undefined ? Number(topic.weight) : 1,
+              })).filter((topic: any) => topic.name.trim().length > 0)
+            : [];
 
           const payload = {
-            title,
-            subjectId: subject?.id || 'sub_toan',
+            title: title || `Kiểm tra ${subject?.name || subjectName || 'môn học'}`,
+            subjectId: subject?.id,
             subjectName: subject?.name || subjectName,
             examAt,
             importance: args?.importance || 'high',
-            scopeText: args?.scopeText || 'Kiến thức trọng tâm',
-            topics: [{ id: 'top_1', name: 'Chủ đề 1', weight: 100 }],
+            targetScore: args?.targetScore,
+            scopeText: args?.scopeText || args?.notes || '',
+            topics: topicPayload,
           };
 
           const examDateStr = new Date(examAt).toLocaleDateString('vi-VN');
@@ -788,14 +801,22 @@ export class JamiActionService {
           };
         }
 
-        case 'mark_task_completed': {
+        case 'mark_task_completed':
+        case 'preview_mark_task_completed': {
           const tasks = await taskRepo.getByUserId(userId);
           const pending = tasks.filter((t) => t.status === 'pending' || t.status === 'in_progress');
-          const taskToComplete = args?.taskId
-            ? tasks.find((t) => t.id === args.taskId)
-            : args?.taskTitle
-            ? pending.find((t) => t.title.toLowerCase().includes(args.taskTitle.toLowerCase())) || pending[0]
-            : pending[0];
+          let taskToComplete = args?.taskId ? tasks.find((t) => t.id === args.taskId) : undefined;
+          if (!taskToComplete && args?.taskTitle) {
+            const matches = pending.filter((t) => t.title.toLowerCase().includes(String(args.taskTitle).toLowerCase()));
+            if (matches.length > 1) {
+              return {
+                success: false,
+                message: 'Có nhiều nhiệm vụ khớp tiêu đề. Vui lòng chọn một nhiệm vụ cụ thể.',
+                data: { clarificationRequired: true, tasks: matches.slice(0, 5) },
+              };
+            }
+            taskToComplete = matches[0];
+          }
 
           if (!taskToComplete) {
             return {
@@ -822,14 +843,23 @@ export class JamiActionService {
 
         case 'create_reminder':
         case 'preview_create_reminder': {
-          const content = String(args?.content || 'Học bài').trim();
-          const timeStr = String(args?.timeStr || 'hôm nay').trim();
-          const previewText = `Tạo lời nhắc "${content}" vào lúc ${timeStr}. Bạn có xác nhận không?`;
+          const title = String(args?.title || args?.content || '').trim();
+          const scheduledFor = args?.scheduledFor ? new Date(args.scheduledFor).toISOString() : undefined;
+          if (!title || !scheduledFor) {
+            return { success: false, message: 'Vui lòng cung cấp tiêu đề và thời điểm nhắc hợp lệ.' };
+          }
+          const previewText = `Tạo lời nhắc "${title}" vào lúc ${new Date(scheduledFor).toLocaleString('vi-VN')}. Bạn có xác nhận không?`;
 
           const proposal = await this.saveProposal(userId, {
             actionType: 'create_reminder',
             conversationId,
-            payload: { content, timeStr },
+            payload: {
+              title,
+              body: args?.body,
+              scheduledFor,
+              priority: args?.priority || 'medium',
+              actionUrl: args?.actionUrl || '/notifications',
+            },
             previewText,
           });
 
@@ -839,6 +869,74 @@ export class JamiActionService {
             message: previewText,
             proposal,
           };
+        }
+
+        case 'create_mistake_entry':
+        case 'preview_create_mistake_entry': {
+          const questionText = String(args?.questionText || args?.problemStatement || '').trim();
+          const correctAnswer = String(args?.correctAnswer || '').trim();
+          const correctSolution = String(args?.correctSolution || args?.correctExplanation || '').trim();
+          if (!questionText || !correctAnswer || !correctSolution) {
+            return { success: false, message: 'Vui lòng cung cấp câu hỏi, đáp án đúng và lời giải đúng.' };
+          }
+          const subjectName = args?.subjectName || args?.subject || '';
+          const subjects = await subjectRepo.getByUserId(userId);
+          const subject = subjectName
+            ? subjects.find((s) => s.name.toLowerCase().includes(String(subjectName).toLowerCase()))
+            : undefined;
+          const payload = {
+            subjectId: subject?.id,
+            subjectName: subject?.name || subjectName,
+            topic: args?.topic || 'Khác',
+            questionText,
+            selectedAnswer: args?.selectedAnswer,
+            correctAnswer,
+            mistakeReason: args?.mistakeReason || 'other',
+            correctSolution,
+            lessonLearned: args?.lessonLearned,
+            difficulty: args?.severity === 'critical' ? 'hard' : args?.severity === 'minor' ? 'easy' : 'medium',
+          };
+          const previewText = `Lưu lỗi sai "${questionText.slice(0, 80)}${questionText.length > 80 ? '...' : ''}" vào Sổ lỗi sai. Bạn có xác nhận không?`;
+          const proposal = await this.saveProposal(userId, {
+            actionType: 'create_mistake_entry',
+            conversationId,
+            payload,
+            previewText,
+          });
+          return { success: true, requiresConfirmation: true, message: previewText, proposal };
+        }
+
+        case 'cancel_event':
+        case 'preview_cancel_event': {
+          const eventType = args?.eventType;
+          const eventId = String(args?.eventId || '').trim();
+          if (!eventType || !eventId) {
+            return { success: false, message: 'Vui lòng cung cấp loại và mã sự kiện cần hủy.' };
+          }
+          let label = eventId;
+          if (eventType === 'task') {
+            const task = await taskRepo.getById(userId, eventId);
+            if (!task) return { success: false, message: 'Không tìm thấy nhiệm vụ thuộc tài khoản của bạn.' };
+            label = task.title;
+          } else if (eventType === 'busy_event') {
+            const events = await timetableRepo.getBusyEvents(userId);
+            const event = events.find((e) => e.id === eventId);
+            if (!event) return { success: false, message: 'Không tìm thấy lịch bận thuộc tài khoản của bạn.' };
+            label = event.title;
+          } else if (eventType === 'timetable_entry') {
+            const entries = await timetableRepo.getTimetableEntries(userId);
+            const entry = entries.find((e) => e.id === eventId);
+            if (!entry) return { success: false, message: 'Không tìm thấy tiết học thuộc tài khoản của bạn.' };
+            label = entry.title;
+          }
+          const previewText = `Hủy ${eventType} "${label}". Bạn có xác nhận không?`;
+          const proposal = await this.saveProposal(userId, {
+            actionType: 'cancel_event',
+            conversationId,
+            payload: { eventType, eventId, reason: args?.reason, label },
+            previewText,
+          });
+          return { success: true, requiresConfirmation: true, message: previewText, proposal };
         }
 
         case 'suggest_priority_task': {
