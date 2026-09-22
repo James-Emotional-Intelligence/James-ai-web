@@ -1,14 +1,17 @@
 import { z } from 'zod';
 import {
   PreviewCreateTaskArgsSchema,
+  PreviewCreateScheduledTaskArgsSchema,
   PreviewAddBusyEventArgsSchema,
   PreviewReplanTasksArgsSchema,
   PreviewAddTimetableEntryArgsSchema,
-  PreviewCreateExamPlanArgsSchema,
+  PreviewCreateExamArgsSchema,
   PreviewCreateMistakeEntryArgsSchema,
   PreviewCreateReminderArgsSchema,
+  PreviewMarkTaskCompletedArgsSchema,
   PreviewCancelEventArgsSchema,
   GetDailyScheduleArgsSchema,
+  GetNextTaskArgsSchema,
   GetSubjectProgressArgsSchema,
   GetUpcomingExamsArgsSchema,
   GetMistakeSummaryArgsSchema,
@@ -36,7 +39,7 @@ import {
   formatVnTime,
 } from '../lib/date-time';
 
-export type ToolKind = 'read' | 'mutate';
+export type ToolKind = 'read' | 'immediate' | 'mutate';
 
 export interface ToolDefinition<TArgs = any> {
   name: string;
@@ -71,12 +74,10 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
           type: 'object',
           properties: {
             title: { type: 'string', description: 'Tiêu đề nhiệm vụ học tập' },
-            subject: { type: 'string', description: 'Tên môn học (Toán học, Vật lí, Hóa học...)' },
+            subjectName: { type: 'string', description: 'Tên môn học (Toán học, Vật lí, Hóa học...)' },
             estimatedMinutes: { type: 'number', description: 'Thời lượng dự kiến (phút, 15-180)' },
             priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Mức độ ưu tiên' },
             dueAt: { type: 'string', description: 'Hạn chót hoàn thành (ISO timestamp)' },
-            scheduledStartAt: { type: 'string', description: 'Thời điểm bắt đầu dự kiến (ISO timestamp)' },
-            scheduledEndAt: { type: 'string', description: 'Thời điểm kết thúc dự kiến (ISO timestamp)' },
             notes: { type: 'string', description: 'Ghi chú thêm cho nhiệm vụ' },
           },
           required: ['title'],
@@ -85,6 +86,36 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
     },
     handler: async (userId, args, context) => {
       return jamiActionService.executeTool(userId, 'preview_create_task', args, context?.conversationId);
+    },
+  },
+
+  preview_create_scheduled_task: {
+    name: 'preview_create_scheduled_task',
+    description: 'Tạo đề xuất ca tự học có giờ bắt đầu cụ thể, cần xác nhận trước khi lưu.',
+    kind: 'mutate',
+    schema: PreviewCreateScheduledTaskArgsSchema,
+    openAiDefinition: {
+      type: 'function',
+      function: {
+        name: 'preview_create_scheduled_task',
+        description: 'Tạo bản nháp ca tự học có thời gian cụ thể cần xác nhận.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            subjectName: { type: 'string' },
+            scheduledStartAt: { type: 'string', description: 'ISO timestamp có timezone' },
+            scheduledEndAt: { type: 'string', description: 'ISO timestamp có timezone' },
+            estimatedMinutes: { type: 'number' },
+            priority: { type: 'string', enum: ['low', 'medium', 'high'] },
+            notes: { type: 'string' },
+          },
+          required: ['title', 'scheduledStartAt'],
+        },
+      },
+    },
+    handler: async (userId, args, context) => {
+      return jamiActionService.executeTool(userId, 'preview_create_scheduled_task', args, context?.conversationId);
     },
   },
 
@@ -104,6 +135,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
             title: { type: 'string', description: 'Tên sự kiện bận' },
             startsAt: { type: 'string', description: 'Thời gian bắt đầu (ISO 8601)' },
             endsAt: { type: 'string', description: 'Thời gian kết thúc (ISO 8601)' },
+            type: { type: 'string', enum: ['extra_class', 'meal', 'sleep', 'commute', 'personal'] },
             isAllDay: { type: 'boolean', description: 'Sự kiện cả ngày' },
             notes: { type: 'string', description: 'Ghi chú sự kiện' },
             commuteBeforeMinutes: { type: 'number', description: 'Thời gian di chuyển trước (phút)' },
@@ -132,6 +164,8 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
           type: 'object',
           properties: {
             strategy: { type: 'string', enum: ['balanced', 'urgent_first', 'deep_work'], description: 'Chiến lược tối ưu' },
+            reason: { type: 'string', description: 'Lý do cần xếp lại lịch' },
+            daysCount: { type: 'number', description: 'Số ngày cần xếp lịch' },
             targetDate: { type: 'string', description: 'Ngày áp dụng (YYYY-MM-DD)' },
             preserveLocked: { type: 'boolean', description: 'Giữ nguyên các khối lịch đã chốt' },
           },
@@ -157,7 +191,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
           type: 'object',
           properties: {
             title: { type: 'string', description: 'Tên môn học / tiết học' },
-            subject: { type: 'string', description: 'Tên môn học chuẩn hóa' },
+            subjectName: { type: 'string', description: 'Tên môn học chuẩn hóa' },
             teacher: { type: 'string', description: 'Tên giáo viên phụ trách' },
             dayOfWeek: { type: 'number', description: 'Thứ trong tuần (1=Thứ Hai ... 7=Chủ Nhật)' },
             startLocalTime: { type: 'string', description: 'Giờ bắt đầu dạng HH:mm (ví dụ 07:30)' },
@@ -169,35 +203,44 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       },
     },
     handler: async (userId, args, context) => {
-      return jamiActionService.executeTool(userId, 'preview_create_timetable_entry', args, context?.conversationId);
+      return jamiActionService.executeTool(userId, 'preview_add_timetable_entry', args, context?.conversationId);
     },
   },
 
-  preview_create_exam_plan: {
-    name: 'preview_create_exam_plan',
-    description: 'Đề xuất kế hoạch ôn thi và mục tiêu điểm số cho một môn học cụ thể cần xác nhận.',
+  preview_create_exam: {
+    name: 'preview_create_exam',
+    description: 'Đề xuất tạo kỳ thi/bài kiểm tra cho một môn học cụ thể cần xác nhận.',
     kind: 'mutate',
-    schema: PreviewCreateExamPlanArgsSchema,
+    schema: PreviewCreateExamArgsSchema,
     openAiDefinition: {
       type: 'function',
       function: {
-        name: 'preview_create_exam_plan',
-        description: 'Đề xuất kế hoạch ôn thi.',
+        name: 'preview_create_exam',
+        description: 'Đề xuất tạo kỳ thi/bài kiểm tra.',
         parameters: {
           type: 'object',
           properties: {
-            subject: { type: 'string', description: 'Tên môn thi' },
-            examDate: { type: 'string', description: 'Ngày thi (ISO hoặc YYYY-MM-DD)' },
+            title: { type: 'string', description: 'Tiêu đề kỳ thi' },
+            subjectName: { type: 'string', description: 'Tên môn thi' },
+            examAt: { type: 'string', description: 'Thời gian thi ISO có timezone' },
+            importance: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
             targetScore: { type: 'number', description: 'Mục tiêu điểm số (thang điểm 10)' },
-            topics: { type: 'array', items: { type: 'string' }, description: 'Các chuyên đề trọng tâm ôn thi' },
-            notes: { type: 'string', description: 'Ghi chú chuẩn bị ôn thi' },
+            scopeText: { type: 'string', description: 'Phạm vi ôn tập' },
+            topics: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { name: { type: 'string' }, weight: { type: 'number' } },
+                required: ['name'],
+              },
+            },
           },
-          required: ['subject', 'examDate'],
+          required: ['title', 'subjectName', 'examAt'],
         },
       },
     },
     handler: async (userId, args, context) => {
-      return jamiActionService.executeTool(userId, 'create_exam_plan', args, context?.conversationId);
+      return jamiActionService.executeTool(userId, 'preview_create_exam', args, context?.conversationId);
     },
   },
 
@@ -214,20 +257,22 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         parameters: {
           type: 'object',
           properties: {
-            subject: { type: 'string', description: 'Môn học' },
+            subjectName: { type: 'string', description: 'Môn học' },
             topic: { type: 'string', description: 'Chuyên đề / dạng bài' },
-            problemStatement: { type: 'string', description: 'Đề bài hoặc câu hỏi bị sai' },
-            studentMistake: { type: 'string', description: 'Nguyên nhân sai hoặc cách làm sai' },
+            questionText: { type: 'string', description: 'Đề bài hoặc câu hỏi bị sai' },
+            selectedAnswer: { type: 'string', description: 'Câu trả lời đã chọn' },
+            correctAnswer: { type: 'string', description: 'Đáp án đúng' },
+            mistakeReason: { type: 'string', description: 'Nguyên nhân sai' },
             correctSolution: { type: 'string', description: 'Lời giải đúng và chuẩn xác' },
             lessonLearned: { type: 'string', description: 'Bài học rút ra để tránh lặp lại' },
             severity: { type: 'string', enum: ['minor', 'medium', 'critical'], description: 'Mức độ nghiêm trọng của lỗi' },
           },
-          required: ['problemStatement', 'studentMistake', 'correctSolution'],
+          required: ['questionText', 'correctAnswer', 'correctSolution'],
         },
       },
     },
     handler: async (userId, args, context) => {
-      return jamiActionService.executeTool(userId, 'create_mistake_entry', args, context?.conversationId);
+      return jamiActionService.executeTool(userId, 'preview_create_mistake_entry', args, context?.conversationId);
     },
   },
 
@@ -245,16 +290,41 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
           type: 'object',
           properties: {
             title: { type: 'string', description: 'Nội dung nhắc nhở' },
+            body: { type: 'string', description: 'Chi tiết lời nhắc' },
             scheduledFor: { type: 'string', description: 'Thời điểm nhắc (ISO timestamp)' },
             priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Mức ưu tiên' },
-            notes: { type: 'string', description: 'Chi tiết thêm' },
+            actionUrl: { type: 'string', description: 'Đường dẫn trong app' },
           },
           required: ['title', 'scheduledFor'],
         },
       },
     },
     handler: async (userId, args, context) => {
-      return jamiActionService.executeTool(userId, 'create_reminder', args, context?.conversationId);
+      return jamiActionService.executeTool(userId, 'preview_create_reminder', args, context?.conversationId);
+    },
+  },
+
+  preview_mark_task_completed: {
+    name: 'preview_mark_task_completed',
+    description: 'Đề xuất đánh dấu một nhiệm vụ học tập đã hoàn thành, cần xác nhận.',
+    kind: 'mutate',
+    schema: PreviewMarkTaskCompletedArgsSchema,
+    openAiDefinition: {
+      type: 'function',
+      function: {
+        name: 'preview_mark_task_completed',
+        description: 'Đề xuất đánh dấu hoàn thành nhiệm vụ.',
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string' },
+            taskTitle: { type: 'string' },
+          },
+        },
+      },
+    },
+    handler: async (userId, args, context) => {
+      return jamiActionService.executeTool(userId, 'preview_mark_task_completed', args, context?.conversationId);
     },
   },
 
@@ -271,7 +341,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         parameters: {
           type: 'object',
           properties: {
-            eventType: { type: 'string', enum: ['busy_event', 'timetable_entry', 'task'], description: 'Loại sự kiện cần hủy' },
+            eventType: { type: 'string', enum: ['busy_event', 'timetable_entry', 'task', 'reminder'], description: 'Loại sự kiện cần hủy' },
             eventId: { type: 'string', description: 'Mã định danh sự kiện' },
             reason: { type: 'string', description: 'Lý do hủy' },
           },
@@ -280,7 +350,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       },
     },
     handler: async (userId, args, context) => {
-      return jamiActionService.executeTool(userId, 'cancel_event', args, context?.conversationId);
+      return jamiActionService.executeTool(userId, 'preview_cancel_event', args, context?.conversationId);
     },
   },
 
@@ -336,6 +406,24 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
           tasks: dayTasks,
         },
       };
+    },
+  },
+
+  get_next_task: {
+    name: 'get_next_task',
+    description: 'Xem nhiệm vụ học tập tiếp theo cần làm.',
+    kind: 'read',
+    schema: GetNextTaskArgsSchema,
+    openAiDefinition: {
+      type: 'function',
+      function: {
+        name: 'get_next_task',
+        description: 'Xem nhiệm vụ học tập tiếp theo cần làm.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    handler: async (userId) => {
+      return jamiActionService.executeTool(userId, 'get_next_task', {});
     },
   },
 
@@ -601,7 +689,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
   start_focus_timer: {
     name: 'start_focus_timer',
     description: 'Bắt đầu phiên hẹn giờ tập trung (Pomodoro) thật trong hệ thống.',
-    kind: 'mutate',
+    kind: 'immediate',
     schema: StartFocusTimerArgsSchema,
     openAiDefinition: {
       type: 'function',
@@ -648,8 +736,10 @@ export async function executeRegisteredTool(
 ): Promise<ActionResult> {
   const tool = TOOL_REGISTRY[toolName];
   if (!tool) {
-    // Fallback to legacy dispatcher in JamiActionService
-    return jamiActionService.executeTool(userId, toolName, rawArgs, context?.conversationId);
+    return {
+      success: false,
+      message: `TOOL_NOT_ALLOWED: "${toolName}" không nằm trong registry canonical.`,
+    };
   }
 
   // Parse & validate args against Zod schema
