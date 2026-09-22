@@ -3986,10 +3986,8 @@ apiRouter.post('/jami/realtime/session', requireAuth, aiRateLimiter, asyncHandle
 apiRouter.post('/voice/realtime/sessions/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const sessionId = req.params.id;
-  const { actualCostMilliVnd, rawUsage, reason } = req.body || {};
+  const { reason } = req.body || {};
   const result = await voiceSessionService.finalizeRealtimeSession(userId, sessionId, {
-    actualCostMilliVnd,
-    rawUsage,
     reason,
   });
   if (!result.success) {
@@ -4001,10 +3999,8 @@ apiRouter.post('/voice/realtime/sessions/:id/finalize', requireAuth, asyncHandle
 apiRouter.post('/jami/realtime/sessions/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const sessionId = req.params.id;
-  const { actualCostMilliVnd, rawUsage, reason } = req.body || {};
+  const { reason } = req.body || {};
   const result = await voiceSessionService.finalizeRealtimeSession(userId, sessionId, {
-    actualCostMilliVnd,
-    rawUsage,
     reason,
   });
   if (!result.success) {

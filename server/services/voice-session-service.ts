@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { db } from '../db/mysql';
 import { env } from '../config/env';
 import { AiAdapter } from './ai-adapter';
-import { jamiActionService, JamiActionService } from './jami-action-service';
+import { jamiActionService } from './jami-action-service';
 import { jamiOrchestrator } from './jami-orchestrator';
 import { jamiRepo } from '../repositories/jami-repository';
 import { aiWalletRepo } from '../repositories/ai-wallet-repository';
