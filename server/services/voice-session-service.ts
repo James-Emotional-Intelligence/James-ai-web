@@ -577,7 +577,6 @@ export class VoiceSessionService {
     userId: string,
     sessionId: string,
     options?: {
-      actualCostMilliVnd?: bigint | number | string;
       rawUsage?: any;
       reason?: string;
     }
@@ -654,13 +653,6 @@ export class VoiceSessionService {
         }
       } catch (err: any) {
         console.warn('[VoiceSessionService] Error calculating usage-based cost:', err.message);
-      }
-    }
-
-    if (calculatedCost === 0n && options?.actualCostMilliVnd !== undefined) {
-      const clientCost = BigInt(options.actualCostMilliVnd.toString());
-      if (clientCost > 0n) {
-        calculatedCost = clientCost;
       }
     }
 

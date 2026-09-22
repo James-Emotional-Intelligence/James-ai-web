@@ -156,11 +156,11 @@ export class MaterialWorkerService {
           );
         }
 
-        // Trigger standard document processor if applicable
-        materialProcessor.processMaterial(userId, materialId).catch(() => {});
+        // Standard documents are not complete until the processor finishes.
+        await materialProcessor.processMaterial(userId, materialId);
       }
 
-      // ALWAYS complete the job for both books and normal documents
+      // Complete the job only after every required processing step succeeds.
       if (db.isHealthy()) {
         await db.execute(
           `UPDATE material_processing_jobs
