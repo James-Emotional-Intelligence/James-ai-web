@@ -397,6 +397,7 @@ export class JamiActionService {
           };
         }
 
+        case 'create_task':
         case 'preview_create_task': {
           const title = String(args?.title || '').trim();
           if (!title) {
@@ -437,6 +438,7 @@ export class JamiActionService {
           };
         }
 
+        case 'add_busy_event':
         case 'preview_add_busy_event': {
           const title = String(args?.title || '').trim();
           const startsAt = args?.startsAt ? new Date(args.startsAt).toISOString() : new Date().toISOString();
@@ -525,6 +527,7 @@ export class JamiActionService {
           };
         }
 
+        case 'create_exam':
         case 'preview_create_exam': {
           const title = String(args?.title || '').trim();
           const examAt = args?.examAt ? new Date(args.examAt).toISOString() : new Date(Date.now() + 7 * 86400000).toISOString();

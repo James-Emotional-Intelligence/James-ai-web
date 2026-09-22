@@ -333,7 +333,32 @@ export class JamiRepository {
     }
 
     if (!targetMessage.proposalId) {
-      throw new Error('Tin nhắn này không có đề xuất hợp lệ để xác nhận.');
+      if (db.isHealthy()) {
+        await db.execute(
+          `UPDATE jami_messages SET is_confirmed = 1 WHERE id = ? AND user_id = ?`,
+          [messageId, userId]
+        );
+      }
+      targetMessage.isConfirmed = true;
+
+      const replyText = decision === 'confirm'
+        ? 'Đã ghi nhận xác nhận của bạn.'
+        : 'Đã hủy thao tác theo yêu cầu của bạn.';
+
+      await this.saveMessage(userId, {
+        conversationId: targetMessage.conversationId,
+        sender: 'jami',
+        text: replyText,
+        emotion: decision === 'confirm' ? 'celebrating' : 'speaking',
+      });
+
+      return {
+        message: targetMessage,
+        actionResult: {
+          success: true,
+          message: replyText,
+        },
+      };
     }
 
     // Execute actual action proposal via JamiActionService
@@ -344,7 +369,7 @@ export class JamiRepository {
       targetMessage.conversationId
     );
 
-    if (actionResult.success) {
+    if (actionResult.success || actionResult.isAlreadyConfirmed) {
       // Update message confirmation state in MySQL
       if (db.isHealthy()) {
         await db.execute(

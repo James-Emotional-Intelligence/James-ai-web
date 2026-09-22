@@ -4019,10 +4019,15 @@ apiRouter.post('/jami/chat', requireAuth, aiRateLimiter, asyncHandler(async (req
   if (chatRes.actionIntent && chatRes.actionIntent.kind !== 'none') {
     const { kind, toolName, arguments: toolArgs } = chatRes.actionIntent;
     const allowedMutations = [
+      'create_task',
       'preview_create_task',
+      'add_busy_event',
       'preview_add_busy_event',
+      'replan',
+      'replan_tasks',
       'preview_replan',
       'preview_replan_tasks',
+      'create_exam',
       'preview_create_exam',
       'mark_task_completed',
       'create_reminder',
