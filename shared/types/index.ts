@@ -1095,5 +1095,92 @@ export interface ReportOverviewResponse {
   hasData: boolean;
 }
 
-export type StudyReport = ReportOverviewResponse;
+export interface AiWallet {
+  userId: string;
+  balanceMilliVnd: string;
+  reservedMilliVnd: string;
+  balanceVnd: number;
+  reservedVnd: number;
+  aiEnabled: boolean;
+  unlimitedForever: boolean;
+  unlimitedUntil?: string | null;
+  isUnlimited: boolean;
+  isLowBalance: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
+export interface AiWalletView {
+  balanceVnd: number;
+  balanceFormatted: string;
+  isUnlimited: boolean;
+  unlimitedUntil?: string | null;
+  aiEnabled: boolean;
+  isLowBalance: boolean;
+  contactAdmin: {
+    zalo: string;
+    email: string;
+  };
+}
+
+export type AiWalletTransactionType =
+  | 'initial_grant'
+  | 'admin_topup'
+  | 'admin_deduction'
+  | 'code_credit'
+  | 'ai_reserve'
+  | 'ai_charge'
+  | 'ai_release'
+  | 'refund'
+  | 'adjustment';
+
+export interface AiWalletTransaction {
+  id: string;
+  userId: string;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  type: AiWalletTransactionType;
+  amountMilliVnd: string;
+  amountVnd: number;
+  amountFormatted: string;
+  balanceAfterMilliVnd: string;
+  balanceAfterVnd: number;
+  reservedAfterMilliVnd: string;
+  requestId?: string | null;
+  aiRunId?: string | null;
+  registrationCodeId?: string | null;
+  idempotencyKey: string;
+  reason?: string | null;
+  metadata?: any;
+  createdAt: string;
+}
+
+export type RegistrationCodeRewardType = 'credit' | 'unlimited';
+export type RegistrationCodeStatus = 'active' | 'revoked' | 'exhausted' | 'expired';
+
+export interface RegistrationCode {
+  id: string;
+  codePrefix: string;
+  rewardType: RegistrationCodeRewardType;
+  creditMilliVnd?: string | null;
+  creditVnd?: number | null;
+  unlimitedForever: boolean;
+  unlimitedUntil?: string | null;
+  maxRedemptions: number;
+  redemptionCount: number;
+  perUserLimit: number;
+  startsAt?: string | null;
+  expiresAt?: string | null;
+  status: RegistrationCodeStatus;
+  createdByAdminId?: string | null;
+  createdByEmail?: string | null;
+  note?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string | null;
+}
+
+export interface CreatedRegistrationCode extends RegistrationCode {
+  plainCode: string;
+}

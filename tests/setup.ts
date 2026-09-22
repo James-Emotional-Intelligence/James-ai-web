@@ -1,5 +1,8 @@
 import '@testing-library/jest-dom/vitest';
 
+// Ensure test runner isolates from external OpenAI live network calls
+process.env.OPENAI_API_KEY = '';
+
 // Global Web Speech Mocks for testing environment
 if (typeof global !== 'undefined') {
   if (!global.SpeechSynthesisUtterance) {

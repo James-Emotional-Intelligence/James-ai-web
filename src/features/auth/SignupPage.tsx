@@ -282,6 +282,34 @@ export const SignupPage: React.FC = () => {
             </span>
           </div>
 
+          {/* Optional Registration / Promotion Code */}
+          <div className="space-y-1 pt-1">
+            <label htmlFor="registrationCode" className="text-xs font-bold text-[#F3FAF5] flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <span className="text-[#22C55E]">🎁</span>
+                <span>Mã kích hoạt / Ưu đãi (tùy chọn)</span>
+              </span>
+              <span className="text-[10px] text-[#86EFAC] font-normal">Được tặng sẵn 25.000đ khi đăng ký</span>
+            </label>
+            <input
+              id="registrationCode"
+              type="text"
+              placeholder="JAMI-XXXX-XXXX-XXXX-XXXX"
+              {...register('registrationCode')}
+              className={`w-full px-3.5 py-2.5 rounded-xl border bg-[#050806] text-sm text-[#F3FAF5] uppercase tracking-wider placeholder:normal-case placeholder:tracking-normal focus:outline-none ${
+                errors.registrationCode
+                  ? 'border-rose-500'
+                  : 'border-[rgba(34,197,94,0.25)] focus:border-[#22C55E]'
+              }`}
+            />
+            {errors.registrationCode && (
+              <p className="text-[11px] text-rose-400">{errors.registrationCode.message}</p>
+            )}
+            <p className="text-[10px] text-[#A9B8AE]">
+              Nhập mã giới thiệu của giáo viên hoặc nhà trường để nhận thêm ngân sách AI học tập.
+            </p>
+          </div>
+
           {/* Terms & Conditions */}
           <div className="flex items-start gap-2 pt-1">
             <input

@@ -231,6 +231,7 @@ export class QuizRepository {
       milestone,
       questionCount,
       difficulty,
+      userId,
     });
 
     const quizTitle = options.title || draft.title || `Đề Ôn Tập ${milestone} - ${exam.title}`;
@@ -353,6 +354,7 @@ export class QuizRepository {
       milestone: 'D-7',
       questionCount,
       difficulty,
+      userId,
     });
 
     const quizTitle = options.title || draft.title || `Đề Luyện Tập AI - Môn ${subjectName} (${difficulty.toUpperCase()})`;
@@ -646,6 +648,7 @@ export class QuizRepository {
           questionPrompt: q.prompt,
           userAnswer: userAns,
           correctAnswer: q.correctAnswer || '',
+          userId,
         });
         isCorrect = gradeRes.isCorrect;
         if (gradeRes.feedback) {

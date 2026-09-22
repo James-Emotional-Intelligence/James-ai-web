@@ -6,6 +6,8 @@ import { userRepo } from '../repositories/user-repository';
 import { db } from '../db/mysql';
 import { PasswordHasher } from './password-hasher';
 import { User, StudentProfile } from '../../shared/types';
+import { registrationCodeService } from './registration-code-service';
+import { aiWalletRepo } from '../repositories/ai-wallet-repository';
 import {
   EmailAlreadyExistsError,
   DatabaseUnavailableError,
@@ -63,6 +65,7 @@ export class AuthService {
     userAgent?: string;
     ipAddress?: string;
     rememberMe?: boolean;
+    registrationCode?: string;
   }): Promise<{ user: User; profile: StudentProfile; rawToken: string }> {
     const normalizedEmail = data.email.trim().toLowerCase();
     const userId = 'usr_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
@@ -74,6 +77,7 @@ export class AuthService {
       email: normalizedEmail,
       displayName: data.displayName.trim(),
       preferredName: (data.preferredName || data.displayName.trim().split(/\s+/).pop() || 'Học sinh').trim(),
+      role: 'user',
       locale: 'vi-VN',
       timezone: 'Asia/Ho_Chi_Minh',
       ageBand: '14-17',
@@ -100,19 +104,22 @@ export class AuthService {
     const sessionTtlMs = data.rememberMe ? 30 * 24 * 3600 * 1000 : 24 * 3600 * 1000;
     const expiresAtDate = new Date(Date.now() + sessionTtlMs);
 
+    const defaultGrantVnd = env.AI_DEFAULT_CREDIT_VND ?? 25000;
+    const defaultGrantMilliVnd = BigInt(defaultGrantVnd) * 1000n;
+
     if (db.isHealthy()) {
       try {
         await db.withTransaction(async (conn) => {
-          // 1. Check email conflict inside transaction with FOR UPDATE or pre-check
+          // 1. Check email conflict inside transaction with FOR UPDATE
           const [existingRows]: any = await conn.query('SELECT id FROM users WHERE LOWER(email) = ?', [normalizedEmail]);
           if (existingRows && existingRows.length > 0) {
             throw new EmailAlreadyExistsError();
           }
 
-          // 2. Insert user
+          // 2. Insert user first (strictly role: 'user') so child foreign keys (like code redemptions) succeed
           await conn.execute(
-            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, locale, timezone, age_band, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO users (id, email, password_hash, password_salt, password_scheme, display_name, preferred_name, role, locale, timezone, age_band, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?)`,
             [
               userId,
               normalizedEmail,
@@ -129,7 +136,24 @@ export class AuthService {
             ]
           );
 
-          // 3. Insert student profile
+          // 3. Validate and redeem registration code if provided (transaction will roll back if invalid)
+          let codeRedemption: {
+            rewardType: 'credit' | 'unlimited';
+            creditMilliVnd: bigint;
+            unlimitedForever: boolean;
+            unlimitedUntil: Date | null;
+            codeId: string;
+          } | null = null;
+
+          if (data.registrationCode && data.registrationCode.trim()) {
+            codeRedemption = await registrationCodeService.redeemInTransaction(
+              conn,
+              userId,
+              data.registrationCode.trim()
+            );
+          }
+
+          // 4. Insert student profile
           await conn.execute(
             `INSERT INTO student_profiles (user_id, grade_level, school_name, goals_json, preferred_session_minutes, max_daily_study_minutes, energy_preferences_json, sleep_schedule_json, meal_times_json, onboarding_completed_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -147,7 +171,7 @@ export class AuthService {
             ]
           );
 
-          // 4. Seed default core subjects
+          // 5. Seed default core subjects
           const defaultSubjects = [
             { id: `subj_toan_${userId.slice(-6)}`, name: 'Toán học', color: '#2563EB', icon: 'Calculator', order: 1 },
             { id: `subj_van_${userId.slice(-6)}`, name: 'Ngữ văn', color: '#EA580C', icon: 'BookOpen', order: 2 },
@@ -160,7 +184,57 @@ export class AuthService {
             );
           }
 
-          // 5. Insert auth session in the same transaction
+          // 6. Initialize AI Wallet with default grant & code bonuses
+          const bonusCreditMilliVnd = codeRedemption?.rewardType === 'credit' ? codeRedemption.creditMilliVnd : 0n;
+          const totalBalanceMilliVnd = defaultGrantMilliVnd + bonusCreditMilliVnd;
+          const isUnlimitedForever = codeRedemption?.rewardType === 'unlimited' ? codeRedemption.unlimitedForever : false;
+          const unlimitedUntil = codeRedemption?.rewardType === 'unlimited' ? codeRedemption.unlimitedUntil : null;
+
+          await conn.execute(
+            `INSERT INTO ai_wallets (user_id, balance_milli_vnd, reserved_milli_vnd, ai_enabled, unlimited_forever, unlimited_until, version, created_at, updated_at)
+             VALUES (?, ?, 0, TRUE, ?, ?, 0, NOW(3), NOW(3))`,
+            [
+              userId,
+              totalBalanceMilliVnd.toString(),
+              isUnlimitedForever ? 1 : 0,
+              unlimitedUntil,
+            ]
+          );
+
+          // Record initial grant transaction in ledger
+          const initialTxId = 'tx_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+          await conn.execute(
+            `INSERT INTO ai_wallet_transactions
+             (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, idempotency_key, reason, created_at)
+             VALUES (?, ?, NULL, 'initial_grant', ?, ?, 0, ?, 'Cấp ngân sách AI ban đầu (25.000đ)', NOW(3))`,
+            [
+              initialTxId,
+              userId,
+              defaultGrantMilliVnd.toString(),
+              defaultGrantMilliVnd.toString(),
+              `init_grant_${userId}`,
+            ]
+          );
+
+          // If code granted extra credit, record bonus credit transaction in ledger
+          if (bonusCreditMilliVnd > 0n && codeRedemption) {
+            const codeTxId = 'tx_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+            await conn.execute(
+              `INSERT INTO ai_wallet_transactions
+               (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, registration_code_id, idempotency_key, reason, created_at)
+               VALUES (?, ?, NULL, 'code_credit', ?, ?, 0, ?, ?, 'Cộng ngân sách AI từ mã ưu đãi', NOW(3))`,
+              [
+                codeTxId,
+                userId,
+                bonusCreditMilliVnd.toString(),
+                totalBalanceMilliVnd.toString(),
+                codeRedemption.codeId,
+                `code_credit_${userId}_${codeRedemption.codeId}`,
+              ]
+            );
+          }
+
+          // 7. Insert auth session in the same transaction
           await conn.execute(
             `INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, revoked_at, user_agent, ip_address, is_demo, created_at)
              VALUES (?, ?, ?, ?, NULL, ?, ?, 0, ?)`,
@@ -176,7 +250,7 @@ export class AuthService {
           );
         });
       } catch (err: any) {
-        if (err instanceof EmailAlreadyExistsError) {
+        if (err instanceof EmailAlreadyExistsError || err.code === 'INVALID_REGISTRATION_CODE') {
           throw err;
         }
         if (err.code === 'ER_DUP_ENTRY' || err.message?.includes('Duplicate entry')) {
@@ -194,20 +268,42 @@ export class AuthService {
       if (isProduction || isDatabaseRequired) {
         throw new DatabaseUnavailableError('Cơ sở dữ liệu hiện không khả dụng. Vui lòng thử lại sau.');
       }
-      // Demo in-memory fallback
+      // Demo in-memory fallback with atomic rollback snapshot
       const existing = await userRepo.findByEmail(normalizedEmail);
       if (existing) {
         throw new EmailAlreadyExistsError();
       }
-      const { user: createdUser, profile: createdProfile } = await userRepo.createUser({
-        email: normalizedEmail,
-        password: data.password,
-        displayName: data.displayName,
-        preferredName: data.preferredName,
-        gradeLevel: data.gradeLevel,
-      });
-      const sess = await sessionRepo.createSession(createdUser.id, false, !!data.rememberMe);
-      return { user: createdUser, profile: createdProfile, rawToken: sess.rawToken };
+
+      const codeSnapshot = registrationCodeService.createDemoSnapshot();
+      try {
+        let codeRedemption: any = null;
+        if (data.registrationCode && data.registrationCode.trim()) {
+          codeRedemption = await registrationCodeService.redeemInTransaction(null, userId, data.registrationCode.trim());
+        }
+
+        const { user: createdUser, profile: createdProfile } = await userRepo.createUser({
+          email: normalizedEmail,
+          password: data.password,
+          displayName: data.displayName,
+          preferredName: data.preferredName,
+          gradeLevel: data.gradeLevel,
+        });
+
+        const bonusVnd = codeRedemption?.rewardType === 'credit' ? Number((codeRedemption.creditMilliVnd || 0n) / 1000n) : 0;
+        const initialTotalVnd = defaultGrantVnd + bonusVnd;
+        const wallet = await aiWalletRepo.ensureWallet(createdUser.id, initialTotalVnd);
+        if (codeRedemption?.rewardType === 'unlimited') {
+          wallet.unlimitedForever = Boolean(codeRedemption.unlimitedForever);
+          wallet.unlimitedUntil = codeRedemption.unlimitedUntil || null;
+        }
+
+        const sess = await sessionRepo.createSession(createdUser.id, false, !!data.rememberMe);
+        return { user: createdUser, profile: createdProfile, rawToken: sess.rawToken };
+      } catch (err) {
+        // Roll back in-memory redemption on any failure
+        registrationCodeService.restoreDemoSnapshot(codeSnapshot);
+        throw err;
+      }
     }
 
     return { user, profile, rawToken };

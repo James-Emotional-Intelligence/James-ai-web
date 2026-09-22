@@ -3,6 +3,8 @@ import { mistakeRepo } from '../repositories/mistake-repository';
 import { BookStudyAidResult, BookStudyCitation } from '../../shared/types';
 import { AiAdapter } from './ai-adapter';
 import { wrapUntrustedData } from '../ai/prompt-registry';
+import { aiGateway } from '../ai/ai-gateway';
+import { z } from 'zod';
 
 export class BookStudyAidService {
   private static instance: BookStudyAidService;
@@ -67,47 +69,68 @@ export class BookStudyAidService {
       };
     }
 
-    // 1. If OpenAI is configured, call structured prompt
-    if (AiAdapter.isConfigured()) {
+    // 1. If AI Gateway is available, call structured prompt with billing reservation
+    if (aiGateway.isAvailable()) {
       try {
-        const client = AiAdapter.getClient();
-        if (client) {
-          const systemPrompt = `Bạn là trợ lý học tập Jami AI đồng hành cùng học sinh Việt Nam theo chương trình GDPT 2018.
-NHIỆM VỤ: Tạo nội dung học tập/ôn tập từ các trích đoạn SGK được cung cấp.
-QUY TẮC AN TOÀN VÀ TRÍCH DẪN:
-1. Chỉ dựa vào kiến thức trong trích đoạn SGK. Tuyệt đối không bịa đặt định lý hay công thức không có trong bài.
-2. Trả lời bằng Markdown tiếng Việt sư phạm, rõ ràng, gãy gọn, có cấu trúc đề mục rõ ràng.
-3. Khi trích dẫn công thức/định nghĩa, ghi rõ số trang tham chiếu.`;
+        const StudyAidResponseSchema = z.object({
+          contentMarkdown: z.string(),
+          structuredData: z.any().optional(),
+        });
 
-          const userPrompt = `Hành động: ${params.action}
-Tên sách: ${book.title}
-Chương: ${selectedChapter?.title || 'Toàn bộ'}
-Khái niệm cần giải thích (nếu có): ${params.conceptToExplain || 'Toàn bộ trọng tâm'}
+        const promptIdMap: Record<string, any> = {
+          summary: 'book_study_aid_summary',
+          outline: 'book_study_aid_outline',
+          flashcards: 'book_study_aid_flashcards',
+          quiz: 'book_study_aid_quiz',
+          explain: 'book_study_aid_explain',
+          study_plan: 'book_study_aid_study_plan',
+          send_to_mistake_notebook: 'book_study_aid_explain',
+        };
+        const promptId = promptIdMap[params.action] || 'book_study_aid_summary';
 
-DỮ LIỆU TRÍCH ĐOẠN SÁCH:
-${wrapUntrustedData(contextText, { maxLength: 12000, tag: 'BOOK_EXCERPTS' })}`;
+        const gatewayResult = await aiGateway.executeStructured(
+          promptId,
+          {
+            action: params.action,
+            bookTitle: book.title,
+            chapterTitle: selectedChapter?.title || 'Toàn bộ',
+            conceptToExplain: params.conceptToExplain || 'Toàn bộ trọng tâm',
+            contextText,
+          },
+          StudyAidResponseSchema,
+          { userId }
+        );
 
-          const completion = await client.chat.completions.create({
-            model: AiAdapter.getTextModel(),
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.3,
-          });
-
-          const reply = completion.choices[0]?.message?.content || '';
-          if (reply) {
-            return {
-              action: params.action,
-              title: this.getActionTitle(params.action, selectedChapter?.title || book.title),
-              contentMarkdown: reply,
-              citations,
-            };
+        if (gatewayResult.data?.contentMarkdown) {
+          let structuredData = gatewayResult.data.structuredData;
+          if (params.action === 'send_to_mistake_notebook' && userId && book.subjectId) {
+            try {
+              const created = await mistakeRepo.create(userId, {
+                subjectId: book.subjectId,
+                topic: selectedChapter?.title || book.title,
+                questionText: `Phân tích bẫy sai kiến thức: ${selectedChapter?.title || book.title}`,
+                correctAnswer: 'Nắm vững định nghĩa & kiểm tra kỹ điều kiện xác định.',
+                mistakeReason: 'knowledge_gap',
+                correctExplanation: gatewayResult.data.contentMarkdown.slice(0, 1000),
+                difficulty: 'medium',
+                sourceType: 'manual',
+              });
+              structuredData = { ...(structuredData || {}), createdMistakeId: created.id };
+            } catch (mistakeErr: any) {
+              console.warn('[BookStudyAidService] Failed to create mistake in notebook:', mistakeErr.message);
+            }
           }
+
+          return {
+            action: params.action,
+            title: this.getActionTitle(params.action, selectedChapter?.title || book.title),
+            contentMarkdown: gatewayResult.data.contentMarkdown,
+            structuredData,
+            citations,
+          };
         }
       } catch (err: any) {
-        console.warn('[BookStudyAidService] OpenAI call failed, falling back to deterministic template:', err.message);
+        console.warn('[BookStudyAidService] AI Gateway call failed, falling back to deterministic template:', err.message);
       }
     }
 
@@ -237,7 +260,7 @@ Khái niệm này mô tả mối quan hệ định lượng giữa các đại l
         // If user is logged in, optionally create a notebook entry
         if (userId && subjectId) {
           try {
-            await mistakeRepo.create(userId, {
+            const created = await mistakeRepo.create(userId, {
               subjectId,
               topic: chapterTitle,
               questionText: `Câu hỏi mẫu thường nhầm lẫn trong ${chapterTitle}: Khi giải bài toán tìm x, học sinh quên đối chiếu điều kiện xác định.`,
@@ -247,6 +270,7 @@ Khái niệm này mô tả mối quan hệ định lượng giữa các đại l
               difficulty: 'medium',
               sourceType: 'manual',
             });
+            structuredData = { createdMistakeId: created.id };
           } catch {}
         }
         contentMarkdown = `### 📕 Đã Phân Tích Bẫy Sai & Ghi Vào Sổ Lỗi Sai

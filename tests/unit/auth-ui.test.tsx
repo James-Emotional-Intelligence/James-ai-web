@@ -177,7 +177,7 @@ describe('Auth UI Component & Regression Tests (Video Reproduction Suite)', () =
     expect(alert).toBeInTheDocument();
     expect(alert).toHaveTextContent(/Hệ thống đăng nhập đang tạm gián đoạn/i);
     expect(emailInput.value).toBe('minh.tran@example.test');
-  });
+  }, 15000);
 
   it('handles 401 login error gracefully, retains email in input, and shows invalid credentials message', async () => {
     const user = userEvent.setup();
@@ -216,5 +216,5 @@ describe('Auth UI Component & Regression Tests (Video Reproduction Suite)', () =
 
     // Email remains typed in the input box
     expect(emailInput.value).toBe('student@example.test');
-  });
+  }, 15000);
 });

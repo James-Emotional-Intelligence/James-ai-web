@@ -1,9 +1,23 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import { env } from '../config/env';
+import { env, isProduction } from '../config/env';
 import { PromptId, getPromptDefinition, wrapUntrustedData } from './prompt-registry';
+import { aiBillingService } from '../services/ai-billing-service';
+import {
+  isModelSupported,
+  resolveCanonicalModel,
+  ModelPricingUnavailableError,
+} from './model-pricing';
 
-export interface AiGatewayOptions {
+export interface BillingContext {
+  userId: string;
+  operation?: string;
+  idempotencyKey?: string;
+  requestId?: string;
+  source?: string;
+}
+
+export interface AiGatewayOptions extends Partial<BillingContext> {
   timeoutMs?: number;
   maxRetries?: number;
   temperature?: number;
@@ -12,14 +26,25 @@ export interface AiGatewayOptions {
 
 export interface AiTelemetryMetric {
   promptId: PromptId | string;
-  model: string;
+  requestedModel: string;
+  resolvedModel: string;
   durationMs: number;
   promptTokens?: number;
   completionTokens?: number;
+  cachedTokens?: number;
   totalTokens?: number;
   success: boolean;
   error?: string;
   timestamp: string;
+}
+
+export class MissingBillingContextError extends Error {
+  public status = 400;
+  public code = 'MISSING_BILLING_CONTEXT';
+  constructor(operation: string) {
+    super(`Yêu cầu AI "${operation}" thiếu BillingContext/userId hợp lệ. Hệ thống từ chối thực thi (fail-closed).`);
+    this.name = 'MissingBillingContextError';
+  }
 }
 
 export class AiGateway {
@@ -42,7 +67,10 @@ export class AiGateway {
       return null;
     }
     if (!this.client) {
-      this.client = new OpenAI({ apiKey: apiKey.trim() });
+      this.client = new OpenAI({
+        apiKey: apiKey.trim(),
+        dangerouslyAllowBrowser: true,
+      });
     }
     return this.client;
   }
@@ -82,7 +110,8 @@ export class AiGateway {
   }
 
   /**
-   * Executes a structured JSON completion with retries, timeout, and strict Zod validation
+   * Executes a structured JSON completion with retries, timeout, strict Zod validation,
+   * cumulative attempt usage metering, and fail-closed billing reservation.
    */
   public async executeStructured<T>(
     promptId: PromptId,
@@ -95,8 +124,18 @@ export class AiGateway {
       return { data: null, raw: null, error: 'AI_NOT_CONFIGURED' };
     }
 
+    // Fail closed if userId is missing in production
+    const userId = options?.userId;
+    if (!userId && isProduction) {
+      throw new MissingBillingContextError(promptId);
+    }
+
+    const requestedModel = options?.model || this.getDefaultTextModel();
+    if (!isModelSupported(requestedModel)) {
+      throw new ModelPricingUnavailableError(requestedModel);
+    }
+
     const promptDef = getPromptDefinition(promptId);
-    const model = options?.model || this.getDefaultTextModel();
     const timeoutMs = options?.timeoutMs || 25000;
     const maxRetries = options?.maxRetries ?? 2;
     const temperature = options?.temperature ?? promptDef.temperature ?? 0.2;
@@ -104,93 +143,161 @@ export class AiGateway {
     const wrappedContent = wrapUntrustedData(userInput);
     const startTime = Date.now();
 
+    // 1. Reserve credit before calling OpenAI (Throws 402 if balance is depleted)
+    let billingReservation: {
+      isUnlimited: boolean;
+      reservedMilliVnd: bigint;
+      reservationTxId?: string;
+      idempotencyKey: string;
+    } | null = null;
+
+    if (userId) {
+      billingReservation = await aiBillingService.reserveForAiExecution({
+        userId,
+        model: requestedModel,
+        estimatedInputTokens: promptDef.maxTokens,
+        maxOutputTokens: promptDef.maxTokens,
+        promptId,
+        requestId: options?.requestId,
+        idempotencyKey: options?.idempotencyKey,
+      });
+    }
+
+    // Cumulative usage tracking across all retry attempts
+    let cumulativePromptTokens = 0;
+    let cumulativeCompletionTokens = 0;
+    let cumulativeCachedTokens = 0;
+    let resolvedModel = requestedModel;
     let lastError: any = null;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const attemptStartTime = Date.now();
-      try {
-        const controller = new AbortController();
-        const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+    let validatedData: T | null = null;
+    let rawContent: string | null = null;
+    let businessValidationSucceeded = false;
 
-        let completion: OpenAI.Chat.Completions.ChatCompletion;
+    try {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
-          completion = await client.chat.completions.create(
-            {
-              model,
-              messages: [
-                { role: 'system', content: promptDef.systemPrompt },
-                { role: 'user', content: wrappedContent },
-              ],
-              response_format: { type: 'json_object' },
-              max_tokens: promptDef.maxTokens,
-              temperature,
-            },
-            { signal: controller.signal }
-          );
-        } finally {
-          clearTimeout(timeoutHandle);
-        }
+          const controller = new AbortController();
+          const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
-        const rawContent = completion.choices[0]?.message?.content?.trim() || null;
-        if (!rawContent) {
-          throw new Error('Mô hình AI trả về phản hồi rỗng.');
-        }
+          let completion: OpenAI.Chat.Completions.ChatCompletion;
+          try {
+            completion = await client.chat.completions.create(
+              {
+                model: requestedModel,
+                messages: [
+                  { role: 'system', content: promptDef.systemPrompt },
+                  { role: 'user', content: wrappedContent },
+                ],
+                response_format: { type: 'json_object' },
+                max_tokens: promptDef.maxTokens,
+                temperature,
+              },
+              { signal: controller.signal }
+            );
+          } finally {
+            clearTimeout(timeoutHandle);
+          }
 
-        let parsedJson: any;
+          // Accumulate provider tokens used regardless of whether business parsing succeeds
+          if (completion.usage) {
+            cumulativePromptTokens += completion.usage.prompt_tokens || 0;
+            cumulativeCompletionTokens += completion.usage.completion_tokens || 0;
+            const details = (completion.usage as any).prompt_tokens_details;
+            cumulativeCachedTokens += details?.cached_tokens || 0;
+          }
+          if (completion.model) {
+            resolvedModel = resolveCanonicalModel(completion.model) || completion.model;
+          }
+
+          rawContent = completion.choices[0]?.message?.content?.trim() || null;
+          if (!rawContent) {
+            throw new Error('Mô hình AI trả về phản hồi rỗng.');
+          }
+
+          let parsedJson: any;
+          try {
+            parsedJson = JSON.parse(rawContent);
+          } catch (jsonErr: any) {
+            throw new Error(`Định dạng JSON phản hồi từ AI không hợp lệ: ${jsonErr.message}`, { cause: jsonErr });
+          }
+
+          const parsedResult = schema.safeParse(parsedJson);
+          if (!parsedResult.success) {
+            throw new Error(`Cấu trúc dữ liệu AI không khớp schema: ${parsedResult.error.message}`);
+          }
+
+          validatedData = parsedResult.data;
+          businessValidationSucceeded = true;
+          break; // Success!
+        } catch (err: any) {
+          lastError = err;
+          const isAbort = err.name === 'AbortError' || err.message?.includes('aborted');
+          const isRateLimit = err.status === 429;
+          const isServerError = err.status >= 500;
+
+          if (attempt < maxRetries && (isRateLimit || isServerError || isAbort)) {
+            const backoff = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 5000);
+            console.warn(`[AiGateway] Retrying [${promptId}] after ${backoff}ms (attempt ${attempt + 1}/${maxRetries}): ${err.message}`);
+            await new Promise((resolve) => setTimeout(resolve, backoff));
+            continue;
+          }
+          break;
+        }
+      }
+    } finally {
+      const durationMs = Date.now() - startTime;
+      const totalTokens = cumulativePromptTokens + cumulativeCompletionTokens;
+
+      this.recordMetric({
+        promptId,
+        requestedModel,
+        resolvedModel,
+        durationMs,
+        promptTokens: cumulativePromptTokens,
+        completionTokens: cumulativeCompletionTokens,
+        cachedTokens: cumulativeCachedTokens,
+        totalTokens,
+        success: businessValidationSucceeded,
+        error: businessValidationSucceeded ? undefined : (lastError?.message || 'AI_EXECUTION_FAILED'),
+        timestamp: new Date().toISOString(),
+      });
+
+      // 2. Exact reconciliation in finally block:
+      // If tokens were consumed by provider (even on business failure), charge accurately and release unused reservation
+      if (billingReservation && userId) {
         try {
-          parsedJson = JSON.parse(rawContent);
-        } catch (jsonErr: any) {
-          throw new Error(`Định dạng JSON phản hồi từ AI không hợp lệ: ${jsonErr.message}`, { cause: jsonErr });
+          await aiBillingService.reconcileAiExecution({
+            userId,
+            model: resolvedModel,
+            reservedMilliVnd: billingReservation.reservedMilliVnd,
+            isUnlimited: billingReservation.isUnlimited,
+            usage: totalTokens > 0 ? {
+              promptTokens: cumulativePromptTokens,
+              completionTokens: cumulativeCompletionTokens,
+              cachedTokens: cumulativeCachedTokens,
+            } : undefined,
+            promptId,
+            requestId: options?.requestId,
+            idempotencyKey: billingReservation.idempotencyKey,
+            success: businessValidationSucceeded,
+            errorCode: businessValidationSucceeded ? undefined : (lastError?.code || lastError?.message || 'AI_EXECUTION_FAILED'),
+            latencyMs: durationMs,
+          });
+        } catch (reconErr: any) {
+          console.error(`[AiGateway] Billing reconciliation error for ${userId}:`, reconErr.message);
         }
-
-        const parsedResult = schema.safeParse(parsedJson);
-        if (!parsedResult.success) {
-          throw new Error(`Cấu trúc dữ liệu AI không khớp schema: ${parsedResult.error.message}`);
-        }
-
-        const durationMs = Date.now() - startTime;
-        this.recordMetric({
-          promptId,
-          model,
-          durationMs,
-          promptTokens: completion.usage?.prompt_tokens,
-          completionTokens: completion.usage?.completion_tokens,
-          totalTokens: completion.usage?.total_tokens,
-          success: true,
-          timestamp: new Date().toISOString(),
-        });
-
-        return { data: parsedResult.data, raw: rawContent };
-      } catch (err: any) {
-        lastError = err;
-        const isAbort = err.name === 'AbortError' || err.message?.includes('aborted');
-        const isRateLimit = err.status === 429;
-        const isServerError = err.status >= 500;
-
-        if (attempt < maxRetries && (isRateLimit || isServerError || isAbort)) {
-          const backoff = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 5000);
-          console.warn(`[AiGateway] Retrying [${promptId}] after ${backoff}ms (attempt ${attempt + 1}/${maxRetries}): ${err.message}`);
-          await new Promise((resolve) => setTimeout(resolve, backoff));
-          continue;
-        }
-        break;
       }
     }
 
-    const durationMs = Date.now() - startTime;
-    this.recordMetric({
-      promptId,
-      model,
-      durationMs,
-      success: false,
-      error: lastError?.message || 'Unknown AI error',
-      timestamp: new Date().toISOString(),
-    });
+    if (businessValidationSucceeded && validatedData !== null) {
+      return { data: validatedData, raw: rawContent };
+    }
 
-    return { data: null, raw: null, error: lastError?.message || 'AI_EXECUTION_FAILED' };
+    return { data: null, raw: rawContent, error: lastError?.message || 'AI_EXECUTION_FAILED' };
   }
 
   /**
-   * Executes a Vision OCR extraction with timeout and image bounds
+   * Executes a Vision OCR extraction with timeout, image bounds and billing reservation
    */
   public async executeVision(
     imageBuffer: Buffer,
@@ -203,14 +310,50 @@ export class AiGateway {
       return { text: null, error: 'AI_NOT_CONFIGURED' };
     }
 
+    const userId = options?.userId;
+    if (!userId && isProduction) {
+      throw new MissingBillingContextError('ocr_vision');
+    }
+
+    const requestedModel = options?.model || this.getDefaultTextModel();
+    if (!isModelSupported(requestedModel)) {
+      throw new ModelPricingUnavailableError(requestedModel);
+    }
+
     const promptDef = getPromptDefinition('ocr_vision');
-    const model = options?.model || this.getDefaultTextModel();
     const timeoutMs = options?.timeoutMs || 45000;
     const base64 = imageBuffer.toString('base64');
     const dataUri = `data:${mimeType};base64,${base64}`;
 
     const wrappedTitle = wrapUntrustedData(title || 'Bài tập / Tài liệu');
     const startTime = Date.now();
+
+    // 1. Reserve credit before calling OpenAI
+    let billingReservation: {
+      isUnlimited: boolean;
+      reservedMilliVnd: bigint;
+      reservationTxId?: string;
+      idempotencyKey: string;
+    } | null = null;
+
+    if (userId) {
+      billingReservation = await aiBillingService.reserveForAiExecution({
+        userId,
+        model: requestedModel,
+        estimatedInputTokens: promptDef.maxTokens,
+        maxOutputTokens: promptDef.maxTokens,
+        promptId: 'ocr_vision',
+        requestId: options?.requestId,
+        idempotencyKey: options?.idempotencyKey,
+      });
+    }
+
+    let extractedText: string | null = null;
+    let providerPromptTokens = 0;
+    let providerCompletionTokens = 0;
+    let providerCachedTokens = 0;
+    let resolvedModel = requestedModel;
+    let lastError: any = null;
 
     try {
       const controller = new AbortController();
@@ -220,7 +363,7 @@ export class AiGateway {
       try {
         completion = await client.chat.completions.create(
           {
-            model,
+            model: requestedModel,
             messages: [
               { role: 'system', content: promptDef.systemPrompt },
               {
@@ -249,32 +392,63 @@ export class AiGateway {
         clearTimeout(timeoutHandle);
       }
 
-      const extractedText = completion.choices[0]?.message?.content?.trim() || null;
-      const durationMs = Date.now() - startTime;
+      if (completion.usage) {
+        providerPromptTokens = completion.usage.prompt_tokens || 0;
+        providerCompletionTokens = completion.usage.completion_tokens || 0;
+        const details = (completion.usage as any).prompt_tokens_details;
+        providerCachedTokens = details?.cached_tokens || 0;
+      }
+      if (completion.model) {
+        resolvedModel = resolveCanonicalModel(completion.model) || completion.model;
+      }
 
-      this.recordMetric({
-        promptId: 'ocr_vision',
-        model,
-        durationMs,
-        promptTokens: completion.usage?.prompt_tokens,
-        completionTokens: completion.usage?.completion_tokens,
-        totalTokens: completion.usage?.total_tokens,
-        success: Boolean(extractedText),
-        timestamp: new Date().toISOString(),
-      });
-
+      extractedText = completion.choices[0]?.message?.content?.trim() || null;
       return { text: extractedText };
     } catch (err: any) {
+      lastError = err;
+      return { text: null, error: err.message };
+    } finally {
       const durationMs = Date.now() - startTime;
+      const totalTokens = providerPromptTokens + providerCompletionTokens;
+      const success = Boolean(extractedText);
+
       this.recordMetric({
         promptId: 'ocr_vision',
-        model,
+        requestedModel,
+        resolvedModel,
         durationMs,
-        success: false,
-        error: err.message,
+        promptTokens: providerPromptTokens,
+        completionTokens: providerCompletionTokens,
+        cachedTokens: providerCachedTokens,
+        totalTokens,
+        success,
+        error: success ? undefined : (lastError?.message || 'AI_OCR_FAILED'),
         timestamp: new Date().toISOString(),
       });
-      return { text: null, error: err.message };
+
+      if (billingReservation && userId) {
+        try {
+          await aiBillingService.reconcileAiExecution({
+            userId,
+            model: resolvedModel,
+            reservedMilliVnd: billingReservation.reservedMilliVnd,
+            isUnlimited: billingReservation.isUnlimited,
+            usage: totalTokens > 0 ? {
+              promptTokens: providerPromptTokens,
+              completionTokens: providerCompletionTokens,
+              cachedTokens: providerCachedTokens,
+            } : undefined,
+            promptId: 'ocr_vision',
+            requestId: options?.requestId,
+            idempotencyKey: billingReservation.idempotencyKey,
+            success,
+            errorCode: success ? undefined : (lastError?.code || lastError?.message || 'AI_OCR_FAILED'),
+            latencyMs: durationMs,
+          });
+        } catch (reconErr: any) {
+          console.error(`[AiGateway] Vision billing reconciliation error for ${userId}:`, reconErr.message);
+        }
+      }
     }
   }
 }

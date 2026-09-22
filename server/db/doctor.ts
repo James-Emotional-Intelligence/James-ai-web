@@ -55,7 +55,10 @@ const REQUIRED_TABLES = [
   'focus_sessions',
   'task_evidence',
   'learning_materials',
-  'learning_material_outlines',
+  'outlines',
+  'outline_versions',
+  'material_chunks',
+  'material_processing_jobs',
   'book_chapters',
   'book_chunks',
   'book_progress',
@@ -80,6 +83,14 @@ const REQUIRED_TABLES = [
   'exam_study_plan_versions',
   'mistake_notebook_entries',
   'mistake_review_attempts',
+  'ai_wallets',
+  'ai_wallet_transactions',
+  'registration_codes',
+  'registration_code_redemptions',
+  'ai_realtime_sessions',
+  'ai_runs',
+  'jami_action_proposals',
+  'ai_wallet_reconcile_queue',
 ];
 
 export async function runDbDoctor(): Promise<DoctorReport> {
@@ -284,6 +295,101 @@ export async function runDbDoctor(): Promise<DoctorReport> {
       });
     }
 
+    if (existingTables.has('ai_runs')) {
+      const aiRunCols = await db.query<any>(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_runs'`
+      );
+      const aiRunColNames = new Set(aiRunCols.map((c) => c.COLUMN_NAME.toLowerCase()));
+      const requiredAiRunCols = [
+        'id',
+        'user_id',
+        'purpose',
+        'model',
+        'status',
+        'prompt_tokens',
+        'completion_tokens',
+        'cached_input_tokens',
+        'cost_milli_vnd',
+        'pricing_version',
+      ];
+      const missingAiRunCols = requiredAiRunCols.filter((c) => !aiRunColNames.has(c));
+      checks.push({
+        name: 'AI Runs Billing Columns Integrity',
+        passed: missingAiRunCols.length === 0,
+        details:
+          missingAiRunCols.length === 0
+            ? 'ai_runs prompt_tokens, completion_tokens, cached_input_tokens, cost_milli_vnd, pricing_version verified'
+            : `Missing columns: ${missingAiRunCols.join(', ')}`,
+      });
+    }
+
+    if (existingTables.has('jami_action_proposals')) {
+      const propCols = await db.query<any>(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'jami_action_proposals'`
+      );
+      const propColNames = new Set(propCols.map((c) => c.COLUMN_NAME.toLowerCase()));
+      const requiredPropCols = [
+        'id',
+        'user_id',
+        'action_type',
+        'payload_json',
+        'preview_text',
+        'status',
+        'expires_at',
+      ];
+      const missingPropCols = requiredPropCols.filter((c) => !propColNames.has(c));
+      checks.push({
+        name: 'Jami Action Proposals Schema Integrity',
+        passed: missingPropCols.length === 0,
+        details:
+          missingPropCols.length === 0
+            ? 'jami_action_proposals id, user_id, action_type, payload_json, preview_text, status verified'
+            : `Missing columns: ${missingPropCols.join(', ')}`,
+      });
+    }
+
+    if (existingTables.has('ai_realtime_sessions')) {
+      const rtCols = await db.query<any>(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_realtime_sessions'`
+      );
+      const rtColNames = new Set(rtCols.map((c) => c.COLUMN_NAME.toLowerCase()));
+      const requiredRtCols = [
+        'id',
+        'user_id',
+        'reservation_idempotency_key',
+        'reserved_milli_vnd',
+        'status',
+        'pricing_version',
+        'model',
+      ];
+      const missingRtCols = requiredRtCols.filter((c) => !rtColNames.has(c));
+      checks.push({
+        name: 'AI Realtime Sessions Schema Integrity',
+        passed: missingRtCols.length === 0,
+        details:
+          missingRtCols.length === 0
+            ? 'ai_realtime_sessions id, user_id, reservation_idempotency_key, reserved_milli_vnd, model, pricing_version verified'
+            : `Missing columns: ${missingRtCols.join(', ')}`,
+      });
+    }
+
+    if (existingTables.has('material_processing_jobs')) {
+      const jobCols = await db.query<any>(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'material_processing_jobs'`
+      );
+      const jobColNames = new Set(jobCols.map((c) => c.COLUMN_NAME.toLowerCase()));
+      const requiredJobCols = ['id', 'material_id', 'user_id', 'status', 'job_type', 'attempt', 'max_attempts', 'updated_at'];
+      const missingJobCols = requiredJobCols.filter((c) => !jobColNames.has(c));
+      checks.push({
+        name: 'Material Processing Jobs Schema Integrity',
+        passed: missingJobCols.length === 0,
+        details:
+          missingJobCols.length === 0
+            ? 'material_processing_jobs id, material_id, status, job_type, attempt, updated_at verified'
+            : `Missing columns: ${missingJobCols.join(', ')}`,
+      });
+    }
+
     const allPassed = checks.every((c) => c.passed);
 
     return {
@@ -332,5 +438,8 @@ export async function runDbDoctor(): Promise<DoctorReport> {
 }
 
 if (process.argv[1] && process.argv[1].endsWith('doctor.ts')) {
-  runDbDoctor().then((report) => console.log(JSON.stringify(report, null, 2)));
+  runDbDoctor().then((report) => {
+    console.log(JSON.stringify(report, null, 2));
+    process.exit(report.status === 'healthy' ? 0 : 1);
+  });
 }

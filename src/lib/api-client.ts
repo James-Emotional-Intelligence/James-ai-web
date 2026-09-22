@@ -46,6 +46,10 @@ import {
   BookHighlight,
   BookStudyAidRequest,
   BookStudyAidResult,
+  AiWalletView,
+  AiWalletTransaction,
+  RegistrationCode,
+  CreatedRegistrationCode,
 } from '../../shared/types';
 import { z } from 'zod';
 import { LoginRequestSchema, RegisterRequestSchema } from '../../shared/schemas';
@@ -1273,6 +1277,63 @@ export const api = {
     }),
   deleteAdminUser: (userId: string) =>
     fetchJson<{ success: boolean; message: string }>(`/admin/users/${userId}`, { method: 'DELETE' }),
+  // AI Budget Wallet & Registration Codes
+  getAiWalletMe: () =>
+    fetchJson<{ wallet: AiWalletView; usdToVndRate: number; lowBalanceWarningVnd: number }>('/ai-wallet/me'),
+  getAiWalletTransactions: (limit: number = 50) =>
+    fetchJson<{ transactions: AiWalletTransaction[] }>(`/ai-wallet/me/transactions?limit=${limit}`),
+
+  // Admin AI Wallet Management
+  adminGetAiWallet: (userId: string) =>
+    fetchJson<{ user: User; wallet: any; view: AiWalletView }>(`/admin/users/${userId}/ai-wallet`),
+  adminGetAiWalletTransactions: (userId: string, limit: number = 50) =>
+    fetchJson<{ transactions: AiWalletTransaction[] }>(`/admin/users/${userId}/ai-wallet/transactions?limit=${limit}`),
+  adminTopUpAiWallet: (userId: string, data: { amountVnd: number; reason: string; idempotencyKey?: string }) =>
+    fetchJson<{ success: boolean; balanceVnd: number; balanceFormatted: string; message: string }>(
+      `/admin/users/${userId}/ai-wallet/top-up`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+  adminDeductAiWallet: (userId: string, data: { amountVnd: number; reason: string; idempotencyKey?: string }) =>
+    fetchJson<{ success: boolean; balanceVnd: number; balanceFormatted: string; message: string }>(
+      `/admin/users/${userId}/ai-wallet/deduct`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+  adminSetUnlimitedAiWallet: (
+    userId: string,
+    data: { unlimitedForever: boolean; unlimitedUntil?: string | null; reason: string; idempotencyKey?: string }
+  ) =>
+    fetchJson<{ success: boolean; message: string }>(
+      `/admin/users/${userId}/ai-wallet/unlimited`,
+      { method: 'PATCH', body: JSON.stringify(data) }
+    ),
+  adminSetAiWalletStatus: (userId: string, data: { aiEnabled: boolean; reason: string; idempotencyKey?: string }) =>
+    fetchJson<{ success: boolean; message: string }>(
+      `/admin/users/${userId}/ai-wallet/status`,
+      { method: 'PATCH', body: JSON.stringify(data) }
+    ),
+
+  // Admin Registration Codes
+  adminListRegistrationCodes: () =>
+    fetchJson<{ codes: RegistrationCode[] }>('/admin/registration-codes'),
+  adminCreateRegistrationCode: (data: {
+    rewardType: 'credit' | 'unlimited';
+    creditVnd?: number | null;
+    unlimitedForever?: boolean;
+    unlimitedUntil?: string | null;
+    maxRedemptions?: number;
+    startsAt?: string | null;
+    expiresAt?: string | null;
+    note?: string | null;
+  }) =>
+    fetchJson<{ success: boolean; code: CreatedRegistrationCode; message: string }>('/admin/registration-codes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  adminRevokeRegistrationCode: (codeId: string, reason?: string) =>
+    fetchJson<{ success: boolean; message: string }>(`/admin/registration-codes/${codeId}/revoke`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
 
   // Version & Diagnostics
   getVersion: () =>

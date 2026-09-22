@@ -8,13 +8,13 @@ const FORBIDDEN_PATTERNS = [
   /^\.env$/,
   /^\.env\.local$/,
   /^\.env\.production$/,
-  /^node_modules/,
-  /^\.git/,
+  /^node_modules(?:\/|$)/,
+  /^\.git(?:\/|$)/,
   /^storage\/(?!test-fixtures)/,
-  /^dist/,
-  /^coverage/,
-  /^test-results/,
-  /^playwright-report/,
+  /^dist(?:\/|$)/,
+  /^coverage(?:\/|$)/,
+  /^test-results(?:\/|$)/,
+  /^playwright-report(?:\/|$)/,
 ];
 
 const SENSITIVE_CONTENT_PATTERNS = [
@@ -35,16 +35,14 @@ export function checkSafeArtifacts(rootDir = process.cwd()) {
       const rel = relativePath ? `${relativePath}/${entry.name}` : entry.name;
       const fullPath = path.join(dir, entry.name);
 
-      // Check forbidden patterns
+      // Check forbidden patterns unconditionally
       for (const pattern of FORBIDDEN_PATTERNS) {
-        if (pattern.test(rel) && rel !== '.gitignore' && rel !== '.env.example') {
-          if (process.env.CHECK_RELEASE_PACKAGE === 'true') {
-            errors.push(`Release package must not contain: ${rel}`);
-          }
+        if (pattern.test(rel) && rel !== '.gitignore' && rel !== '.env.example' && rel !== 'storage/.gitkeep') {
+          errors.push(`Release package must not contain forbidden resource: ${rel}`);
         }
       }
 
-      if (entry.isFile() && !rel.startsWith('node_modules') && !rel.startsWith('.git') && !rel.startsWith('dist')) {
+      if (entry.isFile() && !rel.startsWith('node_modules') && !rel.startsWith('.git') && !rel.startsWith('dist') && !rel.includes('packaging-security.test')) {
         // Inspect content for accidentally committed secrets
         if (rel.endsWith('.ts') || rel.endsWith('.tsx') || rel.endsWith('.js') || rel.endsWith('.mjs') || rel.endsWith('.json')) {
           try {
@@ -73,12 +71,18 @@ export function checkSafeArtifacts(rootDir = process.cwd()) {
 }
 
 if (process.argv[1] && process.argv[1].endsWith('check-safe-packaging.mjs')) {
-  const result = checkSafeArtifacts();
+  const targetDir = process.argv[2] || (
+    fs.existsSync(path.resolve(process.cwd(), 'dist/release-package'))
+      ? path.resolve(process.cwd(), 'dist/release-package')
+      : process.cwd()
+  );
+  console.log(`[Security Check] Inspecting directory: ${targetDir}`);
+  const result = checkSafeArtifacts(targetDir);
   if (!result.valid) {
     console.error('[Security Check FAILED]:');
     result.errors.forEach((e) => console.error(' - ' + e));
     process.exit(1);
   } else {
-    console.log('[Security Check PASSED] No secret leaks detected in codebase.');
+    console.log('[Security Check PASSED] Package is clean. No secret leaks or forbidden artifacts detected.');
   }
 }
