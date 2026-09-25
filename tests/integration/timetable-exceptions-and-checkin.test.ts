@@ -28,8 +28,8 @@ describe('Timetable Exceptions & Offline Check-ins Integration Tests', () => {
     const subjects = await subjectRepo.getByUserId(testUserId);
     subjectId = subjects[0]?.id || 'subj_test_toan';
 
-    const ttRes = await timetableRepo.getActiveTimetable(testUserId);
-    timetableId = ttRes?.id || 'tt_test';
+    const ttRes = await timetableRepo.getOrCreateActiveTimetable(testUserId);
+    timetableId = ttRes.id;
 
     const entry = await timetableRepo.createTimetableEntry(testUserId, {
       timetableId,

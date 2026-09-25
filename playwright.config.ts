@@ -7,12 +7,12 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: 'http://localhost:3000',
     trace: 'off',
   },
   webServer: {
     command: 'npx tsx server.ts',
-    url: 'http://127.0.0.1:3000/api/v1/health/live',
+    url: 'http://localhost:3000/api/v1/health/live',
     reuseExistingServer: true,
     timeout: 30000,
     env: {

@@ -169,7 +169,17 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#22C55E] opacity-75" />
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#22C55E]" />
               </span>
-              <span className="hidden md:inline font-semibold">Đang nghe "Jami ơi"</span>
+              <span className="hidden md:inline font-semibold">
+                {voice.state === 'armed'
+                  ? 'Đang nghe "Jami ơi"'
+                  : voice.state === 'requesting_permission'
+                  ? 'Đang xin quyền micro'
+                  : voice.state === 'speaking'
+                  ? 'Jami đang nói'
+                  : voice.state === 'listening_command'
+                  ? 'Đang nghe câu lệnh'
+                  : 'Jami đang xử lý'}
+              </span>
               <span className="font-mono text-[11px] text-[#22C55E]">({formatDuration(voice.sessionDuration)})</span>
               <button
                 onClick={voice.disableHandsFree}

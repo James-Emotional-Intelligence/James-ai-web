@@ -985,15 +985,17 @@ export class JamiActionService {
         // keep the processing timestamp fresh through the normal transaction.
         await db.execute(
           `UPDATE jami_action_proposals
-           SET status = 'pending', updated_at = NOW(3)
+           SET status = 'pending', processing_at = NULL, updated_at = NOW(3)
            WHERE id = ? AND user_id = ? AND status = 'processing'
-             AND processing_at IS NOT NULL
-             AND processing_at < DATE_SUB(NOW(3), INTERVAL 15 MINUTE)`,
+             AND (
+               (processing_at IS NOT NULL AND processing_at < DATE_SUB(NOW(3), INTERVAL 15 MINUTE))
+               OR (processing_at IS NULL AND updated_at < DATE_SUB(NOW(3), INTERVAL 15 MINUTE))
+             )`,
           [proposal.id, userId]
         );
         const claimResult = await db.execute(
           `UPDATE jami_action_proposals
-           SET status = 'processing', updated_at = NOW(3)
+           SET status = 'processing', processing_at = NOW(3), updated_at = NOW(3)
            WHERE id = ? AND user_id = ? AND status = 'pending' AND (expires_at IS NULL OR expires_at > NOW(3))`,
           [proposal.id, userId]
         );
@@ -1107,7 +1109,13 @@ export class JamiActionService {
         };
       }
     } catch (err: any) {
-      console.error('[JamiActionService] Mutation execution error:', err);
+      console.error('[JamiActionService] Mutation execution error', {
+        userId,
+        proposalId: proposal.id,
+        actionType: proposal.actionType,
+        errorCode: typeof err?.code === 'string' ? err.code : 'EXECUTION_FAILED',
+        errorName: typeof err?.name === 'string' ? err.name : 'Error',
+      });
       await this.markProposalFailed(userId, proposal.id, 'EXECUTION_FAILED');
       return {
         success: false,

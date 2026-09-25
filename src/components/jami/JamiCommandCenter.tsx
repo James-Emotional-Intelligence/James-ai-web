@@ -35,11 +35,6 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
   const [isFetching, setIsFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Real Speech Recognition State
-  const [isListening, setIsListening] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const speechRecognizerRef = useRef<any>(null);
-  const timerRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const fetchMessages = async () => {
@@ -130,76 +125,10 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
     }
   };
 
-  // Real Web Speech Recognition
-  const startListening = () => {
-    const SpeechRecognitionClass =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognitionClass) {
-      alert('Trình duyệt của bạn không hỗ trợ Web Speech Recognition.');
-      return;
-    }
-
-    try {
-      const recognizer = new SpeechRecognitionClass();
-      recognizer.lang = 'vi-VN';
-      recognizer.interimResults = true;
-      recognizer.continuous = false;
-      speechRecognizerRef.current = recognizer;
-
-      let transcriptAccumulated = '';
-
-      recognizer.onresult = (event: any) => {
-        let interim = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const item = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            transcriptAccumulated += item;
-          } else {
-            interim += item;
-          }
-        }
-        setInputMessage(transcriptAccumulated || interim);
-      };
-
-      recognizer.onerror = (event: any) => {
-        console.warn('[JamiCommandCenter] Speech error:', event.error);
-        stopListening();
-      };
-
-      recognizer.onend = () => {
-        setIsListening(false);
-        clearInterval(timerRef.current);
-        setRecordingSeconds(0);
-        if (transcriptAccumulated.trim()) {
-          handleSendMessage(transcriptAccumulated.trim());
-        }
-      };
-
-      recognizer.start();
-      setIsListening(true);
-      if (onStateChange) onStateChange('listening_command');
-
-      setRecordingSeconds(0);
-      timerRef.current = setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
-      }, 1000);
-    } catch (err) {
-      console.warn('[JamiCommandCenter] Could not start speech recognizer:', err);
-      setIsListening(false);
-    }
-  };
-
-  const stopListening = () => {
-    if (speechRecognizerRef.current && isListening) {
-      try {
-        speechRecognizerRef.current.stop();
-      } catch {}
-      setIsListening(false);
-      clearInterval(timerRef.current);
-      setRecordingSeconds(0);
-    }
-  };
+  // VoiceJamiContext owns the single hands-free recognizer.
+  const isListening = voice.isHandsFreeEnabled && voice.state !== 'disabled' && voice.state !== 'error';
+  const startListening = () => { void voice.enableHandsFree(); };
+  const stopListening = () => { voice.disableHandsFree(); };
 
   const formatTimestamp = (isoStr: string) => {
     try {
@@ -372,7 +301,7 @@ export const JamiCommandCenter: React.FC<JamiCommandCenterProps> = ({
 
         {isListening && (
           <span className="text-xs text-rose-400 font-mono font-bold animate-pulse">
-            00:{recordingSeconds < 10 ? `0${recordingSeconds}` : recordingSeconds}
+            {Math.floor(voice.sessionDuration / 60).toString().padStart(2, '0')}:{(voice.sessionDuration % 60).toString().padStart(2, '0')}
           </span>
         )}
 

@@ -1,6 +1,7 @@
 import { db } from '../db/mysql';
 import type { DbExecutor } from '../db/mysql';
 import { isProduction, isDatabaseRequired } from '../config/env';
+import { AppError } from '../errors/app-errors';
 import { TimetableEntry, BusyEvent, BusyEventException, AvailabilityRule, SchoolTimetable, TimetableEntryException } from '../../shared/types';
 import crypto from 'crypto';
 
@@ -64,6 +65,65 @@ export class TimetableRepository {
   public async getActiveTimetable(userId: string): Promise<SchoolTimetable | null> {
     const list = await this.getTimetables(userId);
     return list.find((t) => t.isActive) || list[0] || null;
+  }
+
+  public async getOrCreateActiveTimetable(userId: string, executor?: DbExecutor): Promise<SchoolTimetable> {
+    if (executor) {
+      const [rows] = await executor.query<any[]>(
+        `SELECT id, user_id, name, valid_from, valid_to, timezone, is_active
+         FROM school_timetables
+         WHERE user_id = ?
+         ORDER BY is_active DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [userId]
+      );
+      const row = rows[0];
+      if (row) {
+        return {
+          id: row.id,
+          userId: row.user_id,
+          name: row.name,
+          validFrom: row.valid_from ? new Date(row.valid_from).toISOString().split('T')[0] : undefined,
+          validTo: row.valid_to ? new Date(row.valid_to).toISOString().split('T')[0] : undefined,
+          timezone: row.timezone || 'Asia/Ho_Chi_Minh',
+          isActive: Boolean(row.is_active),
+          entries: [],
+        };
+      }
+    } else {
+      const active = await this.getActiveTimetable(userId);
+      if (active) return active;
+    }
+
+    return this.createTimetable(userId, {
+      name: 'Thời khóa biểu chính khóa',
+      isActive: true,
+    }, executor);
+  }
+
+  private async hasOwnedTimetable(userId: string, timetableId: string, executor?: DbExecutor): Promise<boolean> {
+    if (executor) {
+      // Use FOR UPDATE to lock the row within the transaction, preventing a
+      // TOCTOU race where the timetable is deleted between this check and the
+      // subsequent INSERT into school_timetable_entries (FK constraint failure).
+      const [rows] = await executor.query<any[]>(
+        'SELECT id FROM school_timetables WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
+        [timetableId, userId]
+      );
+      return rows.length > 0;
+    }
+
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        'SELECT id FROM school_timetables WHERE id = ? AND user_id = ? LIMIT 1',
+        [timetableId, userId]
+      );
+      return rows.length > 0;
+    }
+
+    const timetables = this.demoTimetables.get(userId) || [];
+    return timetables.some((item) => item.id === timetableId);
   }
 
   public async createTimetable(userId: string, data: Partial<SchoolTimetable>, executor?: DbExecutor): Promise<SchoolTimetable> {
@@ -467,16 +527,17 @@ export class TimetableRepository {
 
   public async createTimetableEntry(userId: string, data: Partial<TimetableEntry>, executor?: DbExecutor): Promise<TimetableEntry> {
     let targetTimetableId = data.timetableId;
-    if (!targetTimetableId) {
-      const active = executor
-        ? ((await executor.query<any>('SELECT id FROM school_timetables WHERE user_id = ? ORDER BY is_active DESC LIMIT 1', [userId]))[0] as { id: string } | undefined)
-        : await this.getActiveTimetable(userId);
-      if (active) {
-        targetTimetableId = active.id;
-      } else {
-        const created = await this.createTimetable(userId, { name: 'Thời khóa biểu chính khóa', isActive: true }, executor);
-        targetTimetableId = created.id;
+    if (targetTimetableId) {
+      const isOwned = await this.hasOwnedTimetable(userId, targetTimetableId, executor);
+      if (!isOwned) {
+        throw new AppError(
+          'Không tìm thấy thời khóa biểu hợp lệ. Jami đã không lưu thay đổi; vui lòng thử lại.',
+          404,
+          'TIMETABLE_NOT_FOUND_OR_NOT_OWNED'
+        );
       }
+    } else {
+      targetTimetableId = (await this.getOrCreateActiveTimetable(userId, executor)).id;
     }
 
     const id = 'entry_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);

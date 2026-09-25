@@ -50,12 +50,6 @@ export const JamiAssistantPage: React.FC = () => {
   const [confirmingMsgId, setConfirmingMsgId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Voice recognition & Wake-word states
-  const [isListening, setIsListening] = useState(false);
-  const [voiceStatusText, setVoiceStatusText] = useState<string | null>(null);
-  const speechRecognitionRef = useRef<any>(null);
-  const silenceTimerRef = useRef<any>(null);
-
   // File / Material attachment state
   const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
   const [attachedMaterial, setAttachedMaterial] = useState<{
@@ -87,40 +81,23 @@ export const JamiAssistantPage: React.FC = () => {
   }, [messages.length, isSending, activeConvId]);
 
   // 4.4 Voice Recognition Setup (Speech to Text & Wake Word "Jami ơi")
-  const stopListening = useCallback(() => {
-    if (speechRecognitionRef.current) {
-      try {
-        speechRecognitionRef.current.stop();
-      } catch (e) {}
-      speechRecognitionRef.current = null;
-    }
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    setIsListening(false);
-    setVoiceStatusText(null);
-  }, []);
-
-  // Cleanup local recognizer on unmount or navigation
-  useEffect(() => {
-    return () => {
-      stopListening();
-    };
-  }, [stopListening]);
-
   const speakText = useCallback(
     (text: string, msgId?: string) => {
       if (msgId && voice.speakingMessageId === msgId && voice.isSpeaking) {
         voice.stopSpeaking();
         return;
       }
+      // Prime audio within user gesture to satisfy browser autoplay policy
+      if ('speechSynthesis' in window) {
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+        window.speechSynthesis.getVoices();
+      }
       voice.speak(text, { msgId });
     },
     [voice]
   );
 
-  const activeChatRobotState: JamiState = isListening
+  const activeChatRobotState: JamiState = voice.state === 'listening_command' || voice.state === 'wake_detected'
     ? 'listening_command'
     : voice.isSpeaking
     ? 'speaking'
@@ -130,101 +107,20 @@ export const JamiAssistantPage: React.FC = () => {
     ? 'confirmation_pending'
     : 'idle';
 
+  // VoiceJamiContext is the single microphone/wake-word owner for this page.
   const handleToggleListening = () => {
     if (voice.isHandsFreeEnabled) {
-      // If global hands-free voice is already active, toggle its state to avoid dual microphone contention
-      if (voice.state === 'armed' || voice.state === 'listening_command') {
-        voice.disableHandsFree();
-      } else {
-        voice.enableHandsFree();
+      voice.disableHandsFree();
+    } else {
+      // Prime audio in this user gesture before async enableHandsFree starts
+      if ('speechSynthesis' in window) {
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+        window.speechSynthesis.getVoices();
       }
-      return;
-    }
-
-    if (isListening) {
-      stopListening();
-      return;
-    }
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert('Trình duyệt của bạn chưa hỗ trợ nhận diện giọng nói (Web Speech API). Vui lòng thử trên Chrome hoặc Edge.');
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'vi-VN';
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      speechRecognitionRef.current = recognition;
-
-      setIsListening(true);
-      setVoiceStatusText('Đang lắng nghe câu lệnh hoặc gọi "Jami ơi"...');
-
-      const resetSilenceTimer = () => {
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = setTimeout(() => {
-          setVoiceStatusText('Tự động dừng sau một khoảng thời gian không có giọng nói.');
-          stopListening();
-        }, 12000);
-      };
-
-      resetSilenceTimer();
-
-      recognition.onresult = (event: any) => {
-        resetSilenceTimer();
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
-        }
-
-        const clean = transcript.trim();
-        if (clean) {
-          setVoiceStatusText(`Jami nghe được: "${clean}"`);
-
-          const pureCommand = clean
-            .replace(/^(ơi\s+jami|jami\s+ơi|chào\s+jami|hey\s+jami|jami)[,.\s]*/i, '')
-            .trim();
-
-          // Detect wake word
-          if (clean.toLowerCase().includes('jami ơi') || clean.toLowerCase().includes('jami oi')) {
-            speakText('Jami đang nghe đây!');
-            setVoiceStatusText('Jami đang nghe đây! Hãy nói câu lệnh tiếp theo...');
-          }
-
-          // If final result, send as chat command only if there is a real command
-          const isFinal = event.results[event.results.length - 1].isFinal;
-          if (isFinal) {
-            if (pureCommand.length > 2) {
-              setInputMessage(pureCommand);
-              stopListening();
-              handleSendMessage(pureCommand);
-            } else {
-              setVoiceStatusText('Jami đang lắng nghe bạn nói câu lệnh tiếp theo...');
-            }
-          }
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        console.warn('Speech recognition error:', event.error);
-        if (event.error === 'not-allowed') {
-          alert('Vui lòng cấp quyền truy cập micro cho trình duyệt để sử dụng điều khiển giọng nói.');
-        }
-        stopListening();
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognition.start();
-    } catch (err: any) {
-      alert(err.message || 'Không thể khởi động nhận dạng giọng nói.');
-      stopListening();
+      void voice.enableHandsFree();
     }
   };
+
 
   // Load conversations on mount
   const fetchConversations = useCallback(async () => {
@@ -746,16 +642,16 @@ export const JamiAssistantPage: React.FC = () => {
         </div>
 
         {/* Live Voice Status Indicator (4.4) */}
-        {voiceStatusText && (
+        {voice.isHandsFreeEnabled && (
           <div className="p-2.5 my-1.5 bg-[#14532D]/40 border border-[#22C55E]/40 rounded-xl text-xs text-[#86EFAC] flex items-center justify-between animate-pulse">
             <div className="flex items-center gap-2">
               <Mic className="w-4 h-4 text-[#22C55E]" />
-              <span>{voiceStatusText}</span>
+              <span>{voice.state === 'armed' ? 'Đang chờ gọi "Jami ơi"...' : `Jami: ${voice.state}`}</span>
             </div>
-            {isListening && (
+            {voice.isHandsFreeEnabled && (
               <button
                 type="button"
-                onClick={stopListening}
+                onClick={voice.disableHandsFree}
                 className="text-[11px] font-bold underline text-rose-300 hover:text-rose-200 cursor-pointer"
               >
                 Dừng nghe
@@ -764,7 +660,7 @@ export const JamiAssistantPage: React.FC = () => {
           </div>
         )}
 
-        {/* Error banner */}
+        {/* API error banner */}
         {error && (
           <div className="p-3 mt-2 bg-rose-950/40 border border-rose-800 rounded-xl text-rose-300 text-xs flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -779,6 +675,17 @@ export const JamiAssistantPage: React.FC = () => {
             </button>
           </div>
         )}
+
+        {/* Voice / TTS error banner – shown when speak() encounters not-allowed, watchdog, etc. */}
+        {voice.errorMessage && (
+          <div className="p-3 mt-2 bg-amber-950/40 border border-amber-700 rounded-xl text-amber-300 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{voice.errorMessage}</span>
+            </div>
+          </div>
+        )}
+
 
         {/* Attached Material Preview Pill */}
         {attachedMaterial && (
@@ -825,13 +732,13 @@ export const JamiAssistantPage: React.FC = () => {
             type="button"
             onClick={handleToggleListening}
             className={`p-3 sm:p-3.5 rounded-2xl transition-all cursor-pointer shrink-0 font-bold border ${
-              isListening
+              voice.isHandsFreeEnabled
                 ? 'bg-rose-600 text-[#F3FAF5] border-rose-500 animate-bounce'
                 : 'bg-[#101A13] hover:bg-[#142219] text-[#86EFAC] border-[rgba(34,197,94,0.25)]'
             }`}
-            title={isListening ? 'Bấm để dừng ghi âm' : 'Bật micro nói lệnh ("Jami ơi")'}
+            title={voice.isHandsFreeEnabled ? 'Bấm để dừng ghi âm' : 'Bật micro nói lệnh ("Jami ơi")'}
           >
-            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-[#22C55E]" />}
+            {voice.isHandsFreeEnabled ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-[#22C55E]" />}
           </button>
 
           <input

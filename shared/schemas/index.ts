@@ -183,7 +183,6 @@ export const PreviewReplanTasksArgsSchema = z.object({
 });
 
 export const PreviewAddTimetableEntryArgsSchema = z.object({
-  timetableId: z.string().optional(),
   title: z.string().trim().min(1, 'Tiêu đề tiết học không được để trống'),
   subjectName: z.string().optional(),
   teacher: z.string().optional(),
@@ -1065,6 +1064,5 @@ export const AdminCreateRegistrationCodeSchema = z.object({
 export const AdminRevokeRegistrationCodeSchema = z.object({
   reason: z.string().trim().min(3, { message: 'Lý do thu hồi tối thiểu 3 ký tự' }).max(500),
 }).strict();
-
 
 

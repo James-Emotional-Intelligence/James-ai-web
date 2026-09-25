@@ -52,6 +52,22 @@ import { sanitizeStrictJsonSchema } from './strict-json-schema';
 
 const userRepo = UserRepository.getInstance();
 
+const AddTimetableEntryProposalSchema = z.object({
+  title: z.string().trim().min(1),
+  subjectId: z.string().optional(),
+  subjectName: z.string().optional(),
+  teacher: z.string().optional(),
+  dayOfWeek: z.coerce.number().int().min(1).max(7),
+  startLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  endLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  location: z.string().optional(),
+  commuteBeforeMinutes: z.coerce.number().int().min(0).max(180),
+  commuteAfterMinutes: z.coerce.number().int().min(0).max(180),
+}).refine((value) => value.endLocalTime > value.startLocalTime, {
+  message: 'Giờ kết thúc phải sau giờ bắt đầu',
+  path: ['endLocalTime'],
+});
+
 export type ToolKind = 'read' | 'immediate' | 'mutate';
 
 export interface ToolContext {
@@ -291,6 +307,9 @@ export const TOOL_REGISTRY = {
     kind: 'mutate',
     actionType: 'create_timetable_entry',
     schema: PreviewAddTimetableEntryArgsSchema,
+    // z.object strips unknown keys, so legacy proposals containing an
+    // AI-supplied timetableId are normalized to this server-owned payload.
+    proposalSchema: AddTimetableEntryProposalSchema,
     previewHandler: async (ctx, args) => {
       const title = args.title.trim();
       const dayOfWeek = args.dayOfWeek;
@@ -310,7 +329,6 @@ export const TOOL_REGISTRY = {
       }
 
       const payload = {
-        timetableId: args.timetableId,
         title,
         subjectId,
         subjectName,
@@ -343,16 +361,10 @@ export const TOOL_REGISTRY = {
       };
     },
     confirmExecutor: async (ctx, payload, conn) => {
-      let activeTimetable = await timetableRepo.getActiveTimetable(ctx.userId);
-      if (!activeTimetable) {
-        activeTimetable = await timetableRepo.createTimetable(ctx.userId, {
-          name: 'Thời khóa biểu chính khóa',
-          isActive: true,
-        }, conn);
-      }
+      const activeTimetable = await timetableRepo.getOrCreateActiveTimetable(ctx.userId, conn);
 
       const entry = await timetableRepo.createTimetableEntry(ctx.userId, {
-        timetableId: payload.timetableId || activeTimetable.id,
+        timetableId: activeTimetable.id,
         subjectId: payload.subjectId,
         title: payload.title,
         teacher: payload.teacher,
