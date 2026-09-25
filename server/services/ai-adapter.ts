@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+﻿import OpenAI from 'openai';
 import {
   VoiceGoalExtractionSchema,
   TaskDecompositionSchema,
@@ -7,6 +7,7 @@ import {
   JamiResponseSchema,
   TomorrowPlanAiSuggestionsResponseSchema,
   MistakeSimilarQuestionSchema,
+  TimetableOcrPreviewSchema,
 } from '../../shared/schemas';
 import { z } from 'zod';
 import { aiGateway } from '../ai/ai-gateway';
@@ -17,6 +18,7 @@ import {
 } from '../repositories/ai-wallet-repository';
 import { env, isProduction } from '../config/env';
 import { ModelPricingUnavailableError } from '../ai/model-pricing';
+import { getAllOpenAiToolDefinitions } from '../ai/tool-registry';
 
 function handleAiError(operation: string, err: any): never {
   if (
@@ -249,6 +251,18 @@ export class AiAdapter {
       todaySessions?: { title: string; time: string; subject?: string }[];
       pendingTasks?: { id: string; title: string; subject?: string; estimatedMinutes?: number; dueAt?: string }[];
       upcomingExams?: { id: string; title: string; subject?: string; daysLeft?: number; examAt?: string }[];
+      history?: { role: 'user' | 'assistant'; content: string }[];
+      recentCheckins?: {
+        date?: string;
+        learnedContent?: string | null;
+        homework?: string | null;
+        reflection?: string | null;
+        understandingLevel?: string | null;
+        attendanceStatus?: string | null;
+      }[];
+      currentTimeVn?: string;
+      currentIso?: string;
+      currentDayOfWeek?: string;
       latestMaterialTitle?: string;
       attachedMaterial?: { id: string; title: string; summary?: string; contentText?: string };
     }
@@ -262,11 +276,18 @@ export class AiAdapter {
           'chat_jami',
           {
             userMessage,
+            toolCatalog: getAllOpenAiToolDefinitions().map((definition) => ({
+              name: definition.function.name,
+              description: definition.function.description,
+              parameters: definition.function.parameters,
+            })),
             studentName,
-            gradeLevel: context?.gradeLevel || 9,
-            currentTimeVn: (context as any)?.currentTimeVn || new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }),
-            currentIso: (context as any)?.currentIso || new Date().toISOString(),
-            currentDayOfWeek: (context as any)?.currentDayOfWeek || 'Thứ 3 (dayOfWeek: 2)',
+            gradeLevel: context?.gradeLevel,
+            history: context?.history || [],
+            recentCheckins: context?.recentCheckins || [],
+            currentTimeVn: context?.currentTimeVn,
+            currentIso: context?.currentIso,
+            currentDayOfWeek: context?.currentDayOfWeek,
             todaySessions: context?.todaySessions || [],
             pendingTasks: context?.pendingTasks || [],
             upcomingExams: context?.upcomingExams || [],
@@ -300,9 +321,11 @@ export class AiAdapter {
             };
           }
 
+          const allowedCitations = new Set([context?.attachedMaterial?.title, context?.latestMaterialTitle].filter((value): value is string => Boolean(value)));
+          const filteredCitations = (res.data.citationsToUserMaterial || []).filter((citation) => allowedCitations.has(citation));
           return {
             ...res.data,
-            citationsToUserMaterial: res.data.citationsToUserMaterial?.length ? res.data.citationsToUserMaterial : citations,
+            citationsToUserMaterial: filteredCitations.length ? filteredCitations : citations,
             requiresConfirmation: res.data.requiresConfirmation ?? isScheduleIntent,
             confirmationSummary: res.data.confirmationSummary || (isScheduleIntent ? `Dời và tối ưu lại các nhiệm vụ học tập của ${studentName}.` : undefined),
             actionIntent,
@@ -319,30 +342,26 @@ export class AiAdapter {
     // Dynamic Context Fallback
     const msg = userMessage.toLowerCase();
 
-    if (msg.includes('xếp') || msg.includes('thêm lịch') || msg.includes('tạo nhiệm vụ') || ((msg.includes('học') || msg.includes('ôn')) && (msg.includes('toán') || msg.includes('văn') || msg.includes('anh') || msg.includes('lý') || msg.includes('hóa')))) {
+    if (msg.includes('xếp') || msg.includes('thêm lịch') || msg.includes('tạo nhiệm vụ')) {
       const minutesMatch = userMessage.match(/(\d+)\s*(?:phút|p)/i);
-      const minutes = minutesMatch ? parseInt(minutesMatch[1], 10) : 45;
       const subjectMatch = userMessage.match(/(toán|văn|anh|lý|hóa|sinh|sử|địa|tin|công nghệ)/i);
-      const subjectName = subjectMatch ? (subjectMatch[0].charAt(0).toUpperCase() + subjectMatch[0].slice(1)) : 'Toán học';
-
+      if (minutesMatch && subjectMatch) {
+        const minutes = Number(minutesMatch[1]);
+        const subjectName = subjectMatch[0].charAt(0).toUpperCase() + subjectMatch[0].slice(1);
+        return {
+          message: `Mình đã chuẩn bị nhiệm vụ học ${subjectName} ${minutes} phút cho ${studentName}. Bạn có đồng ý lưu không?`,
+          emotion: 'reminding', suggestedActions: [], requiresConfirmation: true,
+          confirmationSummary: `Học ${subjectName} ${minutes} phút`, citationsToUserMaterial: [],
+          actionIntent: { kind: 'mutate', toolName: 'preview_create_task', arguments: { title: `Học ${subjectName}`, subjectName, estimatedMinutes: minutes, priority: 'medium', difficulty: 'medium' } },
+        };
+      }
       return {
-        message: `Jami đã chuẩn bị tạo ca học môn ${subjectName} (${minutes} phút) cho ${studentName}. Bạn có đồng ý lưu vào kế hoạch không?`,
-        emotion: 'reminding',
-        suggestedActions: ['Xác nhận lưu', 'Đổi thời gian khác', 'Hủy bỏ'],
-        requiresConfirmation: true,
-        confirmationSummary: `Tạo nhiệm vụ học môn ${subjectName} (${minutes} phút)`,
+        message: 'Mình cần thêm tên nhiệm vụ, môn học và thời lượng hoặc thời điểm chính xác trước khi tạo kế hoạch.',
+        emotion: 'guiding',
+        suggestedActions: [],
+        requiresConfirmation: false,
         citationsToUserMaterial: [],
-        actionIntent: {
-          kind: 'mutate',
-          toolName: 'preview_create_task',
-          arguments: {
-            title: `Học môn ${subjectName}`,
-            subjectName,
-            estimatedMinutes: minutes,
-            priority: 'high',
-            difficulty: 'medium',
-          },
-        },
+        actionIntent: { kind: 'none' },
       };
     }
 
@@ -846,69 +865,35 @@ export class AiAdapter {
     userId?: string
   ): Promise<{
     timetableName: string;
-    entries: Array<{
-      dayOfWeek: number;
-      title: string;
-      startLocalTime: string;
-      endLocalTime: string;
-      room?: string;
-      teacher?: string;
-    }>;
+      entries: Array<{
+        dayOfWeek: number;
+        title: string;
+        startLocalTime?: string;
+        endLocalTime?: string;
+        room?: string;
+        teacher?: string;
+        confidence: number;
+        sourceCell?: string;
+      }>;
+    warnings?: string[];
+    requiresReview: boolean;
   }> {
     ensureAiAvailable('Nhận diện thời khóa biểu từ ảnh');
     if (aiGateway.isAvailable()) {
       try {
-        const TimetableSchema = z.object({
-          timetableName: z.string(),
-          entries: z.array(
-            z.object({
-              dayOfWeek: z.number(),
-              title: z.string(),
-              startLocalTime: z.string(),
-              endLocalTime: z.string(),
-              room: z.string().optional(),
-              teacher: z.string().optional(),
-            })
-          ),
-        });
-
         const cleanBase64 = imageBase64.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
         const imageBuffer = Buffer.from(cleanBase64, 'base64');
 
-        const ocrRes = await aiGateway.executeVision(
+        const ocrRes = await aiGateway.executeVisionStructured(
+          'timetable_ocr',
           imageBuffer,
           mimeType,
           'Thời khóa biểu',
+          TimetableOcrPreviewSchema,
           { userId }
         );
 
-        if (ocrRes.text) {
-          const structRes = await aiGateway.executeStructured(
-            'timetable_ocr',
-            ocrRes.text,
-            TimetableSchema,
-            { userId }
-          );
-
-          if (structRes.data) {
-            const entries = (structRes.data.entries || []).map((e: any) => ({
-              dayOfWeek: Math.min(7, Math.max(1, Number(e.dayOfWeek) || 1)),
-              title: String(e.title || 'Tiết học').trim(),
-              startLocalTime: String(e.startLocalTime || '07:30').trim(),
-              endLocalTime: String(e.endLocalTime || '08:15').trim(),
-              room: e.room ? String(e.room).trim() : undefined,
-              teacher: e.teacher ? String(e.teacher).trim() : undefined,
-            }));
-
-            return {
-              timetableName: structRes.data.timetableName || 'Thời khóa biểu trích xuất từ ảnh',
-              entries,
-            };
-          }
-          if (structRes.error) {
-            handleAiError('Nhận diện thời khóa biểu từ ảnh', new Error(structRes.error));
-          }
-        }
+        if (ocrRes.data) return ocrRes.data;
         if (ocrRes.error) {
           handleAiError('Nhận diện thời khóa biểu từ ảnh', new Error(ocrRes.error));
         }
@@ -917,46 +902,12 @@ export class AiAdapter {
       }
     }
 
-    // High quality standard Vietnamese curriculum fallback
+    // Zero-fabrication fallback: returns empty entries when no AI is active
     return {
-      timetableName: '1. THỜI KHÓA BIỂU (TRƯỜNG HỌC)',
-      entries: [
-        { dayOfWeek: 1, title: 'Chào cờ', startLocalTime: '07:15', endLocalTime: '08:00', room: 'Sân trường' },
-        { dayOfWeek: 1, title: 'Toán học', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },
-        { dayOfWeek: 1, title: 'Ngữ văn', startLocalTime: '09:05', endLocalTime: '09:50', room: 'P.102' },
-        { dayOfWeek: 1, title: 'Tiếng Anh', startLocalTime: '10:00', endLocalTime: '10:45', room: 'P.102' },
-        { dayOfWeek: 1, title: 'Tin học', startLocalTime: '10:50', endLocalTime: '11:35', room: 'Lab Tin' },
-
-        { dayOfWeek: 2, title: 'Toán học', startLocalTime: '07:15', endLocalTime: '08:00', room: 'P.102' },
-        { dayOfWeek: 2, title: 'Vật lý', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },
-        { dayOfWeek: 2, title: 'Hóa học', startLocalTime: '09:05', endLocalTime: '09:50', room: 'Lab Hóa' },
-        { dayOfWeek: 2, title: 'Lịch sử', startLocalTime: '10:00', endLocalTime: '10:45', room: 'P.102' },
-        { dayOfWeek: 2, title: 'Địa lý', startLocalTime: '10:50', endLocalTime: '11:35', room: 'P.102' },
-
-        { dayOfWeek: 3, title: 'Ngữ văn', startLocalTime: '07:15', endLocalTime: '08:00', room: 'P.102' },
-        { dayOfWeek: 3, title: 'Ngữ văn', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },
-        { dayOfWeek: 3, title: 'Tiếng Anh', startLocalTime: '09:05', endLocalTime: '09:50', room: 'P.102' },
-        { dayOfWeek: 3, title: 'Sinh học', startLocalTime: '10:00', endLocalTime: '10:45', room: 'P.102' },
-        { dayOfWeek: 3, title: 'GDCD', startLocalTime: '10:50', endLocalTime: '11:35', room: 'P.102' },
-
-        { dayOfWeek: 4, title: 'Toán học', startLocalTime: '07:15', endLocalTime: '08:00', room: 'P.102' },
-        { dayOfWeek: 4, title: 'Vật lý', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },
-        { dayOfWeek: 4, title: 'Tiếng Anh', startLocalTime: '09:05', endLocalTime: '09:50', room: 'P.102' },
-        { dayOfWeek: 4, title: 'Hóa học', startLocalTime: '10:00', endLocalTime: '10:45', room: 'P.102' },
-        { dayOfWeek: 4, title: 'Thể dục', startLocalTime: '10:50', endLocalTime: '11:35', room: 'Nhà thi đấu' },
-
-        { dayOfWeek: 5, title: 'Ngữ văn', startLocalTime: '07:15', endLocalTime: '08:00', room: 'P.102' },
-        { dayOfWeek: 5, title: 'Toán học', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },
-        { dayOfWeek: 5, title: 'Lịch sử', startLocalTime: '09:05', endLocalTime: '09:50', room: 'P.102' },
-        { dayOfWeek: 5, title: 'Sinh học', startLocalTime: '10:00', endLocalTime: '10:45', room: 'P.102' },
-        { dayOfWeek: 5, title: 'Tin học', startLocalTime: '10:50', endLocalTime: '11:35', room: 'Lab Tin' },
-
-        { dayOfWeek: 6, title: 'Tiếng Anh', startLocalTime: '07:15', endLocalTime: '08:00', room: 'P.102' },
-        { dayOfWeek: 6, title: 'Toán học', startLocalTime: '08:05', endLocalTime: '08:50', room: 'P.102' },
-        { dayOfWeek: 6, title: 'Địa lý', startLocalTime: '09:05', endLocalTime: '09:50', room: 'P.102' },
-        { dayOfWeek: 6, title: 'Thể dục', startLocalTime: '10:00', endLocalTime: '10:45', room: 'Nhà thi đấu' },
-        { dayOfWeek: 6, title: 'Sinh hoạt lớp', startLocalTime: '10:50', endLocalTime: '11:35', room: 'P.102' },
-      ],
+      timetableName: 'Thời khóa biểu mới',
+      entries: [],
+      warnings: ['Không tìm thấy tiết học nào trong ảnh hoặc hệ thống AI không phản hồi.'],
+      requiresReview: true,
     };
   }
 

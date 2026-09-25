@@ -17,7 +17,7 @@ describe('Atomic Proposal Claiming Unit Tests', () => {
     const proposal = await jamiActionService.saveProposal('user_race_1', {
       actionType: 'create_reminder',
       previewText: 'Create Reminder Test',
-      payload: { content: 'Ôn tập toán', timeStr: '20:00' },
+      payload: { title: 'Ôn tập toán', scheduledFor: '2030-01-01T20:00:00+07:00', priority: 'medium' },
     });
 
     expect(proposal.status).toBe('pending');

@@ -1,7 +1,6 @@
-/* global console, process */
-import fs from 'fs';
-import path from 'path';
-import process from 'process';
+import fs from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
 import { checkSafeArtifacts } from './check-safe-packaging.mjs';
 
 const ALLOWED_ROOT_FILES = new Set([
@@ -12,6 +11,7 @@ const ALLOWED_ROOT_FILES = new Set([
   'vite.config.ts',
   'vitest.config.ts',
   'eslint.config.js',
+  'eslint.config.mjs',
   'tailwind.config.js',
   'postcss.config.js',
   'index.html',
@@ -28,7 +28,6 @@ const ALLOWED_DIRECTORIES = new Set([
   'shared',
   'scripts',
   'public',
-  'certs',
 ]);
 
 const FORBIDDEN_FILE_NAMES = new Set([
@@ -82,7 +81,7 @@ export function buildSafePackage(targetDir = path.join(process.cwd(), 'dist', 'r
         copyDirectory(srcItem, destItem);
       } else if (entry.isFile()) {
         // Skip user-uploaded files or private keys
-        if (entry.name.endsWith('.key') || (entry.name.endsWith('.pem') && entry.name !== 'ca.pem')) {
+        if (entry.name.endsWith('.key') || entry.name.endsWith('.pem')) {
           continue;
         }
         fs.copyFileSync(srcItem, destItem);

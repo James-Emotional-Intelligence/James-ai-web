@@ -64,6 +64,9 @@ import {
   AdminSetWalletStatusSchema,
   AdminCreateRegistrationCodeSchema,
   AdminRevokeRegistrationCodeSchema,
+  TimetableOcrImportRequestSchema,
+  TimetableOcrConfirmSchema,
+  RealtimeFinalizeSchema,
 } from '../../shared/schemas';
 import { env, isProduction, isProductionRuntime, isDatabaseRequired, isDemoMode } from '../config/env';
 import { createRateLimiter, aiRateLimiter, authRateLimiter } from '../middleware/rate-limit';
@@ -103,6 +106,7 @@ import { voiceSessionService } from '../services/voice-session-service';
 import { jamiActionService } from '../services/jami-action-service';
 import { jamiOrchestrator } from '../services/jami-orchestrator';
 import { executeRegisteredTool } from '../ai/tool-registry';
+import { resolveUserTimeZone } from '../lib/date-time';
 import { notificationScheduler } from '../services/notification-scheduler-service';
 import {
   storageService,
@@ -121,11 +125,178 @@ export const apiRouter = Router();
 const userRepo = UserRepository.getInstance();
 const authService = AuthService.getInstance();
 
+const RealtimeToolCallRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  callId: z.string().min(1),
+  name: z.string().min(1),
+  arguments: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+  conversationId: z.string().optional(),
+});
+
 // Async route wrapper to prevent unhandled rejections
 function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) {
   return (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
+}
+
+function decodeTimetableOcrImage(imageBase64: string, mimeType: string): Buffer {
+  const match = imageBase64.match(/^(?:data:([a-zA-Z0-9/+.-]+);base64,)?([A-Za-z0-9+/=]+)$/);
+  if (!match || (match[1] && match[1] !== mimeType)) throw new Error('INVALID_OCR_IMAGE');
+  const payload = match[2];
+  const buffer = Buffer.from(payload, 'base64');
+  if (!buffer.length || buffer.length > 8 * 1024 * 1024 || buffer.toString('base64').replace(/=+$/, '') !== payload.replace(/=+$/, '')) throw new Error('INVALID_OCR_IMAGE');
+  const isPng = buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  const isWebp = buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  if ((mimeType === 'image/png' && !isPng) || (mimeType === 'image/jpeg' && !isJpeg) || (mimeType === 'image/webp' && !isWebp)) throw new Error('INVALID_OCR_IMAGE');
+  return buffer;
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonicalizeJson(item)]));
+  }
+  return value;
+}
+
+async function executeRealtimeToolCallIdempotent(userId: string, body: any) {
+  const parsed = RealtimeToolCallRequestSchema.safeParse(body || {});
+  if (!parsed.success) {
+    const err = new Error(parsed.error.issues[0]?.message || 'Realtime tool call không hợp lệ.');
+    (err as any).status = 400;
+    (err as any).code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  const { sessionId, callId, name, conversationId } = parsed.data;
+  let parsedArgs: unknown;
+  try {
+    parsedArgs = typeof parsed.data.arguments === 'string'
+      ? JSON.parse(parsed.data.arguments || '{}')
+      : (parsed.data.arguments || {});
+  } catch {
+    const err = new Error('Realtime tool arguments không hợp lệ.');
+    (err as any).status = 400;
+    (err as any).code = 'INVALID_TOOL_ARGUMENTS';
+    throw err;
+  }
+  const argumentsHash = crypto.createHash('sha256').update(JSON.stringify(canonicalizeJson(parsedArgs))).digest('hex');
+
+  if (isProduction && !db.isHealthy()) {
+    const err = new Error('Realtime idempotency store unavailable.');
+    (err as any).status = 503;
+    (err as any).code = 'REALTIME_PERSISTENCE_UNAVAILABLE';
+    throw err;
+  }
+
+  if (db.isHealthy()) {
+    const sessions = await db.query<any>(
+      `SELECT id, user_id, status FROM ai_realtime_sessions WHERE id = ? AND user_id = ? LIMIT 1`,
+      [sessionId, userId]
+    );
+    if (sessions.length === 0) {
+      const err = new Error('Phiên Realtime không tồn tại hoặc không thuộc tài khoản của bạn.');
+      (err as any).status = 403;
+      (err as any).code = 'REALTIME_SESSION_FORBIDDEN';
+      throw err;
+    }
+    if (sessions[0].status !== 'active') {
+      const err = new Error('Phiên Realtime không còn active.');
+      (err as any).status = 409;
+      (err as any).code = 'REALTIME_SESSION_NOT_ACTIVE';
+      throw err;
+    }
+
+    let owner = false;
+    const existing = await db.query<any>(
+      `SELECT tool_name, status, arguments_hash, result_json FROM jami_realtime_tool_calls
+       WHERE user_id = ? AND session_id = ? AND call_id = ?
+       LIMIT 1`,
+      [userId, sessionId, callId]
+    );
+    if (existing.length > 0) {
+      if (existing[0].tool_name !== name) {
+        const err = new Error('Realtime callId đã tồn tại với tool khác.');
+        (err as any).status = 409;
+        (err as any).code = 'REALTIME_CALL_TOOL_MISMATCH';
+        throw err;
+      }
+      if (existing[0].arguments_hash !== argumentsHash) {
+        const err = new Error('Realtime callId đã tồn tại với payload khác.');
+        (err as any).status = 409;
+        (err as any).code = 'REALTIME_CALL_ARGUMENT_MISMATCH';
+        throw err;
+      }
+      if (existing[0].result_json) {
+        return typeof existing[0].result_json === 'string'
+          ? JSON.parse(existing[0].result_json)
+          : existing[0].result_json;
+      }
+      const err = new Error('Realtime call đang được xử lý.');
+      (err as any).status = 409;
+      (err as any).code = 'REALTIME_CALL_IN_PROGRESS';
+      throw err;
+    } else {
+      try {
+        await db.execute(
+          `INSERT INTO jami_realtime_tool_calls
+           (id, user_id, session_id, call_id, tool_name, arguments_hash, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'processing', NOW(3), NOW(3))`,
+          ['rtc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 24), userId, sessionId, callId, name, argumentsHash]
+        );
+        owner = true;
+      } catch (insertErr: any) {
+        if (insertErr.code === 'ER_DUP_ENTRY' || insertErr.errno === 1062) {
+          const recheck = await db.query<any>(
+            `SELECT tool_name, status, arguments_hash, result_json FROM jami_realtime_tool_calls
+             WHERE user_id = ? AND session_id = ? AND call_id = ?
+             LIMIT 1`,
+            [userId, sessionId, callId]
+          );
+          if (recheck.length > 0 && recheck[0].tool_name !== name) {
+            const err = new Error('Realtime callId đã tồn tại với tool khác.');
+            (err as any).status = 409;
+            (err as any).code = 'REALTIME_CALL_TOOL_MISMATCH';
+            throw err;
+          }
+          if (recheck.length > 0 && recheck[0].arguments_hash !== argumentsHash) {
+            const err = new Error('Realtime callId đã tồn tại với payload khác.');
+            (err as any).status = 409;
+            (err as any).code = 'REALTIME_CALL_ARGUMENT_MISMATCH';
+            throw err;
+          }
+          if (recheck.length > 0 && recheck[0].result_json) {
+            return typeof recheck[0].result_json === 'string'
+              ? JSON.parse(recheck[0].result_json)
+              : recheck[0].result_json;
+          }
+          const err = new Error('Realtime call đang được xử lý.');
+          (err as any).status = 409;
+          (err as any).code = 'REALTIME_CALL_IN_PROGRESS';
+          throw err;
+        } else {
+          throw insertErr;
+        }
+      }
+    }
+  }
+
+  const user = await userRepo.findById(userId);
+  const timezone = resolveUserTimeZone(user?.timezone);
+  const result = await executeRegisteredTool({ userId, conversationId, source: 'realtime', realtimeCallId: callId, timezone, now: new Date() }, name, parsedArgs);
+
+  if (db.isHealthy()) {
+    await db.execute(
+      `UPDATE jami_realtime_tool_calls
+       SET status = ?, result_json = ?, updated_at = NOW(3)
+       WHERE user_id = ? AND session_id = ? AND call_id = ?`,
+      [result.success ? 'completed' : 'failed', JSON.stringify(result), userId, sessionId, callId]
+    );
+  }
+
+  return result;
 }
 
 // Session Extraction Helper (Strict HttpOnly Cookie ONLY)
@@ -305,7 +476,8 @@ apiRouter.post('/admin/db-migrate', requireAdmin, asyncHandler(async (req: Reque
     const result = await Migrator.run();
     res.json({ success: true, ...result });
   } catch (err: any) {
-    sendError(req, res, 500, 'MIGRATION_ERROR', err.message);
+    console.error('[Admin DB migration] failed', { code: err?.code || 'MIGRATION_ERROR' });
+    sendError(req, res, 500, 'MIGRATION_ERROR', 'Không thể hoàn tất đồng bộ cơ sở dữ liệu.');
   }
 }));
 
@@ -814,7 +986,7 @@ apiRouter.post('/auth/register', authRateLimiter, asyncHandler(async (req: Reque
       message: 'Tạo tài khoản thành công',
     });
   } catch (err: any) {
-    if (err instanceof EmailAlreadyExistsError || err.code === 'EMAIL_ALREADY_EXISTS' || err.message?.includes('đã được đăng ký')) {
+    if (err instanceof EmailAlreadyExistsError || err.code === 'EMAIL_ALREADY_EXISTS' || err.message?.includes('đã được đăng ký') || err.message?.includes('đã được đăng ký')) {
       return sendError(req, res, 409, 'EMAIL_ALREADY_EXISTS', 'Email này đã được đăng ký. Vui lòng chuyển sang trang Đăng nhập.');
     }
     if (
@@ -1112,14 +1284,14 @@ apiRouter.get('/dashboard/overview', requireAuth, asyncHandler(async (req: Reque
   if (yesterdayFocusMinutes > 0) {
     const pct = Math.round((Math.abs(yesterdayDiffMinutes) / yesterdayFocusMinutes) * 100);
     if (yesterdayDiffMinutes > 0) {
-      yesterdayComparisonLabel = `+${yesterdayDiffMinutes} phút (+${pct}%) so với hôm qua ↗️`;
+      yesterdayComparisonLabel = `+${yesterdayDiffMinutes} phút (+${pct}%) so với hôm qua â†—️`;
     } else if (yesterdayDiffMinutes < 0) {
-      yesterdayComparisonLabel = `${yesterdayDiffMinutes} phút (-${pct}%) so với hôm qua ↘️`;
+      yesterdayComparisonLabel = `${yesterdayDiffMinutes} phút (-${pct}%) so với hôm qua â†˜️`;
     } else {
       yesterdayComparisonLabel = `Bằng thời gian hôm qua (${actualFocusMinutes} phút)`;
     }
   } else if (actualFocusMinutes > 0) {
-    yesterdayComparisonLabel = `+${actualFocusMinutes} phút (hôm qua chưa ghi nhận) ↗️`;
+    yesterdayComparisonLabel = `+${actualFocusMinutes} phút (hôm qua chưa ghi nhận) â†—️`;
   }
 
   const dailyGoalMinutes = profile?.maxDailyStudyMinutes || 120;
@@ -1816,23 +1988,28 @@ apiRouter.post('/mistakes/:id/explain', requireAuth, aiRateLimiter, asyncHandler
 // Timetable OCR Import from Image (Preview)
 apiRouter.post('/timetables/import-ocr', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const { imageBase64, mimeType } = req.body;
-  if (!imageBase64 || typeof imageBase64 !== 'string') {
+  const parsed = TimetableOcrImportRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Vui lòng cung cấp dữ liệu hình ảnh thời khóa biểu.');
   }
+  try { decodeTimetableOcrImage(parsed.data.imageBase64, parsed.data.mimeType); } catch { return sendError(req, res, 400, 'INVALID_OCR_IMAGE', 'Ảnh thời khóa biểu không hợp lệ.'); }
 
-  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || 'image/jpeg', userId);
+  const result = await AiAdapter.extractTimetableFromImage(parsed.data.imageBase64, parsed.data.mimeType, userId);
   res.json({
     success: true,
     timetableName: result.timetableName,
     entries: result.entries,
+    warnings: result.warnings || [],
+    requiresReview: result.requiresReview,
   });
 }));
 
 // Timetable OCR Confirm & Save
 apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const { timetableName, replaceExisting, entries } = req.body;
+  const parsed = TimetableOcrConfirmSchema.safeParse(req.body);
+  if (!parsed.success) return sendError(req, res, 400, 'VALIDATION_ERROR', 'Dữ liệu thời khóa biểu không hợp lệ.');
+  const { timetableName, replaceExisting, entries } = parsed.data;
 
   if (!Array.isArray(entries) || entries.length === 0) {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Danh sách tiết học không được để trống');
@@ -1848,6 +2025,12 @@ apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async
     await timetableRepo.updateTimetable(userId, activeTimetable.id, { name: timetableName });
   }
 
+  if (!replaceExisting) {
+    const existing = await timetableRepo.getTimetableEntries(userId, activeTimetable.id);
+    const conflicts = entries.filter((candidate) => existing.some((item) => item.dayOfWeek === candidate.dayOfWeek && candidate.startLocalTime! < item.endLocalTime && candidate.endLocalTime! > item.startLocalTime));
+    if (conflicts.length) return sendError(req, res, 409, 'TIMETABLE_CONFLICT', 'Có tiết OCR trùng với thời khóa biểu hiện tại.');
+  }
+
   let savedEntries: any[];
   if (replaceExisting) {
     savedEntries = await timetableRepo.replaceTimetableEntries(userId, activeTimetable.id, entries);
@@ -1857,14 +2040,14 @@ apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async
       if (!item.title) continue;
       const entry = await timetableRepo.createTimetableEntry(userId, {
         timetableId: activeTimetable.id,
-        dayOfWeek: Number(item.dayOfWeek) || 1,
+        dayOfWeek: item.dayOfWeek,
         title: item.title.trim(),
-        startLocalTime: item.startLocalTime || '07:30',
-        endLocalTime: item.endLocalTime || '08:15',
+        startLocalTime: item.startLocalTime!,
+        endLocalTime: item.endLocalTime!,
         room: item.room?.trim() || undefined,
         location: item.room?.trim() || undefined,
-        commuteBeforeMinutes: 15,
-        commuteAfterMinutes: 15,
+        commuteBeforeMinutes: 0,
+        commuteAfterMinutes: 0,
       });
       savedEntries.push(entry);
     }
@@ -1881,22 +2064,27 @@ apiRouter.post('/timetables/import-ocr/confirm', requireAuth, asyncHandler(async
 // Aliases for /schedules/import-ocr
 apiRouter.post('/schedules/import-ocr', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const { imageBase64, mimeType } = req.body;
-  if (!imageBase64 || typeof imageBase64 !== 'string') {
+  const parsed = TimetableOcrImportRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Vui lòng cung cấp dữ liệu hình ảnh thời khóa biểu.');
   }
+  try { decodeTimetableOcrImage(parsed.data.imageBase64, parsed.data.mimeType); } catch { return sendError(req, res, 400, 'INVALID_OCR_IMAGE', 'Ảnh thời khóa biểu không hợp lệ.'); }
 
-  const result = await AiAdapter.extractTimetableFromImage(imageBase64, mimeType || 'image/jpeg', userId);
+  const result = await AiAdapter.extractTimetableFromImage(parsed.data.imageBase64, parsed.data.mimeType, userId);
   res.json({
     success: true,
     timetableName: result.timetableName,
     entries: result.entries,
+    warnings: result.warnings || [],
+    requiresReview: result.requiresReview,
   });
 }));
 
 apiRouter.post('/schedules/import-ocr/confirm', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const { timetableName, replaceExisting, entries } = req.body;
+  const parsed = TimetableOcrConfirmSchema.safeParse(req.body);
+  if (!parsed.success) return sendError(req, res, 400, 'VALIDATION_ERROR', 'Dữ liệu thời khóa biểu không hợp lệ.');
+  const { timetableName, replaceExisting, entries } = parsed.data;
 
   if (!Array.isArray(entries) || entries.length === 0) {
     return sendError(req, res, 400, 'VALIDATION_ERROR', 'Danh sách tiết học không được để trống');
@@ -1912,6 +2100,12 @@ apiRouter.post('/schedules/import-ocr/confirm', requireAuth, asyncHandler(async 
     await timetableRepo.updateTimetable(userId, activeTimetable.id, { name: timetableName });
   }
 
+  if (!replaceExisting) {
+    const existing = await timetableRepo.getTimetableEntries(userId, activeTimetable.id);
+    const conflicts = entries.filter((candidate) => existing.some((item) => item.dayOfWeek === candidate.dayOfWeek && candidate.startLocalTime! < item.endLocalTime && candidate.endLocalTime! > item.startLocalTime));
+    if (conflicts.length) return sendError(req, res, 409, 'TIMETABLE_CONFLICT', 'Có tiết OCR trùng với thời khóa biểu hiện tại.');
+  }
+
   let savedEntries: any[];
   if (replaceExisting) {
     savedEntries = await timetableRepo.replaceTimetableEntries(userId, activeTimetable.id, entries);
@@ -1921,14 +2115,14 @@ apiRouter.post('/schedules/import-ocr/confirm', requireAuth, asyncHandler(async 
       if (!item.title) continue;
       const entry = await timetableRepo.createTimetableEntry(userId, {
         timetableId: activeTimetable.id,
-        dayOfWeek: Number(item.dayOfWeek) || 1,
+        dayOfWeek: item.dayOfWeek,
         title: item.title.trim(),
-        startLocalTime: item.startLocalTime || '07:30',
-        endLocalTime: item.endLocalTime || '08:15',
+        startLocalTime: item.startLocalTime!,
+        endLocalTime: item.endLocalTime!,
         room: item.room?.trim() || undefined,
         location: item.room?.trim() || undefined,
-        commuteBeforeMinutes: 15,
-        commuteAfterMinutes: 15,
+        commuteBeforeMinutes: 0,
+        commuteAfterMinutes: 0,
       });
       savedEntries.push(entry);
     }
@@ -2520,7 +2714,7 @@ apiRouter.post('/planner/voice-goal/preview', requireAuth, aiRateLimiter, asyncH
       userId,
       subjectId: matchedSubject?.id || 'subj_toan',
       subjectName: matchedSubject?.name || 'Toán học',
-      title: `${matchedSubject?.name || 'Môn học'} — Ôn tập lý thuyết & các công thức cốt lõi`,
+      title: `${matchedSubject?.name || 'Môn học'} â€” Ôn tập lý thuyết & các công thức cốt lõi`,
       objective: 'Nắm vững kiến thức nền tảng',
       status: 'pending',
       priority: 'high',
@@ -2722,7 +2916,7 @@ apiRouter.post('/quizzes/retake-wrong', requireAuth, createRateLimiter(60000, 15
     const quiz = await quizRepo.generateRetakeWrongQuestionsQuiz(userId, parsed.data.originalQuizId, parsed.data.wrongQuestionIds);
     res.json({ success: true, quiz });
   } catch (err: any) {
-    const status = err.message?.includes('Không tìm thấy') ? 404 : 400;
+    const status = err.message?.includes('Không tìm thấy') || err.message?.includes('Không tìm thấy') ? 404 : 400;
     sendError(req, res, status, 'QUIZ_RETAKE_FAILED', err.message || 'Không thể tạo đề làm lại câu sai.');
   }
 }));
@@ -3381,16 +3575,12 @@ apiRouter.post('/materials/upload', requireAuth, uploadDisk.single('file'), asyn
 
     // 5. Create processing job and trigger worker
     if (db.isHealthy()) {
-      const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-      await db.execute(
-        `INSERT INTO material_processing_jobs (
-          id, material_id, user_id, job_type, status, progress_percent, created_at
-        ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
-        [jobId, material.id, userId]
-      ).catch(() => {});
-      materialWorker.pollJobs().catch(() => {});
+      const jobId = await materialWorker.enqueueMaterialProcessing(userId, material.id);
+      materialWorker.pollJobs().catch((err) => console.error('[API] material worker trigger failed', { jobId, error: err instanceof Error ? err.message : String(err) }));
+    } else if (isProduction) {
+      return res.status(503).json({ error: { code: 'MATERIAL_QUEUE_UNAVAILABLE', message: 'Hệ thống xử lý tài liệu tạm thời không khả dụng.' } });
     } else {
-      materialProcessor.processMaterial(userId, material.id).catch(() => {});
+      materialProcessor.processMaterial(userId, material.id).catch((err) => console.error('[API] demo material processing failed', { error: err instanceof Error ? err.message : String(err) }));
     }
 
     return res.status(201).json({
@@ -3468,18 +3658,12 @@ apiRouter.post('/materials/upload-direct', requireAuth, asyncHandler(async (req:
       sha256: putResult.sha256,
     });
     if (db.isHealthy()) {
-      const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-      await db.execute(
-        `INSERT INTO material_processing_jobs (
-          id, material_id, user_id, job_type, status, progress_percent, created_at
-        ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
-        [jobId, material.id, userId]
-      ).catch(() => {});
-      materialWorker.pollJobs().catch(() => {});
+      const jobId = await materialWorker.enqueueMaterialProcessing(userId, material.id);
+      materialWorker.pollJobs().catch((err) => console.error('[API] material worker trigger failed', { jobId, error: err instanceof Error ? err.message : String(err) }));
+    } else if (isProduction) {
+      return res.status(503).json({ error: { code: 'MATERIAL_QUEUE_UNAVAILABLE', message: 'Hệ thống xử lý tài liệu tạm thời không khả dụng.' } });
     } else {
-      materialProcessor.processMaterial(userId, material.id).catch((err) => {
-        console.error('[API] Error processing material after upload:', err);
-      });
+      materialProcessor.processMaterial(userId, material.id).catch((err) => console.error('[API] demo material processing failed', { error: err instanceof Error ? err.message : String(err) }));
     }
   }
 
@@ -3506,9 +3690,14 @@ apiRouter.post('/materials/note', requireAuth, asyncHandler(async (req: Request,
   }
 
   const note = await materialRepo.createNote(userId, parsed.data);
-  materialProcessor.processMaterial(userId, note.id).catch((err) => {
-    console.error('[API] Error processing note:', err);
-  });
+  if (db.isHealthy()) {
+    const jobId = await materialWorker.enqueueMaterialProcessing(userId, note.id);
+    materialWorker.pollJobs().catch((err) => console.error('[API] material worker trigger failed', { jobId, error: err instanceof Error ? err.message : String(err) }));
+  } else if (isProduction) {
+    return res.status(503).json({ error: { code: 'MATERIAL_QUEUE_UNAVAILABLE', message: 'Hệ thống xử lý tài liệu tạm thời không khả dụng.' } });
+  } else {
+    materialProcessor.processMaterial(userId, note.id).catch((err) => console.error('[API] demo note processing failed', { error: err instanceof Error ? err.message : String(err) }));
+  }
 
   res.json({ success: true, material: note });
 }));
@@ -3526,17 +3715,13 @@ apiRouter.post('/materials/:id/finalize', requireAuth, asyncHandler(async (req: 
   }
 
   if (db.isHealthy()) {
-    const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-    await db.execute(
-      `INSERT INTO material_processing_jobs (
-        id, material_id, user_id, job_type, status, progress_percent, created_at
-      ) VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
-      [jobId, finalized.id, userId]
-    ).catch(() => {});
-    materialWorker.pollJobs().catch(() => {});
+    const jobId = await materialWorker.enqueueMaterialProcessing(userId, finalized.id);
+    materialWorker.pollJobs().catch((err) => console.error('[API] material worker trigger failed', { jobId, error: err instanceof Error ? err.message : String(err) }));
+  } else if (isProduction) {
+    return res.status(503).json({ error: { code: 'MATERIAL_QUEUE_UNAVAILABLE', message: 'Hệ thống xử lý tài liệu tạm thời không khả dụng.' } });
   } else {
     materialProcessor.processMaterial(userId, finalized.id).catch((err) => {
-      console.error('[API] Error processing finalized material:', err);
+      console.error('[API] demo finalized material processing failed', { error: err instanceof Error ? err.message : String(err) });
     });
   }
 
@@ -3598,8 +3783,12 @@ apiRouter.post('/materials/:id/reprocess', requireAuth, asyncHandler(async (req:
     });
   }
 
-  const result = await materialProcessor.processMaterial(userId, material.id);
-  res.json(result);
+  if (!db.isHealthy()) {
+    return res.status(503).json({ error: { code: 'MATERIAL_QUEUE_UNAVAILABLE', message: 'Hệ thống xử lý tài liệu tạm thời không khả dụng.' } });
+  }
+  const jobId = await materialWorker.enqueueMaterialProcessing(userId, material.id);
+  materialWorker.pollJobs().catch((err) => console.error('[API] material worker trigger failed', { jobId, error: err instanceof Error ? err.message : String(err) }));
+  res.json({ success: true, queued: true, jobId });
 }));
 
 apiRouter.post('/materials/:id/quizzes/generate', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
@@ -3986,7 +4175,9 @@ apiRouter.post('/jami/realtime/session', requireAuth, aiRateLimiter, asyncHandle
 apiRouter.post('/voice/realtime/sessions/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const sessionId = req.params.id;
-  const { reason } = req.body || {};
+  const parsed = RealtimeFinalizeSchema.safeParse(req.body || {});
+  if (!parsed.success) return sendError(req, res, 400, 'VALIDATION_ERROR', 'Dữ liệu kết thúc phiên không hợp lệ.');
+  const { reason } = parsed.data;
   const result = await voiceSessionService.finalizeRealtimeSession(userId, sessionId, {
     reason,
   });
@@ -3999,7 +4190,9 @@ apiRouter.post('/voice/realtime/sessions/:id/finalize', requireAuth, asyncHandle
 apiRouter.post('/jami/realtime/sessions/:id/finalize', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   const sessionId = req.params.id;
-  const { reason } = req.body || {};
+  const parsed = RealtimeFinalizeSchema.safeParse(req.body || {});
+  if (!parsed.success) return sendError(req, res, 400, 'VALIDATION_ERROR', 'Dữ liệu kết thúc phiên không hợp lệ.');
+  const { reason } = parsed.data;
   const result = await voiceSessionService.finalizeRealtimeSession(userId, sessionId, {
     reason,
   });
@@ -4011,24 +4204,22 @@ apiRouter.post('/jami/realtime/sessions/:id/finalize', requireAuth, asyncHandler
 
 apiRouter.post('/jami/realtime/tool-call', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const { name, arguments: toolArgs, conversationId } = req.body || {};
-  if (!name || typeof name !== 'string') {
-    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Tên công cụ (tool name) không được để trống.');
+  try {
+    const result = await executeRealtimeToolCallIdempotent(userId, req.body);
+    res.json(result);
+  } catch (err: any) {
+    return sendError(req, res, err.status || 400, err.code || 'REALTIME_TOOL_CALL_FAILED', err.message);
   }
-  const parsedArgs = typeof toolArgs === 'string' ? JSON.parse(toolArgs || '{}') : (toolArgs || {});
-  const result = await executeRegisteredTool(userId, name, parsedArgs, { conversationId });
-  res.json(result);
 }));
 
 apiRouter.post('/voice/realtime/tool-call', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const { name, arguments: toolArgs, conversationId } = req.body || {};
-  if (!name || typeof name !== 'string') {
-    return sendError(req, res, 400, 'VALIDATION_ERROR', 'Tên công cụ (tool name) không được để trống.');
+  try {
+    const result = await executeRealtimeToolCallIdempotent(userId, req.body);
+    res.json(result);
+  } catch (err: any) {
+    return sendError(req, res, err.status || 400, err.code || 'REALTIME_TOOL_CALL_FAILED', err.message);
   }
-  const parsedArgs = typeof toolArgs === 'string' ? JSON.parse(toolArgs || '{}') : (toolArgs || {});
-  const result = await executeRegisteredTool(userId, name, parsedArgs, { conversationId });
-  res.json(result);
 }));
 
 apiRouter.get('/jami/preferences', requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -4104,3 +4295,4 @@ apiRouter.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     message,
   });
 });
+

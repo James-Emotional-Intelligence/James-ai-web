@@ -3,6 +3,7 @@ import { bookRepo } from '../repositories/book-repository';
 import { bookParserService } from './book-parser-service';
 import { storageService } from './storage-service';
 import { materialProcessor } from './material-processor';
+import crypto from 'node:crypto';
 
 export class MaterialWorkerService {
   private static instance: MaterialWorkerService;
@@ -22,8 +23,10 @@ export class MaterialWorkerService {
   public start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    this.pollJobs().catch(() => {});
-    this.pollTimer = setInterval(() => this.pollJobs().catch(() => {}), 10000);
+    this.pollJobs().catch((err) => console.error('[MaterialWorker] initial poll failed', { error: err instanceof Error ? err.message : String(err) }));
+    this.pollTimer = setInterval(() => {
+      this.pollJobs().catch((err) => console.error('[MaterialWorker] scheduled poll failed', { error: err instanceof Error ? err.message : String(err) }));
+    }, 10000);
   }
 
   public stop() {
@@ -32,6 +35,29 @@ export class MaterialWorkerService {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+  }
+
+  /** Enqueue exactly one active extraction job for a material. */
+  public async enqueueMaterialProcessing(userId: string, materialId: string): Promise<string> {
+    if (!db.isHealthy()) {
+      throw new Error('MATERIAL_QUEUE_UNAVAILABLE');
+    }
+    const existing = await db.query<any>(
+      `SELECT id FROM material_processing_jobs
+       WHERE material_id = ? AND user_id = ? AND job_type = 'extract_and_chunk'
+         AND status IN ('queued', 'processing')
+       ORDER BY created_at DESC LIMIT 1`,
+      [materialId, userId]
+    );
+    if (existing[0]?.id) return existing[0].id;
+    const jobId = 'job_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    await db.execute(
+      `INSERT INTO material_processing_jobs
+       (id, material_id, user_id, job_type, status, progress_percent, created_at)
+       VALUES (?, ?, ?, 'extract_and_chunk', 'queued', 10, NOW(3))`,
+      [jobId, materialId, userId]
+    );
+    return jobId;
   }
 
   public async pollJobs() {
@@ -50,9 +76,9 @@ export class MaterialWorkerService {
          WHERE status = 'processing'
            AND lease_until < NOW(3)
            AND attempt >= max_attempts`
-      ).catch(() => {});
+      ).catch((err) => console.error('[MaterialWorker] max-attempt cleanup failed', { error: err instanceof Error ? err.message : String(err) }));
 
-      // 2. Query candidate pending/queued jobs that have attempts remaining
+      // 2. Query candidate pending/queued jobs that have attempts remaining and are due for retry
       const candidates = await db.query<any>(
         `SELECT j.id, j.material_id, j.user_id, j.job_type, j.attempt, j.max_attempts,
                 m.title, m.file_name, m.original_filename, m.storage_driver, m.storage_key,
@@ -60,6 +86,7 @@ export class MaterialWorkerService {
          FROM material_processing_jobs j
          JOIN learning_materials m ON j.material_id = m.id
          WHERE (j.status = 'queued' OR (j.status = 'processing' AND j.lease_until < NOW(3)))
+           AND (j.next_retry_at IS NULL OR j.next_retry_at <= NOW(3))
            AND j.attempt < j.max_attempts
          ORDER BY j.created_at ASC
          LIMIT 5`
@@ -78,6 +105,7 @@ export class MaterialWorkerService {
                updated_at = NOW(3)
            WHERE id = ?
              AND (status = 'queued' OR (status = 'processing' AND lease_until < NOW(3)))
+             AND (next_retry_at IS NULL OR next_retry_at <= NOW(3))
              AND attempt < max_attempts`,
           [candidate.id]
         );
@@ -104,6 +132,14 @@ export class MaterialWorkerService {
         throw new Error('Không tìm thấy tệp lưu trữ.');
       }
 
+      // State: extracting
+      if (db.isHealthy()) {
+        await db.execute(
+          `UPDATE learning_materials SET processing_status = 'extracting', processing_progress = 25, updated_at = NOW(3) WHERE id = ?`,
+          [materialId]
+        );
+      }
+
       // Download file buffer from storage
       const obj = await storageService.getObject(effectiveKey, storage_driver);
       if (!obj || !obj.body) {
@@ -120,6 +156,14 @@ export class MaterialWorkerService {
 
       // Parse structured book/document
       const extracted = await bookParserService.parseBookBuffer(obj.body, format, title);
+
+      // State: extracted -> enriching
+      if (db.isHealthy()) {
+        await db.execute(
+          `UPDATE learning_materials SET processing_status = 'enriching', processing_progress = 50, updated_at = NOW(3) WHERE id = ?`,
+          [materialId]
+        );
+      }
 
       if (material_kind === 'book') {
         // Save chapters and chunks for soft books
@@ -142,13 +186,12 @@ export class MaterialWorkerService {
           );
         }
       } else {
-        // Normal document: update page count and ready state
+        // Update page count (remain enriching until AI summary completes)
         if (db.isHealthy()) {
           await db.execute(
             `UPDATE learning_materials
              SET page_count = ?,
-                 processing_status = 'ready',
-                 processing_progress = 100,
+                 processing_progress = 60,
                  error_message = NULL,
                  updated_at = NOW(3)
              WHERE id = ?`,
@@ -156,11 +199,11 @@ export class MaterialWorkerService {
           );
         }
 
-        // Standard documents are not complete until the processor finishes.
+        // Standard documents are set to ready inside materialProcessor after AI enrichment finishes
         await materialProcessor.processMaterial(userId, materialId);
       }
 
-      // Complete the job only after every required processing step succeeds.
+      // Complete the job only after every required processing step succeeds
       if (db.isHealthy()) {
         await db.execute(
           `UPDATE material_processing_jobs
@@ -173,9 +216,12 @@ export class MaterialWorkerService {
         );
       }
     } catch (err: any) {
-      console.error(`[MaterialWorker] Job ${jobId} failed:`, err);
+      const safeError = mapMaterialProcessingError(err);
+      console.error('[MaterialWorker] job failed', { jobId, materialId, userId, code: safeError.code, error: err instanceof Error ? err.message : String(err) });
       const currentAttempt = (attempt || 0) + 1;
       const isExhausted = currentAttempt >= (max_attempts || 3);
+      const backoffScheduleMinutes = [1, 5, 15];
+      const backoffMinutes = backoffScheduleMinutes[Math.min(currentAttempt - 1, backoffScheduleMinutes.length - 1)] || 15;
 
       if (db.isHealthy()) {
         if (isExhausted) {
@@ -185,30 +231,31 @@ export class MaterialWorkerService {
                  error_message = ?,
                  updated_at = NOW(3)
              WHERE id = ?`,
-            [err.message || 'Lỗi xử lý tài liệu', materialId]
+            [safeError.message, materialId]
           );
 
           await db.execute(
             `UPDATE material_processing_jobs
              SET status = 'failed',
-                 error_code = 'PROCESSING_ERROR',
+                 error_code = 'MAX_ATTEMPTS_EXCEEDED',
                  error_message = ?,
                  completed_at = NOW(3),
                  updated_at = NOW(3)
              WHERE id = ?`,
-            [err.message || 'Lỗi xử lý tài liệu', jobId]
+            [safeError.message, jobId]
           );
         } else {
-          // Allow subsequent retry by resetting status to queued with updated error
+          // Retry with exponential backoff
           await db.execute(
             `UPDATE material_processing_jobs
              SET status = 'queued',
                  lease_until = NULL,
-                 error_code = 'PROCESSING_RETRY',
+                 next_retry_at = DATE_ADD(NOW(3), INTERVAL ? MINUTE),
+                 error_code = ?,
                  error_message = ?,
                  updated_at = NOW(3)
              WHERE id = ?`,
-            [err.message || 'Đang chờ thử lại sau lỗi', jobId]
+            [backoffMinutes, safeError.code, safeError.message, jobId]
           );
         }
       }
@@ -245,3 +292,12 @@ export class MaterialWorkerService {
 }
 
 export const materialWorker = MaterialWorkerService.getInstance();
+
+function mapMaterialProcessingError(error: unknown): { code: string; message: string } {
+  const raw = error instanceof Error ? error.message.toUpperCase() : String(error).toUpperCase();
+  if (raw.includes('STORAGE') || raw.includes('OBJECT')) return { code: 'STORAGE_READ_FAILED', message: 'Không thể đọc tệp tài liệu từ kho lưu trữ.' };
+  if (raw.includes('OCR')) return { code: 'OCR_REQUIRED', message: 'Tài liệu cần OCR trước khi có thể xử lý tiếp.' };
+  if (raw.includes('PARSE') || raw.includes('PDF') || raw.includes('DOCX') || raw.includes('EPUB')) return { code: 'PARSER_FAILED', message: 'Không thể phân tích cấu trúc tài liệu.' };
+  if (raw.includes('AI') || raw.includes('SUMMARY') || raw.includes('ENRICH')) return { code: 'AI_ENRICHMENT_FAILED', message: 'Không thể hoàn tất phần bổ sung AI cho tài liệu.' };
+  return { code: 'MATERIAL_PROCESSING_FAILED', message: 'Không thể xử lý tài liệu lúc này.' };
+}

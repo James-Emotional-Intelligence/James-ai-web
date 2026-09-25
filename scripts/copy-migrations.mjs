@@ -1,7 +1,6 @@
-/* global console */
-import fs from 'fs';
-import path from 'path';
-import process from 'process';
+import fs from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
 
 const src = path.resolve(process.cwd(), 'server', 'db', 'migrations');
 const dest = path.resolve(process.cwd(), 'dist', 'server', 'migrations');
@@ -23,4 +22,3 @@ for (const file of sqlFiles) {
   fs.copyFileSync(path.join(src, file), path.join(dest, file));
 }
 console.log(`[copy-migrations] Copied ${sqlFiles.length} SQL migration files to ${dest}`);
-

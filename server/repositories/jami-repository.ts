@@ -9,6 +9,28 @@ import {
 import { jamiActionService } from '../services/jami-action-service';
 import crypto from 'crypto';
 
+export interface StoredTurnResponse {
+  replyMessageId: string;
+  replyText: string;
+  emotion: string;
+  suggestedActions: unknown[];
+  requiresConfirmation: boolean;
+  confirmationSummary?: string;
+  proposalId?: string;
+  clientAction?: unknown;
+  citationsToUserMaterial?: unknown;
+  userMessage?: JamiMessageItem;
+  proposal?: unknown;
+  actionResult?: unknown;
+  isDemoMode?: boolean;
+}
+
+export type TurnClaimResult =
+  | { state: 'claimed'; turnId: string }
+  | { state: 'processing'; turnId: string }
+  | { state: 'completed'; turnId: string; replyMessageId?: string; responseJson?: StoredTurnResponse }
+  | { state: 'failed'; turnId: string; errorCode?: string; errorMessage?: string };
+
 export class JamiRepository {
   private static instance: JamiRepository;
   private demoConversations: Map<string, JamiConversation[]> = new Map();
@@ -174,12 +196,13 @@ export class JamiRepository {
         params.push(conversationId);
       }
 
-      sql += ` ORDER BY m.created_at ASC LIMIT ?`;
+      // Order by created_at DESC to fetch the most recent messages, then reverse to ASC
+      sql += ` ORDER BY m.created_at DESC LIMIT ?`;
       params.push(limit);
 
       const rows = await db.query<any>(sql, params);
 
-      return rows.map((r) => {
+      const items: JamiMessageItem[] = rows.map((r): JamiMessageItem => {
         let suggestedActions: any[] = [];
         if (r.suggested_actions_json) {
           try {
@@ -226,55 +249,169 @@ export class JamiRepository {
           createdAt: r.created_at?.toISOString?.() || String(r.created_at),
         };
       });
+
+      return items.reverse();
     }
 
     const list = this.demoMessages.get(userId) || [];
-    if (conversationId) {
-      return list.filter((m) => m.conversationId === conversationId);
+    const filtered = conversationId ? list.filter((m) => m.conversationId === conversationId) : list;
+    return filtered.slice(-limit);
+  }
+
+  public async getMessageByClientMessageId(userId: string, clientMessageId: string): Promise<JamiMessageItem | null> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT m.id, m.conversation_id, m.user_id, m.sender, m.text, m.emotion, m.suggested_actions_json,
+                m.requires_confirmation, m.confirmation_summary, m.proposal_id, m.is_confirmed,
+                m.client_message_id, m.created_at
+         FROM jami_messages m
+         WHERE m.user_id = ? AND m.client_message_id = ?
+         LIMIT 1`,
+        [userId, clientMessageId]
+      );
+      if (rows.length === 0) return null;
+      const r = rows[0];
+      let suggestedActions: any[] = [];
+      try {
+        suggestedActions = r.suggested_actions_json
+          ? (typeof r.suggested_actions_json === 'string' ? JSON.parse(r.suggested_actions_json) : r.suggested_actions_json)
+          : [];
+      } catch {}
+      return {
+        id: r.id,
+        conversationId: r.conversation_id || undefined,
+        userId: r.user_id,
+        sender: r.sender === 'user' ? 'user' : 'jami',
+        text: r.text || '',
+        emotion: r.emotion || 'idle',
+        suggestedActions,
+        requiresConfirmation: Boolean(r.requires_confirmation),
+        confirmationSummary: r.confirmation_summary || undefined,
+        proposalId: r.proposal_id || undefined,
+        isConfirmed: Boolean(r.is_confirmed),
+        clientMessageId: r.client_message_id || undefined,
+        createdAt: r.created_at?.toISOString?.() || String(r.created_at),
+      };
     }
-    return list;
+    const existing = (this.demoMessages.get(userId) || []).find((m) => m.clientMessageId === clientMessageId);
+    return existing || null;
+  }
+
+  // ==========================================
+  // Distributed Turn Locking (jami_turns)
+  // ==========================================
+  private demoTurns: Map<string, { status: string; turnId: string; replyMessageId?: string; responseJson?: StoredTurnResponse; errorMessage?: string }> = new Map();
+
+  public async claimTurn(
+    userId: string,
+    clientMessageId: string,
+    conversationId?: string,
+    userMessageId?: string
+  ): Promise<TurnClaimResult> {
+    const turnId = 'turn_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    if (db.isHealthy()) {
+      try {
+        await db.execute(
+          `INSERT INTO jami_turns (id, user_id, client_message_id, conversation_id, status, user_message_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'processing', ?, NOW(3), NOW(3))`,
+          [turnId, userId, clientMessageId, conversationId || null, userMessageId || null]
+        );
+        return { state: 'claimed', turnId };
+      } catch (err: any) {
+        if (err.code === 'ER_DUP_ENTRY' || err.message?.includes('Duplicate entry')) {
+          const rows = await db.query<any>(
+            `SELECT id, reply_message_id, response_json, status, error_code, error_message FROM jami_turns WHERE user_id = ? AND client_message_id = ? LIMIT 1`,
+            [userId, clientMessageId]
+          );
+          if (rows.length > 0) {
+            const row = rows[0];
+            if (row.status === 'completed') {
+              let responseJson: StoredTurnResponse | undefined;
+              try { responseJson = typeof row.response_json === 'string' ? JSON.parse(row.response_json) : row.response_json; } catch {}
+              return { state: 'completed', turnId: row.id, replyMessageId: row.reply_message_id || undefined, responseJson };
+            }
+            if (row.status === 'failed') {
+              return { state: 'failed', turnId: row.id, errorCode: row.error_code || undefined, errorMessage: row.error_message || undefined };
+            }
+            return { state: 'processing', turnId: row.id };
+          }
+          throw err;
+        }
+        // Fail-closed on database error
+        throw err;
+      }
+    }
+
+    const key = `${userId}:${clientMessageId}`;
+    const existing = this.demoTurns.get(key);
+    if (existing) {
+      if (existing.status === 'completed') {
+        return { state: 'completed', turnId: existing.turnId, replyMessageId: existing.replyMessageId, responseJson: existing.responseJson };
+      }
+      if (existing.status === 'failed') {
+        return { state: 'failed', turnId: existing.turnId, errorMessage: existing.errorMessage };
+      }
+      return { state: 'processing', turnId: existing.turnId };
+    }
+    this.demoTurns.set(key, { status: 'processing', turnId });
+    return { state: 'claimed', turnId };
+  }
+
+  public async attachTurnUserMessage(userId: string, clientMessageId: string, userMessageId: string): Promise<void> {
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE jami_turns SET user_message_id = ?, updated_at = NOW(3)
+         WHERE user_id = ? AND client_message_id = ? AND status = 'processing'`,
+        [userMessageId, userId, clientMessageId]
+      );
+    }
+  }
+
+  public async completeTurn(
+    userId: string,
+    clientMessageId: string,
+    userMessageId: string | undefined,
+    replyMessageId: string,
+    proposalId: string | undefined,
+    responseJson: StoredTurnResponse
+  ): Promise<void> {
+    if (db.isHealthy()) {
+      await db.execute(
+          `UPDATE jami_turns
+           SET status = 'completed', user_message_id = ?, reply_message_id = ?, proposal_id = ?, response_json = ?, updated_at = NOW(3)
+           WHERE user_id = ? AND client_message_id = ?`,
+          [userMessageId || null, replyMessageId, proposalId || null, JSON.stringify(responseJson), userId, clientMessageId]
+        );
+    } else {
+      const key = `${userId}:${clientMessageId}`;
+      const turn = this.demoTurns.get(key);
+      this.demoTurns.set(key, { status: 'completed', turnId: turn?.turnId || 'turn_demo', replyMessageId, responseJson });
+    }
+  }
+
+  public async failTurn(userId: string, clientMessageId: string, error?: string): Promise<void> {
+    if (db.isHealthy()) {
+      try {
+        await db.execute(
+          `UPDATE jami_turns
+           SET status = 'failed', error_message = ?, updated_at = NOW(3)
+           WHERE user_id = ? AND client_message_id = ?`,
+          [error ? error.substring(0, 500) : null, userId, clientMessageId]
+        );
+      } catch (err: any) {
+        console.warn('[JamiRepository] failTurn error:', err.message);
+      }
+    } else {
+      const key = `${userId}:${clientMessageId}`;
+      const turn = this.demoTurns.get(key);
+      this.demoTurns.set(key, { status: 'failed', turnId: turn?.turnId || 'turn_demo', errorMessage: error });
+    }
   }
 
   public async saveMessage(userId: string, msg: Partial<JamiMessageItem>): Promise<JamiMessageItem> {
     if (msg.clientMessageId) {
-      if (db.isHealthy()) {
-        const existingRows = await db.query<any>(
-          `SELECT id, conversation_id, user_id, sender, text, emotion, suggested_actions_json,
-                  requires_confirmation, confirmation_summary, proposal_id, is_confirmed,
-                  client_message_id, created_at
-           FROM jami_messages
-           WHERE user_id = ? AND client_message_id = ?
-           LIMIT 1`,
-          [userId, msg.clientMessageId]
-        );
-        if (existingRows.length > 0) {
-          const r = existingRows[0];
-          let suggestedActions: any[] = [];
-          try {
-            suggestedActions = r.suggested_actions_json
-              ? (typeof r.suggested_actions_json === 'string' ? JSON.parse(r.suggested_actions_json) : r.suggested_actions_json)
-              : [];
-          } catch {}
-          return {
-            id: r.id,
-            conversationId: r.conversation_id || undefined,
-            userId: r.user_id,
-            sender: r.sender === 'user' ? 'user' : 'jami',
-            text: r.text || '',
-            emotion: r.emotion || 'idle',
-            suggestedActions,
-            requiresConfirmation: Boolean(r.requires_confirmation),
-            confirmationSummary: r.confirmation_summary || undefined,
-            proposalId: r.proposal_id || undefined,
-            isConfirmed: Boolean(r.is_confirmed),
-            clientMessageId: r.client_message_id || undefined,
-            createdAt: r.created_at?.toISOString?.() || String(r.created_at),
-          };
-        }
-      } else {
-        const existing = (this.demoMessages.get(userId) || []).find((m) => m.clientMessageId === msg.clientMessageId);
-        if (existing) return existing;
-      }
+      const existing = await this.getMessageByClientMessageId(userId, msg.clientMessageId);
+      if (existing) return existing;
     }
 
     const id = msg.id || 'msg_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
@@ -298,33 +435,43 @@ export class JamiRepository {
     };
 
     if (db.isHealthy()) {
-      await db.execute(
-        `INSERT INTO jami_messages
-         (id, conversation_id, user_id, sender, text, content, emotion, suggested_actions_json, requires_confirmation, confirmation_summary, proposal_id, is_confirmed, client_message_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))`,
-        [
-          record.id,
-          record.conversationId || null,
-          userId,
-          record.sender,
-          record.text,
-          record.text,
-          record.emotion,
-          JSON.stringify(record.suggestedActions || []),
-          record.requiresConfirmation ? 1 : 0,
-          record.confirmationSummary || null,
-          record.proposalId || null,
-          record.isConfirmed ? 1 : 0,
-          record.clientMessageId || null,
-        ]
-      );
-
-      // Update conversation updated_at
-      if (record.conversationId) {
+      try {
         await db.execute(
-          `UPDATE jami_conversations SET updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
-          [record.conversationId, userId]
+          `INSERT INTO jami_messages
+           (id, conversation_id, user_id, sender, text, content, emotion, suggested_actions_json, requires_confirmation, confirmation_summary, proposal_id, is_confirmed, client_message_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))`,
+          [
+            record.id,
+            record.conversationId || null,
+            userId,
+            record.sender,
+            record.text,
+            record.text,
+            record.emotion,
+            JSON.stringify(record.suggestedActions || []),
+            record.requiresConfirmation ? 1 : 0,
+            record.confirmationSummary || null,
+            record.proposalId || null,
+            record.isConfirmed ? 1 : 0,
+            record.clientMessageId || null,
+          ]
         );
+
+        // Update conversation updated_at
+        if (record.conversationId) {
+          await db.execute(
+            `UPDATE jami_conversations SET updated_at = NOW(3) WHERE id = ? AND user_id = ?`,
+            [record.conversationId, userId]
+          );
+        }
+      } catch (err: any) {
+        if (err.code === 'ER_DUP_ENTRY' || err.message?.includes('Duplicate entry')) {
+          if (record.clientMessageId) {
+            const existing = await this.getMessageByClientMessageId(userId, record.clientMessageId);
+            if (existing) return existing;
+          }
+        }
+        throw err;
       }
     } else {
       const list = this.demoMessages.get(userId) || [];

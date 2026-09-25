@@ -8,7 +8,11 @@ import { UserRepository } from '../repositories/user-repository';
 import { AiAdapter } from './ai-adapter';
 import { executeRegisteredTool } from '../ai/tool-registry';
 import { JamiActionService, ActionResult } from './jami-action-service';
-import { getNowInTimeZone, resolveUserTimeZone } from '../lib/date-time';
+import { getNowInTimeZone, getZonedDateParts, resolveUserTimeZone } from '../lib/date-time';
+import { AppError } from '../errors/app-errors';
+import { StoredTurnResponse } from '../repositories/jami-repository';
+import { ALLOWED_NAVIGATE_ROUTES } from './jami-action-service';
+import { z } from 'zod';
 
 const userRepo = UserRepository.getInstance();
 const jamiActionService = JamiActionService.getInstance();
@@ -54,8 +58,14 @@ export class JamiOrchestrator {
     const { userId, message, clientMessageId, source, materialId } = input;
     let conversationId = input.conversationId;
 
-    // 1. Resolve or create conversation
-    if (!conversationId) {
+    // 1. Resolve or create conversation with strict ownership check
+    if (conversationId) {
+      const existingConv = await jamiRepo.getConversation(userId, conversationId);
+      if (!existingConv) {
+        throw new AppError('Conversation not found or forbidden', 404, 'CONVERSATION_NOT_FOUND_OR_FORBIDDEN');
+      }
+      conversationId = existingConv.id;
+    } else {
       const existingList = await jamiRepo.getConversations(userId);
       if (existingList.length > 0) {
         conversationId = existingList[0].id;
@@ -65,32 +75,46 @@ export class JamiOrchestrator {
       }
     }
 
+    // Distributed Turn Claiming
     if (clientMessageId) {
-      const existingMessages = await jamiRepo.getMessages(userId, conversationId, 100);
-      const existingUserIndex = existingMessages.findIndex((m) => m.clientMessageId === clientMessageId);
-      if (existingUserIndex >= 0) {
-        const existingReply = existingMessages
-          .slice(existingUserIndex + 1)
-          .find((m) => m.sender === 'jami') || existingMessages[existingMessages.length - 1];
-        if (existingReply?.sender === 'jami') {
-          return {
-            userMessage: existingMessages[existingUserIndex],
-            replyMessage: existingReply,
-            proposal: existingReply.proposal,
-            clientAction: undefined,
-            isDemoMode: !AiAdapter.isConfigured(),
-          };
+      const claimResult = await jamiRepo.claimTurn(userId, clientMessageId, conversationId);
+      if (claimResult.state === 'completed') {
+        const stored = claimResult.responseJson;
+        if (!stored?.replyMessageId || !stored.replyText) {
+          throw new AppError('Stored turn response is unavailable', 409, 'TURN_RESPONSE_UNAVAILABLE');
         }
+        return {
+          userMessage: stored.userMessage,
+          replyMessage: {
+            id: stored.replyMessageId, text: stored.replyText, emotion: stored.emotion,
+            suggestedActions: stored.suggestedActions, requiresConfirmation: stored.requiresConfirmation,
+            confirmationSummary: stored.confirmationSummary, proposalId: stored.proposalId,
+          },
+          clientAction: stored.clientAction,
+          proposal: stored.proposal,
+          actionResult: stored.actionResult as ActionResult | undefined,
+          isDemoMode: !AiAdapter.isConfigured(),
+        };
+      } else if (claimResult.state === 'processing') {
+        throw new AppError('This turn is already being processed', 409, 'TURN_IN_PROGRESS');
+      } else if (claimResult.state === 'failed') {
+        throw new Error(claimResult.errorMessage || 'Lượt tương tác trước đó đã thất bại.');
       }
     }
 
-    // 2. Save user message to MySQL (idempotent if clientMessageId is present)
-    const userMsg = await jamiRepo.saveMessage(userId, {
-      conversationId,
-      sender: 'user',
-      text: message.trim(),
-      clientMessageId,
-    });
+    try {
+      // Load history before inserting the current message so the prompt carries it exactly once.
+      const conversationHistory = buildRecentHistory(await jamiRepo.getMessages(userId, conversationId, 20));
+      // 2. Save user message to MySQL (idempotent if clientMessageId is present)
+      const userMsg = await jamiRepo.saveMessage(userId, {
+        conversationId,
+        sender: 'user',
+        text: message.trim(),
+        clientMessageId,
+      });
+      if (clientMessageId) {
+        await jamiRepo.attachTurnUserMessage(userId, clientMessageId, userMsg.id);
+      }
 
     // 3. Build rich real user context from MySQL & Date/Time helper
     const user = await userRepo.findById(userId);
@@ -118,18 +142,20 @@ export class JamiOrchestrator {
         dueAt: t.dueAt,
       }));
 
-    const now = new Date();
-    const todayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const todayParts = getZonedDateParts(timeInfo.now, userTz);
+    const todayStartMs = Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day);
 
     const upcomingExams = exams
       .filter((e) => {
         const examDate = new Date(e.examAt);
-        const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
+        const examParts = getZonedDateParts(examDate, userTz);
+        const examDayMs = Date.UTC(examParts.year, examParts.month - 1, examParts.day);
         return e.status === 'upcoming' && examDayMs >= todayStartMs;
       })
       .map((e) => {
         const examDate = new Date(e.examAt);
-        const examDayMs = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate()).getTime();
+        const examParts = getZonedDateParts(examDate, userTz);
+        const examDayMs = Date.UTC(examParts.year, examParts.month - 1, examParts.day);
         const daysLeft = Math.max(0, Math.round((examDayMs - todayStartMs) / (1000 * 3600 * 24)));
         return {
           id: e.id,
@@ -178,12 +204,13 @@ export class JamiOrchestrator {
       userId,
       conversationId,
       studentName,
-      gradeLevel: profile?.gradeLevel || 9,
+      gradeLevel: profile?.gradeLevel ?? undefined,
       todaySessions,
       pendingTasks,
       upcomingExams,
       latestMaterialTitle: materials[0]?.title,
       attachedMaterial: attachedMaterialInfo,
+      history: conversationHistory,
       recentCheckins: recentCheckinSummary,
       currentTimeVn: timeInfo.now.toLocaleString('vi-VN', {
         timeZone: userTz,
@@ -208,10 +235,16 @@ export class JamiOrchestrator {
       const { toolName, arguments: toolArgs } = chatRes.actionIntent;
       if (toolName) {
         const toolRes = await executeRegisteredTool(
-          userId,
+          {
+            userId,
+            conversationId,
+            source,
+            clientTurnId: clientMessageId,
+            timezone: userTz,
+            now: timeInfo.now,
+          },
           toolName,
-          toolArgs || {},
-          { conversationId }
+          toolArgs || {}
         );
         actionResult = toolRes;
 
@@ -237,16 +270,30 @@ export class JamiOrchestrator {
       sender: 'jami',
       text: chatRes.message,
       emotion: chatRes.emotion || 'speaking',
-      suggestedActions: [
-        { label: 'Xem lịch học hôm nay', action: 'navigate', route: '/today' },
-        { label: 'Bắt đầu Hẹn giờ tập trung', action: 'navigate', route: '/focus' },
-        { label: 'Làm bài luyện tập AI', action: 'navigate', route: '/exams' },
-      ],
+      suggestedActions: normalizeSuggestedActions(chatRes.suggestedActions),
       requiresConfirmation: hasRealProposal,
       confirmationSummary: hasRealProposal ? (confirmationSummary || chatRes.message) : undefined,
       proposalId: proposal?.id,
       proposal,
     });
+
+    if (clientMessageId) {
+      const storedResponse: StoredTurnResponse = {
+        replyMessageId: jamiMsg.id,
+        replyText: jamiMsg.text,
+        emotion: jamiMsg.emotion,
+        suggestedActions: jamiMsg.suggestedActions,
+        requiresConfirmation: jamiMsg.requiresConfirmation,
+        confirmationSummary: jamiMsg.confirmationSummary,
+        proposalId: proposal?.id,
+        clientAction,
+        userMessage: userMsg,
+        proposal,
+        actionResult,
+        isDemoMode: !AiAdapter.isConfigured(),
+      };
+      await jamiRepo.completeTurn(userId, clientMessageId, userMsg.id, jamiMsg.id, proposal?.id, storedResponse);
+    }
 
     const isDemo = !AiAdapter.isConfigured();
 
@@ -258,7 +305,62 @@ export class JamiOrchestrator {
       actionResult,
       isDemoMode: isDemo,
     };
+    } catch (err: any) {
+      if (clientMessageId) {
+        await jamiRepo.failTurn(userId, clientMessageId, 'TURN_PROCESSING_FAILED');
+      }
+      throw err;
+    }
   }
 }
 
 export const jamiOrchestrator = JamiOrchestrator.getInstance();
+
+export const SuggestedActionSchema = z.object({
+  label: z.string().trim().min(1).max(80),
+  action: z.enum(['message', 'navigate', 'confirm', 'reject']),
+  route: z.string().nullable(),
+}).strict();
+
+function normalizeSuggestedActions(actions: unknown): Array<z.infer<typeof SuggestedActionSchema>> {
+  if (!Array.isArray(actions)) return [];
+  return actions
+    .filter((item) => typeof item === 'string' || (item && typeof item === 'object'))
+    .slice(0, 5)
+    .map((item) => {
+      if (typeof item === 'string') {
+        return SuggestedActionSchema.parse({ label: item.slice(0, 80), action: 'message', route: null });
+      }
+      const value = item as any;
+      const action = String(value.action || 'message');
+      const route = typeof value.route === 'string' && ALLOWED_NAVIGATE_ROUTES.includes(value.route as (typeof ALLOWED_NAVIGATE_ROUTES)[number])
+        ? value.route
+        : null;
+      const parsed = SuggestedActionSchema.safeParse({
+        label: String(value.label || value.title || value.action || '').slice(0, 80),
+        action,
+        route: action === 'navigate' ? route : null,
+      });
+      return parsed.success ? parsed.data : null;
+    })
+    .filter((item) => Boolean(item && item.label.length > 0));
+}
+
+export function buildRecentHistory(
+  messages: Array<{ sender: string; text?: string }>,
+  maxMessages = 20,
+  maxChars = 12000
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const newest = messages.slice(-maxMessages).reverse();
+  const selected: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  let remaining = maxChars;
+  for (const message of newest) {
+    const content = (message.text || '').trim();
+    if (!content || remaining <= 0) continue;
+    const bounded = content.slice(0, Math.min(1200, remaining));
+    selected.push({ role: message.sender === 'user' ? 'user' : 'assistant', content: bounded });
+    remaining -= bounded.length;
+  }
+  return selected.reverse();
+}
+

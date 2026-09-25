@@ -20,14 +20,19 @@
     "test:e2e": "playwright test",
     "check:packaging": "node scripts/check-safe-packaging.mjs",
     "package:safe": "node scripts/package-safe.mjs",
-    "test:ci": "npm run typecheck && npm run lint && npm run test:unit && npm run test:integration && npm run check:packaging && npm run build",
+    "check:mojibake": "node scripts/check-mojibake.mjs",
+    "fix:mojibake": "node scripts/fix-mojibake.mjs",
+  "check:tracked-secrets": "node scripts/check-tracked-secrets.mjs",
+  "release:verify": "npm run check:tracked-secrets && npm run typecheck && npm run check:mojibake && npm run lint && npm run test:unit && npm run test:integration && npm run build && npm run check:packaging",
+  "test:ci": "npm run check:tracked-secrets && npm run typecheck && npm run check:mojibake && npm run lint && npm run test:unit && npm run test:integration && npm run check:packaging && npm run build",
     "check": "npm run test:ci",
     "db:migrate": "tsx -e \"import { Migrator } from './server/db/migrator'; Migrator.run().then(console.log);\"",
     "db:seed": "tsx scripts/seed-demo.ts",
     "db:doctor": "tsx server/db/doctor.ts",
     "admin:promote": "tsx scripts/promote-admin.ts",
     "storage:migrate:r2-to-local": "tsx scripts/migrate-storage-r2-to-local.ts",
-    "worker:dry-run": "npx wrangler deploy --dry-run"
+    "worker:dry-run": "npx wrangler deploy --dry-run",
+    "release:archive": "node scripts/release-archive.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",

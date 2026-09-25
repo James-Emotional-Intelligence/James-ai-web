@@ -1,6 +1,7 @@
 import { db } from '../db/mysql';
 import { StudyTask, ExecutionGuide, ExecutionStep, TaskEvidence, PreparationChecklistItem } from '../../shared/types';
 import crypto from 'crypto';
+import { DbExecutor } from '../db/mysql';
 
 export class TaskRepository {
   private static instance: TaskRepository;
@@ -25,7 +26,7 @@ export class TaskRepository {
     if (db.isHealthy()) {
       let query = `
         SELECT t.id, t.user_id, t.plan_id, t.subject_id, t.exam_id, t.parent_task_id,
-               t.title, t.objective, t.status, t.priority, t.difficulty, t.due_at,
+               t.title, t.objective, t.notes, t.status, t.priority, t.difficulty, t.due_at,
                t.estimated_minutes, t.minimum_session_minutes, t.maximum_session_minutes,
                t.splittable, t.locked, t.scheduled_start_at, t.scheduled_end_at,
                t.completion_percent, t.source,
@@ -65,7 +66,7 @@ export class TaskRepository {
     if (db.isHealthy()) {
       const rows = await db.query<any>(
         `SELECT t.id, t.user_id, t.plan_id, t.subject_id, t.exam_id, t.parent_task_id,
-                t.title, t.objective, t.status, t.priority, t.difficulty, t.due_at,
+                t.title, t.objective, t.notes, t.status, t.priority, t.difficulty, t.due_at,
                 t.estimated_minutes, t.minimum_session_minutes, t.maximum_session_minutes,
                 t.splittable, t.locked, t.scheduled_start_at, t.scheduled_end_at,
                 t.completion_percent, t.source,
@@ -102,17 +103,18 @@ export class TaskRepository {
     return this.update(userId, taskId, updates);
   }
 
-  public async create(userId: string, task: Partial<StudyTask>): Promise<StudyTask> {
+  public async create(userId: string, task: Partial<StudyTask>, executor?: DbExecutor): Promise<StudyTask> {
     const id = task.id || 'task_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const newTask: StudyTask = {
       id,
       userId,
       planId: task.planId,
-      subjectId: task.subjectId || 'subj-general',
+      subjectId: task.subjectId || null,
       subjectName: task.subjectName,
       examId: task.examId,
       title: (task.title || 'Nhiệm vụ mới').trim(),
       objective: task.objective || '',
+      notes: task.notes,
       status: task.status || 'pending',
       priority: task.priority || 'medium',
       difficulty: task.difficulty || 'medium',
@@ -128,21 +130,23 @@ export class TaskRepository {
       source: task.source || 'user',
     };
 
-    if (db.isHealthy()) {
-      await db.execute(
+    if (executor || db.isHealthy()) {
+      const writer = executor || db;
+      await writer.execute(
         `INSERT INTO study_tasks (
-          id, user_id, plan_id, subject_id, exam_id, title, objective, status, priority, difficulty,
+          id, user_id, plan_id, subject_id, exam_id, title, objective, notes, status, priority, difficulty,
           due_at, estimated_minutes, minimum_session_minutes, maximum_session_minutes, splittable,
           locked, scheduled_start_at, scheduled_end_at, completion_percent, source, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
         [
           newTask.id,
           userId,
           newTask.planId || null,
-          newTask.subjectId,
+          newTask.subjectId || null,
           newTask.examId || null,
           newTask.title,
           newTask.objective,
+          newTask.notes || null,
           newTask.status,
           newTask.priority,
           newTask.difficulty,
@@ -183,6 +187,10 @@ export class TaskRepository {
       if (updates.objective !== undefined) {
         setParts.push('objective = ?');
         values.push(updates.objective);
+      }
+      if (updates.notes !== undefined) {
+        setParts.push('notes = ?');
+        values.push(updates.notes);
       }
       if (updates.priority !== undefined) {
         setParts.push('priority = ?');
@@ -814,6 +822,7 @@ export class TaskRepository {
       examId: r.exam_id || undefined,
       title: r.title,
       objective: r.objective || '',
+      notes: r.notes || undefined,
       status: r.status,
       priority: r.priority,
       difficulty: r.difficulty,

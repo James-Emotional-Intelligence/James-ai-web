@@ -4,6 +4,7 @@ import { examStudyPlanRepo } from '../../server/repositories/exam-study-plan-rep
 import { mistakeRepo } from '../../server/repositories/mistake-repository';
 import { examRepo } from '../../server/repositories/exam-repository';
 import { AiAdapter } from '../../server/services/ai-adapter';
+import { subjectRepo } from '../../server/repositories/subject-repository';
 
 describe('Exam Study Planner & Personal Mistake Notebook Unit Tests', () => {
   const userId = 'usr_test_study_plan_unit';
@@ -14,6 +15,7 @@ describe('Exam Study Planner & Personal Mistake Notebook Unit Tests', () => {
   let mistakeId: string;
 
   beforeEach(async () => {
+    subjectRepo.seedDemoSubjects(userId, [{ id: 'subj_math', userId, name: 'Toán học', color: '#2563eb', createdAt: new Date().toISOString() } as any]);
     // 1. Create a sample mistake entry
     const mistake = await mistakeRepo.create(userId, {
       subjectId: 'subj_math',

@@ -2,6 +2,8 @@ import mysql from 'mysql2/promise';
 import fs from 'fs';
 import { env, isProduction } from '../config/env';
 
+export type DbExecutor = Pick<mysql.PoolConnection, 'query' | 'execute'>;
+
 export class DatabaseError extends Error {
   public code?: string;
   public errno?: number;

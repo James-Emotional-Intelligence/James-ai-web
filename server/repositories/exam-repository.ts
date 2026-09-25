@@ -1,4 +1,5 @@
 import { db } from '../db/mysql';
+import { DbExecutor } from '../db/mysql';
 import { Exam, ExamTopic, ExamMilestone } from '../../shared/types';
 import { subjectRepo } from './subject-repository';
 import crypto from 'crypto';
@@ -66,7 +67,7 @@ export class ExamRepository {
   public async getByUserId(userId: string): Promise<Exam[]> {
     if (db.isHealthy()) {
       const rows = await db.query<any>(
-        `SELECT e.id, e.user_id, e.subject_id, e.title, e.exam_at, e.importance, e.scope_text, e.status, e.created_at, e.updated_at,
+        `SELECT e.id, e.user_id, e.subject_id, e.title, e.exam_at, e.importance, e.target_score, e.scope_text, e.status, e.created_at, e.updated_at,
                 s.name as subject_name, s.color as subject_color
          FROM exams e
          JOIN subjects s ON e.subject_id = s.id
@@ -112,6 +113,7 @@ export class ExamRepository {
           title: r.title,
           examAt,
           importance: r.importance || 'high',
+          targetScore: r.target_score !== null && r.target_score !== undefined ? Number(r.target_score) : undefined,
           scopeText: r.scope_text || '',
           topics,
           milestones,
@@ -132,20 +134,22 @@ export class ExamRepository {
     return list.find((e) => e.id === examId) || null;
   }
 
-  public async createExam(userId: string, data: Partial<Exam>): Promise<Exam> {
-    return this.create(userId, data);
+  public async createExam(userId: string, data: Partial<Exam>, executor?: DbExecutor): Promise<Exam> {
+    return this.create(userId, data, executor);
   }
 
-  public async create(userId: string, data: Partial<Exam>): Promise<Exam> {
+  public async create(userId: string, data: Partial<Exam>, executor?: DbExecutor): Promise<Exam> {
     // 1. Verify subject ownership
     const subjects = await subjectRepo.getByUserId(userId);
-    const targetSubject = subjects.find((s) => s.id === data.subjectId) || subjects[0];
-    const subjectId = targetSubject ? targetSubject.id : (data.subjectId || 'subj-math');
-    const subjectName = targetSubject ? targetSubject.name : (data.subjectName || 'Toán học');
-    const subjectColor = targetSubject ? targetSubject.color : '#22C55E';
+    const targetSubject = data.subjectId ? subjects.find((s) => s.id === data.subjectId) : undefined;
+    if (!targetSubject) throw new Error('INVALID_SUBJECT');
+    if (!data.title?.trim() || !data.examAt) throw new Error('INVALID_EXAM_INPUT');
+    const subjectId = targetSubject.id;
+    const subjectName = targetSubject.name;
+    const subjectColor = targetSubject.color;
 
     const id = 'exam_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-    const examAt = data.examAt || new Date(Date.now() + 7 * 86400000).toISOString();
+    const examAt = data.examAt;
     const milestones = this.computeMilestones(id, examAt);
 
     const created: Exam = {
@@ -154,24 +158,24 @@ export class ExamRepository {
       subjectId,
       subjectName,
       subjectColor,
-      title: (data.title || 'Bài kiểm tra').trim(),
+      title: data.title.trim(),
       examAt,
       importance: data.importance || 'high',
-      targetScore: data.targetScore !== undefined ? Number(data.targetScore) : 8.5,
+      targetScore: data.targetScore !== undefined && data.targetScore !== null ? Number(data.targetScore) : undefined,
       examFormat: data.examFormat || 'combined',
       scopeText: data.scopeText || '',
-      topics: data.topics && data.topics.length > 0 ? data.topics : [{ id: 'topic_1', name: subjectName, weight: 1 }],
+      topics: data.topics && data.topics.length > 0 ? data.topics : [],
       milestones,
       status: 'upcoming',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
-    if (db.isHealthy()) {
-      await db.withTransaction(async (conn) => {
+    if (executor || db.isHealthy()) {
+      const write = async (conn: DbExecutor) => {
         await conn.execute(
-          `INSERT INTO exams (id, user_id, subject_id, title, exam_at, importance, scope_text, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'upcoming', NOW(3), NOW(3))`,
+          `INSERT INTO exams (id, user_id, subject_id, title, exam_at, importance, target_score, scope_text, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'upcoming', NOW(3), NOW(3))`,
           [
             created.id,
             userId,
@@ -179,6 +183,7 @@ export class ExamRepository {
             created.title,
             new Date(created.examAt),
             created.importance,
+            created.targetScore ?? null,
             created.scopeText,
           ]
         );
@@ -201,7 +206,9 @@ export class ExamRepository {
             [msId, created.id, userId, m.milestoneType, m.name, new Date(m.date), m.status]
           );
         }
-      });
+      };
+      if (executor) await write(executor);
+      else await db.withTransaction(write);
     } else {
       const list = this.demoExams.get(userId) || [];
       list.push(created);
@@ -229,13 +236,14 @@ export class ExamRepository {
       await db.withTransaction(async (conn) => {
         await conn.execute(
           `UPDATE exams 
-           SET title = ?, subject_id = ?, exam_at = ?, importance = ?, scope_text = ?, status = ?, updated_at = NOW(3)
+           SET title = ?, subject_id = ?, exam_at = ?, importance = ?, target_score = ?, scope_text = ?, status = ?, updated_at = NOW(3)
            WHERE id = ? AND user_id = ?`,
           [
             updated.title,
             updated.subjectId,
             new Date(updated.examAt),
             updated.importance,
+            updated.targetScore ?? null,
             updated.scopeText,
             updated.status || 'upcoming',
             examId,

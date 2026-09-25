@@ -287,7 +287,7 @@ export class AiBillingService {
       }
     }, intervalMs);
     // Initial run immediately
-    aiWalletRepo.processReconcileQueue().catch(() => {});
+    aiWalletRepo.processReconcileQueue().catch((err) => console.error('[AiBillingService] initial reconcile queue run failed', { error: err instanceof Error ? err.message : String(err) }));
   }
 
   public stopReconcileQueueWorker(): void {

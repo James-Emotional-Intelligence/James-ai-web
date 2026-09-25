@@ -1063,7 +1063,7 @@ export const api = {
         body: JSON.stringify({ sdpOffer }),
       }
     ),
-  executeRealtimeToolCall: (name: string, callId: string, args: any, conversationId?: string) =>
+  executeRealtimeToolCall: (sessionId: string, name: string, callId: string, args: any, conversationId?: string) =>
     fetchJson<{
       success: boolean;
       message: string;
@@ -1073,9 +1073,9 @@ export const api = {
       data?: any;
     }>('/jami/realtime/tool-call', {
       method: 'POST',
-      body: JSON.stringify({ name, call_id: callId, arguments: args, conversationId }),
+      body: JSON.stringify({ sessionId, name, callId, arguments: args, conversationId }),
     }),
-  finalizeRealtimeSession: (sessionId: string, data?: { rawUsage?: any; reason?: string }) =>
+  finalizeRealtimeSession: (sessionId: string, data?: { reason?: string }) =>
     fetchJson<{ success: boolean; message: string }>(`/jami/realtime/sessions/${sessionId}/finalize`, {
       method: 'POST',
       body: JSON.stringify(data || {}),

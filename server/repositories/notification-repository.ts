@@ -242,6 +242,37 @@ export class NotificationRepository {
     return false;
   }
 
+  public async getById(userId: string, id: string): Promise<Notification | null> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT id, user_id, type, title, body, action_url, scheduled_for, delivered_at, read_at, status, dedupe_key, created_at
+         FROM notifications
+         WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+         LIMIT 1`,
+        [id, userId]
+      );
+      if (rows.length === 0) return null;
+      const r = rows[0];
+      return {
+        id: r.id,
+        userId: r.user_id,
+        type: r.type,
+        title: r.title,
+        body: r.body,
+        actionUrl: r.action_url ? sanitizeActionUrl(r.action_url) : undefined,
+        scheduledFor: r.scheduled_for ? new Date(r.scheduled_for).toISOString() : undefined,
+        deliveredAt: r.delivered_at ? new Date(r.delivered_at).toISOString() : undefined,
+        readAt: r.read_at ? new Date(r.read_at).toISOString() : undefined,
+        status: r.status,
+        dedupeKey: r.dedupe_key || undefined,
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
+      };
+    }
+
+    const list = this.demoNotifications.get(userId) || [];
+    return list.find((n) => n.id === id) || null;
+  }
+
   public async getPreferences(userId: string): Promise<NotificationPreferences> {
     const defaults: NotificationPreferences = {
       userId,

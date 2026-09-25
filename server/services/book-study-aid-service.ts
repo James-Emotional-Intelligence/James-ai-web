@@ -1,4 +1,4 @@
-import { bookRepo } from '../repositories/book-repository';
+﻿import { bookRepo } from '../repositories/book-repository';
 import { mistakeRepo } from '../repositories/mistake-repository';
 import { BookStudyAidResult, BookStudyCitation } from '../../shared/types';
 import { AiAdapter } from './ai-adapter';

@@ -8,6 +8,17 @@ import {
   resolveCanonicalModel,
   ModelPricingUnavailableError,
 } from './model-pricing';
+import { sanitizeStrictJsonSchema } from './strict-json-schema';
+
+/** Convert AI nullable wire values to domain-parser input before Zod validation. */
+export function normalizeAiNullable<T>(value: T): T {
+  if (value === null) return undefined as T;
+  if (Array.isArray(value)) return value.map((item) => normalizeAiNullable(item)) as T;
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeAiNullable(item)])) as T;
+  }
+  return value;
+}
 
 export interface BillingContext {
   userId: string;
@@ -69,7 +80,6 @@ export class AiGateway {
     if (!this.client) {
       this.client = new OpenAI({
         apiKey: apiKey.trim(),
-        dangerouslyAllowBrowser: true,
       });
     }
     return this.client;
@@ -107,6 +117,19 @@ export class AiGateway {
 
   public getRecentMetrics(): AiTelemetryMetric[] {
     return [...this.metrics];
+  }
+
+  private getStrictJsonSchemaFormat<T>(promptId: PromptId | string, schema: z.ZodType<T>) {
+    const generated = (schema as any).toJSONSchema ? (schema as any).toJSONSchema() : z.toJSONSchema(schema);
+    const jsonSchema = sanitizeStrictJsonSchema(generated);
+    return {
+      type: 'json_schema' as const,
+      json_schema: {
+        name: String(promptId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64),
+        strict: true,
+        schema: jsonSchema,
+      },
+    } as any;
   }
 
   /**
@@ -188,7 +211,7 @@ export class AiGateway {
                   { role: 'system', content: promptDef.systemPrompt },
                   { role: 'user', content: wrappedContent },
                 ],
-                response_format: { type: 'json_object' },
+                response_format: this.getStrictJsonSchemaFormat(promptId, schema),
                 max_tokens: promptDef.maxTokens,
                 temperature,
               },
@@ -221,7 +244,7 @@ export class AiGateway {
             throw new Error(`Định dạng JSON phản hồi từ AI không hợp lệ: ${jsonErr.message}`, { cause: jsonErr });
           }
 
-          const parsedResult = schema.safeParse(parsedJson);
+          const parsedResult = schema.safeParse(normalizeAiNullable(parsedJson));
           if (!parsedResult.success) {
             throw new Error(`Cấu trúc dữ liệu AI không khớp schema: ${parsedResult.error.message}`);
           }
@@ -443,6 +466,187 @@ export class AiGateway {
             idempotencyKey: billingReservation.idempotencyKey,
             success,
             errorCode: success ? undefined : (lastError?.code || lastError?.message || 'AI_OCR_FAILED'),
+            latencyMs: durationMs,
+          });
+        } catch (reconErr: any) {
+          console.error(`[AiGateway] Vision billing reconciliation error for ${userId}:`, reconErr.message);
+        }
+      }
+    }
+  }
+
+  /**
+   * Executes a Vision structured extraction directly returning typed schema object without intermediate text loss
+   */
+  public async executeVisionStructured<T>(
+    promptId: PromptId | string,
+    imageBuffer: Buffer,
+    mimeType: string = 'image/jpeg',
+    titleOrPrompt: string,
+    schema: z.ZodType<T>,
+    options?: AiGatewayOptions
+  ): Promise<{ data: T | null; raw: string | null; error?: string }> {
+    const client = this.getClient();
+    if (!client) {
+      return { data: null, raw: null, error: 'AI_NOT_CONFIGURED' };
+    }
+
+    const userId = options?.userId;
+    if (!userId && isProduction) {
+      throw new MissingBillingContextError(promptId);
+    }
+
+    const requestedModel = options?.model || this.getDefaultTextModel();
+    if (!isModelSupported(requestedModel)) {
+      throw new ModelPricingUnavailableError(requestedModel);
+    }
+
+    const timeoutMs = options?.timeoutMs || 45000;
+    const base64 = imageBuffer.toString('base64');
+    const dataUri = `data:${mimeType};base64,${base64}`;
+    const startTime = Date.now();
+    const maxTokens = 3000;
+
+    // 1. Reserve credit before calling OpenAI
+    let billingReservation: {
+      isUnlimited: boolean;
+      reservedMilliVnd: bigint;
+      reservationTxId?: string;
+      idempotencyKey: string;
+    } | null = null;
+
+    if (userId) {
+      billingReservation = await aiBillingService.reserveForAiExecution({
+        userId,
+        model: requestedModel,
+        estimatedInputTokens: maxTokens,
+        maxOutputTokens: maxTokens,
+        promptId: promptId as any,
+        requestId: options?.requestId,
+        idempotencyKey: options?.idempotencyKey,
+      });
+    }
+
+    let rawContent: string | null = null;
+    const validatedData: T | null = null;
+    let providerPromptTokens = 0;
+    let providerCompletionTokens = 0;
+    let providerCachedTokens = 0;
+    let resolvedModel = requestedModel;
+    let lastError: any = null;
+    let success = false;
+
+    try {
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+      let completion: OpenAI.Chat.Completions.ChatCompletion;
+      try {
+        completion = await client.chat.completions.create(
+          {
+            model: requestedModel,
+            messages: [
+              {
+                role: 'system',
+                content: `Bạn là trợ lý thị giác học tập AI. Hãy phân tích hình ảnh và trích xuất dữ liệu trả về JSON thuần túy khớp chính xác với định dạng được yêu cầu. Không thêm giải thích markdown ngoài JSON.`,
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: `${titleOrPrompt}\n\nChỉ trả về JSON hợp lệ.`,
+                  },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: dataUri,
+                      detail: 'high',
+                    },
+                  },
+                ],
+              },
+            ],
+            response_format: this.getStrictJsonSchemaFormat(promptId, schema),
+            max_tokens: maxTokens,
+            temperature: options?.temperature ?? 0.1,
+          },
+          { signal: controller.signal }
+        );
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
+
+      if (completion.usage) {
+        providerPromptTokens = completion.usage.prompt_tokens || 0;
+        providerCompletionTokens = completion.usage.completion_tokens || 0;
+        const details = (completion.usage as any).prompt_tokens_details;
+        providerCachedTokens = details?.cached_tokens || 0;
+      }
+      if (completion.model) {
+        resolvedModel = resolveCanonicalModel(completion.model) || completion.model;
+      }
+
+      rawContent = completion.choices[0]?.message?.content?.trim() || null;
+      if (!rawContent) {
+        throw new Error('AI trả về phản hồi rỗng.');
+      }
+
+      let parsedJson: any;
+      try {
+        const cleaned = rawContent.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+        parsedJson = JSON.parse(cleaned);
+      } catch (parseErr: any) {
+        throw new Error(`Phản hồi AI không đúng định dạng JSON: ${parseErr.message}`, { cause: parseErr });
+      }
+
+      const validation = schema.safeParse(normalizeAiNullable(parsedJson));
+      if (!validation.success) {
+        const issueMsg = validation.error.issues.map((i) => i.message).join('; ');
+        throw new Error(`Dữ liệu thị giác không khớp schema: ${issueMsg}`);
+      }
+
+      const validatedData = validation.data;
+      success = true;
+      return { data: validatedData, raw: rawContent };
+    } catch (err: any) {
+      lastError = err;
+      return { data: null, raw: rawContent, error: err.message };
+    } finally {
+      const durationMs = Date.now() - startTime;
+      const totalTokens = providerPromptTokens + providerCompletionTokens;
+
+      this.recordMetric({
+        promptId: promptId as any,
+        requestedModel,
+        resolvedModel,
+        durationMs,
+        promptTokens: providerPromptTokens,
+        completionTokens: providerCompletionTokens,
+        cachedTokens: providerCachedTokens,
+        totalTokens,
+        success,
+        error: success ? undefined : (lastError?.message || 'AI_VISION_STRUCTURED_FAILED'),
+        timestamp: new Date().toISOString(),
+      });
+
+      if (billingReservation && userId) {
+        try {
+          await aiBillingService.reconcileAiExecution({
+            userId,
+            model: resolvedModel,
+            reservedMilliVnd: billingReservation.reservedMilliVnd,
+            isUnlimited: billingReservation.isUnlimited,
+            usage: totalTokens > 0 ? {
+              promptTokens: providerPromptTokens,
+              completionTokens: providerCompletionTokens,
+              cachedTokens: providerCachedTokens,
+            } : undefined,
+            promptId: promptId as any,
+            requestId: options?.requestId,
+            idempotencyKey: billingReservation.idempotencyKey,
+            success,
+            errorCode: success ? undefined : (lastError?.code || lastError?.message || 'AI_VISION_STRUCTURED_FAILED'),
             latencyMs: durationMs,
           });
         } catch (reconErr: any) {

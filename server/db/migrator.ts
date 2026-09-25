@@ -262,6 +262,17 @@ export class Migrator {
           continue;
         }
 
+        // Migration 040 historically removed duplicate messages before adding a
+        // unique index. Guard the legacy path before that file can run: never
+        // delete user conversation data implicitly; require an operator-led
+        // reconciliation/backup instead.
+        if (file === '040_canonical_ai_proposals_turns_and_persistence.sql') {
+          await this.preflightLegacyMessageDuplicates();
+        }
+        if (file === '042_turn_response_and_optional_task_subject.sql') {
+          await this.preflightSubjectConstraintRepair();
+        }
+
         console.log(`[JAMI Migrator] Applying migration: ${file}...`);
         const statements = splitSqlStatements(content);
         console.log(`[JAMI Migrator] Found ${statements.length} executable SQL statements in ${file}`);
@@ -308,6 +319,73 @@ export class Migrator {
           await db.query('SELECT RELEASE_LOCK(?)', ['jami_migration_lock']);
         } catch {}
       }
+    }
+  }
+
+  private static async preflightLegacyMessageDuplicates(): Promise<void> {
+    const tableRows = await db.query<any>(
+      `SELECT COUNT(*) AS table_exists
+       FROM information_schema.TABLES
+       WHERE table_schema = DATABASE() AND table_name = 'jami_messages'`
+    );
+    if (Number(tableRows[0]?.table_exists || 0) === 0) return;
+
+    const duplicateRows = await db.query<any>(
+      `SELECT COUNT(*) AS duplicate_groups, COALESCE(SUM(group_count - 1), 0) AS duplicate_rows
+       FROM (
+         SELECT user_id, client_message_id, COUNT(*) AS group_count
+         FROM jami_messages
+         WHERE client_message_id IS NOT NULL
+         GROUP BY user_id, client_message_id
+         HAVING COUNT(*) > 1
+       ) duplicates`
+    );
+    const duplicateGroups = Number(duplicateRows[0]?.duplicate_groups || 0);
+    const duplicateCount = Number(duplicateRows[0]?.duplicate_rows || 0);
+    if (duplicateGroups > 0 || duplicateCount > 0) {
+      throw new Error(
+        `Migration 040 preflight blocked: ${duplicateGroups} duplicate client-message groups (${duplicateCount} rows). Back up the database and reconcile duplicates with an audited mapping before retrying.`
+      );
+    }
+  }
+
+  private static async preflightSubjectConstraintRepair(): Promise<void> {
+    const constraints = await db.query<any>(
+      `SELECT constraint_name
+       FROM information_schema.KEY_COLUMN_USAGE
+       WHERE table_schema = DATABASE()
+         AND table_name = 'study_tasks'
+         AND column_name = 'subject_id'`
+    );
+    for (const row of constraints) {
+      const name = String(row.constraint_name || '').replace(/[^A-Za-z0-9_]/g, '');
+      if (name) await db.execute(`ALTER TABLE study_tasks DROP FOREIGN KEY \`${name}\``);
+    }
+
+    // Some legacy MySQL schemas expose the FK without a usable column row;
+    // resolve the known generated name through information_schema as a final
+    // compatibility guard rather than swallowing the ALTER failure.
+    const knownFk = await db.query<any>(
+      `SELECT COUNT(*) AS present
+       FROM information_schema.TABLE_CONSTRAINTS
+       WHERE table_schema = DATABASE()
+         AND table_name = 'study_tasks'
+         AND constraint_name = 'study_tasks_ibfk_2'
+         AND constraint_type = 'FOREIGN KEY'`
+    );
+    if (Number(knownFk[0]?.present || 0) > 0) {
+      await db.execute('ALTER TABLE study_tasks DROP FOREIGN KEY `study_tasks_ibfk_2`');
+    }
+
+    const notesColumn = await db.query<any>(
+      `SELECT COUNT(*) AS present
+       FROM information_schema.COLUMNS
+       WHERE table_schema = DATABASE()
+         AND table_name = 'school_timetable_entries'
+         AND column_name = 'notes'`
+    );
+    if (Number(notesColumn[0]?.present || 0) === 0) {
+      await db.execute('ALTER TABLE school_timetable_entries ADD COLUMN notes TEXT NULL AFTER teacher');
     }
   }
 

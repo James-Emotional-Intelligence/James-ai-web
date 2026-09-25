@@ -175,10 +175,10 @@ export const PreviewAddBusyEventArgsSchema = z.object({
 });
 
 export const PreviewReplanTasksArgsSchema = z.object({
-  reason: z.string().trim().min(1).default('Yêu cầu sắp xếp lại lịch học'),
+  reason: z.string().trim().min(1),
   strategy: z.enum(['balanced', 'urgent_first', 'deep_work']).default('balanced'),
   daysCount: z.coerce.number().int().min(1).max(30).default(7),
-  targetDate: z.string().optional(),
+  targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   preserveLocked: z.boolean().default(true),
 });
 
@@ -187,13 +187,13 @@ export const PreviewAddTimetableEntryArgsSchema = z.object({
   title: z.string().trim().min(1, 'Tiêu đề tiết học không được để trống'),
   subjectName: z.string().optional(),
   teacher: z.string().optional(),
-  dayOfWeek: z.coerce.number().min(1).max(7),
+  dayOfWeek: z.coerce.number().int().min(1).max(7),
   startLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   endLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   location: z.string().optional(),
   room: z.string().optional(),
-  commuteBeforeMinutes: z.coerce.number().min(0).max(180).default(15),
-  commuteAfterMinutes: z.coerce.number().min(0).max(180).default(15),
+  commuteBeforeMinutes: z.coerce.number().int().min(0).max(180).default(0),
+  commuteAfterMinutes: z.coerce.number().int().min(0).max(180).default(0),
 }).refine((data) => data.endLocalTime > data.startLocalTime, {
   message: 'Giờ kết thúc phải sau giờ bắt đầu',
   path: ['endLocalTime'],
@@ -301,7 +301,7 @@ export const StartFocusTimerArgsSchema = z.object({
   taskId: z.string().optional(),
 });
 
-export const JamiActionIntentSchema = z.discriminatedUnion('kind', [
+export const JamiActionIntentSchema = z.union([
   z.object({ kind: z.literal('none') }),
   z.object({ kind: z.literal('read'), toolName: z.literal('get_daily_schedule'), arguments: GetDailyScheduleArgsSchema.default({}) }),
   z.object({ kind: z.literal('read'), toolName: z.literal('get_next_task'), arguments: GetNextTaskArgsSchema.default({}) }),
@@ -324,6 +324,45 @@ export const JamiActionIntentSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_mark_task_completed'), arguments: PreviewMarkTaskCompletedArgsSchema }),
   z.object({ kind: z.literal('mutate'), toolName: z.literal('preview_cancel_event'), arguments: PreviewCancelEventArgsSchema }),
 ]);
+
+export const TimetableOcrPreviewSchema = z.object({
+  timetableName: z.string().trim().min(1).max(150),
+  entries: z.array(z.object({
+    dayOfWeek: z.number().int().min(1).max(7),
+    periodIndex: z.number().int().min(1).max(20).optional(),
+    session: z.enum(['morning', 'afternoon', 'evening']).optional(),
+    title: z.string().trim().min(1).max(200),
+    startLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+    endLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+    room: z.string().trim().max(100).optional(),
+    teacher: z.string().trim().max(100).optional(),
+    confidence: z.number().min(0).max(1),
+    sourceCell: z.string().trim().max(100).optional(),
+  }).strict()).max(200),
+  warnings: z.array(z.string().trim().max(300)).max(50),
+  requiresReview: z.boolean(),
+}).strict();
+
+export const TimetableOcrImportRequestSchema = z.object({
+  imageBase64: z.string().min(16).max(12 * 1024 * 1024),
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+}).strict();
+
+export const TimetableOcrConfirmSchema = z.object({
+  timetableName: z.string().trim().min(1).max(150),
+  replaceExisting: z.boolean().optional().default(false),
+  entries: TimetableOcrPreviewSchema.shape.entries.min(1),
+}).strict().superRefine((data, ctx) => {
+  const seen = new Set<string>();
+  for (const [index, entry] of data.entries.entries()) {
+    if (!entry.startLocalTime || !entry.endLocalTime || entry.endLocalTime <= entry.startLocalTime) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['entries', index], message: 'Mỗi tiết phải có giờ bắt đầu/kết thúc hợp lệ.' });
+    }
+    const key = `${entry.dayOfWeek}:${entry.startLocalTime || ''}:${entry.endLocalTime || ''}`;
+    if (seen.has(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['entries', index], message: 'Các tiết OCR bị chồng lấp.' });
+    seen.add(key);
+  }
+});
 
 export const JamiResponseSchema = z.object({
   message: z.string(),
@@ -612,6 +651,10 @@ export const MaterialFinalizeSchema = z.object({
   sizeBytes: z.number().int().min(1).optional(),
   sha256: z.string().length(64).optional(),
 });
+
+export const RealtimeFinalizeSchema = z.object({
+  reason: z.string().trim().min(1).max(300).optional(),
+}).strict();
 
 export const MaterialNoteCreateSchema = z.object({
   title: z.string().min(1, { message: 'Tiêu đề không được để trống' }).max(200),
@@ -1022,11 +1065,6 @@ export const AdminCreateRegistrationCodeSchema = z.object({
 export const AdminRevokeRegistrationCodeSchema = z.object({
   reason: z.string().trim().min(3, { message: 'Lý do thu hồi tối thiểu 3 ký tự' }).max(500),
 }).strict();
-
-
-
-
-
 
 
 

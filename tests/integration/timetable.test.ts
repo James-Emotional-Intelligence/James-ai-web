@@ -175,7 +175,9 @@ describe('Timetable & Replan Subsystem Integration Tests', () => {
     expect(ocrRes.status).toBe(200);
     expect(ocrRes.body.success).toBe(true);
     expect(Array.isArray(ocrRes.body.entries)).toBe(true);
-    expect(ocrRes.body.entries.length).toBeGreaterThan(0);
+    // A blank 1x1 image must never manufacture a timetable entry.
+    expect(ocrRes.body.entries).toEqual([]);
+    expect(ocrRes.body.requiresReview).toBe(true);
 
     // 2. OCR Confirmation & Save
     const confirmRes = await request(app)
@@ -185,8 +187,8 @@ describe('Timetable & Replan Subsystem Integration Tests', () => {
         timetableName: 'Thời khóa biểu OCR Test',
         replaceExisting: true,
         entries: [
-          { dayOfWeek: 1, title: 'Toán học', startLocalTime: '07:30', endLocalTime: '08:15', room: 'P.101' },
-          { dayOfWeek: 1, title: 'Ngữ văn', startLocalTime: '08:20', endLocalTime: '09:05', room: 'P.101' },
+          { dayOfWeek: 1, title: 'Toán học', startLocalTime: '07:30', endLocalTime: '08:15', room: 'P.101', confidence: 1 },
+          { dayOfWeek: 1, title: 'Ngữ văn', startLocalTime: '08:20', endLocalTime: '09:05', room: 'P.101', confidence: 1 },
         ],
       });
 

@@ -31,6 +31,7 @@ export class MistakeRepository {
       let query = `
         SELECT m.id, m.user_id, m.subject_id, m.topic, m.question_text, m.question_data_json,
                m.selected_answer, m.correct_answer, m.mistake_reason, m.correct_explanation,
+               m.lesson_learned, m.correct_solution,
                m.difficulty, m.source_type, m.source_id, m.first_mistake_at, m.last_reviewed_at,
                m.next_review_at, m.review_count, m.correct_streak, m.status,
                m.created_at, m.updated_at,
@@ -98,6 +99,7 @@ export class MistakeRepository {
       const rows = await db.query<any>(
         `SELECT m.id, m.user_id, m.subject_id, m.topic, m.question_text, m.question_data_json,
                 m.selected_answer, m.correct_answer, m.mistake_reason, m.correct_explanation,
+                m.lesson_learned, m.correct_solution,
                 m.difficulty, m.source_type, m.source_id, m.first_mistake_at, m.last_reviewed_at,
                 m.next_review_at, m.review_count, m.correct_streak, m.status,
                 m.created_at, m.updated_at,
@@ -128,6 +130,8 @@ export class MistakeRepository {
       correctAnswer: string;
       mistakeReason?: MistakeReason;
       correctExplanation?: string | null;
+      lessonLearned?: string | null;
+      correctSolution?: string | null;
       difficulty?: MistakeDifficulty;
       sourceType?: MistakeSourceType;
       sourceId?: string | null;
@@ -149,6 +153,8 @@ export class MistakeRepository {
       correctAnswer: data.correctAnswer,
       mistakeReason: data.mistakeReason || 'other',
       correctExplanation: data.correctExplanation || undefined,
+      lessonLearned: data.lessonLearned || undefined,
+      correctSolution: data.correctSolution || undefined,
       difficulty: data.difficulty || 'medium',
       sourceType: data.sourceType || 'manual',
       sourceId: data.sourceId || undefined,
@@ -165,9 +171,9 @@ export class MistakeRepository {
       await db.execute(
         `INSERT INTO mistake_notebook_entries
           (id, user_id, subject_id, topic, question_text, question_data_json, selected_answer, correct_answer,
-           mistake_reason, correct_explanation, difficulty, source_type, source_id, first_mistake_at, next_review_at,
+           mistake_reason, correct_explanation, lesson_learned, correct_solution, difficulty, source_type, source_id, first_mistake_at, next_review_at,
            review_count, correct_streak, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), ?, 0, 0, 'new', NOW(3), NOW(3))`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), ?, 0, 0, 'new', NOW(3), NOW(3))`,
         [
           id,
           userId,
@@ -179,6 +185,8 @@ export class MistakeRepository {
           data.correctAnswer,
           data.mistakeReason || 'other',
           data.correctExplanation || null,
+          data.lessonLearned || null,
+          data.correctSolution || null,
           data.difficulty || 'medium',
           data.sourceType || 'manual',
           data.sourceId || null,
@@ -208,6 +216,8 @@ export class MistakeRepository {
       correctAnswer?: string;
       mistakeReason?: MistakeReason;
       correctExplanation?: string | null;
+      lessonLearned?: string | null;
+      correctSolution?: string | null;
       difficulty?: MistakeDifficulty;
       status?: MistakeStatus;
     }
@@ -246,6 +256,14 @@ export class MistakeRepository {
       if (data.correctExplanation !== undefined) {
         setClauses.push('correct_explanation = ?');
         params.push(data.correctExplanation);
+      }
+      if (data.lessonLearned !== undefined) {
+        setClauses.push('lesson_learned = ?');
+        params.push(data.lessonLearned);
+      }
+      if (data.correctSolution !== undefined) {
+        setClauses.push('correct_solution = ?');
+        params.push(data.correctSolution);
       }
       if (data.difficulty !== undefined) {
         setClauses.push('difficulty = ?');
@@ -386,6 +404,8 @@ export class MistakeRepository {
       correctAnswer: r.correct_answer,
       mistakeReason: r.mistake_reason as MistakeReason,
       correctExplanation: r.correct_explanation || undefined,
+      lessonLearned: r.lesson_learned || undefined,
+      correctSolution: r.correct_solution || undefined,
       difficulty: r.difficulty as MistakeDifficulty,
       sourceType: r.source_type as MistakeSourceType,
       sourceId: r.source_id || undefined,

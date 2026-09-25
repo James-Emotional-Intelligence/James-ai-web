@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { z } from 'zod';
 import { db } from '../db/mysql';
+import type { DbExecutor } from '../db/mysql';
+import { isProduction } from '../config/env';
 import { taskRepo } from '../repositories/task-repository';
 import { timetableRepo } from '../repositories/timetable-repository';
 import { focusRepo } from '../repositories/focus-repository';
@@ -11,7 +13,12 @@ import { plannerRepo } from '../repositories/planner-repository';
 import { notificationRepo } from '../repositories/notification-repository';
 import { mistakeRepo } from '../repositories/mistake-repository';
 import { UserRepository } from '../repositories/user-repository';
+import { findMutateToolByActionType } from '../ai/tool-registry';
 import { DeterministicScheduler } from './scheduler';
+import {
+  calculateTargetDateTimeIso as calculateCanonicalTargetDateTimeIso,
+  resolveVietnameseDayOfWeek as resolveCanonicalVietnameseDayOfWeek,
+} from '../lib/date-time';
 
 const userRepo = UserRepository.getInstance();
 
@@ -26,6 +33,8 @@ export interface ActionProposalRecord {
   expiresAt: string;
   confirmedAt?: string;
   idempotencyKey?: string;
+  executionKey?: string;
+  resultJson?: unknown;
   createdAt: string;
 }
 
@@ -63,42 +72,7 @@ export type AllowedNavigateRoute = (typeof ALLOWED_NAVIGATE_ROUTES)[number];
  * Maps Vietnamese weekday text or raw inputs to canonical dayOfWeek (1=Thứ 2, 2=Thứ 3, ..., 6=Thứ 7, 7=Chủ Nhật)
  */
 export function resolveVietnameseDayOfWeek(input: any, defaultJsDay?: number): number {
-  if (input === undefined || input === null || input === '') {
-    const jsDay = defaultJsDay !== undefined ? defaultJsDay : new Date().getDay();
-    return jsDay === 0 ? 7 : jsDay;
-  }
-
-  const str = String(input).trim().toLowerCase();
-
-  if (str.includes('chủ nhật') || str.includes('chu nhat') || str === 'cn' || str === 'sun' || str.includes('sunday')) {
-    return 7;
-  }
-  if (str.includes('thứ 2') || str.includes('thu 2') || str.includes('thứ hai') || str.includes('thu hai') || str === 't2' || str.includes('mon')) {
-    return 1;
-  }
-  if (str.includes('thứ 3') || str.includes('thu 3') || str.includes('thứ ba') || str.includes('thu ba') || str === 't3' || str.includes('tue')) {
-    return 2;
-  }
-  if (str.includes('thứ 4') || str.includes('thu 4') || str.includes('thứ tư') || str.includes('thu tu') || str === 't4' || str.includes('wed')) {
-    return 3;
-  }
-  if (str.includes('thứ 5') || str.includes('thu 5') || str.includes('thứ năm') || str.includes('thu nam') || str === 't5' || str.includes('thu')) {
-    return 4;
-  }
-  if (str.includes('thứ 6') || str.includes('thu 6') || str.includes('thứ sáu') || str.includes('thu sau') || str === 't6' || str.includes('fri')) {
-    return 5;
-  }
-  if (str.includes('thứ 7') || str.includes('thu 7') || str.includes('thứ bảy') || str.includes('thu bay') || str === 't7' || str.includes('sat')) {
-    return 6;
-  }
-
-  const num = Number(input);
-  if (!isNaN(num) && num >= 1 && num <= 7) {
-    return num;
-  }
-
-  const jsDay = new Date().getDay();
-  return jsDay === 0 ? 7 : jsDay;
+  return resolveCanonicalVietnameseDayOfWeek(input, defaultJsDay);
 }
 
 /**
@@ -109,35 +83,7 @@ export function calculateTargetDateTimeIso(
   timeStr?: string,
   explicitIso?: string
 ): string {
-  if (explicitIso) {
-    const parsed = new Date(explicitIso);
-    if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 2000) {
-      return parsed.toISOString();
-    }
-  }
-
-  const now = new Date();
-  const currentJsDay = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const currentCanonicalDow = currentJsDay === 0 ? 7 : currentJsDay; // 1=T2 .. 7=CN
-  const dow = targetDow && targetDow >= 1 && targetDow <= 7 ? targetDow : currentCanonicalDow;
-
-  // Compute offset from current day in current week
-  const dayDifference = dow - currentCanonicalDow;
-  const targetDate = new Date(now);
-  targetDate.setDate(now.getDate() + dayDifference);
-
-  let hours = 19;
-  let minutes = 0;
-  if (timeStr) {
-    const match = timeStr.match(/(\d{1,2})[:h](\d{2})?/i);
-    if (match) {
-      hours = Math.min(23, Math.max(0, parseInt(match[1], 10)));
-      minutes = match[2] ? Math.min(59, Math.max(0, parseInt(match[2], 10))) : 0;
-    }
-  }
-
-  targetDate.setHours(hours, minutes, 0, 0);
-  return targetDate.toISOString();
+  return calculateCanonicalTargetDateTimeIso(targetDow, timeStr, explicitIso);
 }
 
 export class JamiActionService {
@@ -154,252 +100,10 @@ export class JamiActionService {
   }
 
   /**
-   * OpenAI Tool Definitions for Realtime API / Assistant
+   * Deprecated: use server/ai/tool-registry.ts as the only canonical tool catalog.
    */
   public static getToolDefinitions() {
-    return [
-      {
-        type: 'function',
-        name: 'get_today_schedule',
-        description: 'Xem lịch học và các sự kiện, nhiệm vụ học tập trong ngày hôm nay của học sinh.',
-        parameters: {
-          type: 'object',
-          properties: {},
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'get_next_task',
-        description: 'Xem nhiệm vụ học tập tiếp theo cần làm của học sinh.',
-        parameters: {
-          type: 'object',
-          properties: {},
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'navigate_to',
-        description: 'Điều hướng màn hình ứng dụng tới trang được phép (/today, /timetable, /tasks, /focus, /exams, /materials, /reports, /notifications, /settings, /jami).',
-        parameters: {
-          type: 'object',
-          properties: {
-            route: {
-              type: 'string',
-              enum: ALLOWED_NAVIGATE_ROUTES,
-              description: 'Đường dẫn trang cần điều hướng tới.',
-            },
-          },
-          required: ['route'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'start_focus_timer',
-        description: 'Bắt đầu phiên hẹn giờ tập trung (Pomodoro) thật trong hệ thống.',
-        parameters: {
-          type: 'object',
-          properties: {
-            plannedMinutes: {
-              type: 'number',
-              description: 'Số phút tập trung (mặc định 25 phút).',
-            },
-            taskId: {
-              type: 'string',
-              description: 'Mã nhiệm vụ học tập (nếu có).',
-            },
-          },
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'preview_create_task',
-        description: 'Tạo bản xem trước nhiệm vụ học tập mới và yêu cầu học sinh xác nhận trước khi lưu vào cơ sở dữ liệu.',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Tiêu đề nhiệm vụ học tập' },
-            subjectName: { type: 'string', description: 'Tên môn học (Toán, Văn, Anh, v.v.)' },
-            estimatedMinutes: { type: 'number', description: 'Thời lượng ước tính (phút)' },
-            priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Mức độ ưu tiên' },
-            dueAt: { type: 'string', description: 'Hạn chót theo ISO string hoặc ngày cụ thể' },
-            startsAt: { type: 'string', description: 'Giờ bắt đầu học cụ thể (tùy chọn, ISO string)' },
-            endsAt: { type: 'string', description: 'Giờ kết thúc học cụ thể (tùy chọn, ISO string)' },
-          },
-          required: ['title'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'preview_create_scheduled_task',
-        description: 'Tạo bản xem trước lịch tự học/ca học bài có giờ cụ thể trong ngày và yêu cầu học sinh xác nhận.',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Tiêu đề ca học tập (ví dụ: Tự học Toán - Ôn tập hàm số)' },
-            subjectName: { type: 'string', description: 'Tên môn học' },
-            scheduledStartAt: { type: 'string', description: 'Thời gian bắt đầu học (ISO string)' },
-            scheduledEndAt: { type: 'string', description: 'Thời gian kết thúc học (ISO string)' },
-            estimatedMinutes: { type: 'number', description: 'Thời lượng học (phút)' },
-            priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Mức độ ưu tiên' },
-          },
-          required: ['title', 'scheduledStartAt'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'preview_create_timetable_entry',
-        description: 'Thêm tiết học chính khóa trên lớp vào bảng Thời khóa biểu trường (Thứ 2 đến Thứ 7).',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Tên môn học hoặc tiết học (ví dụ: Toán học, Tiếng Anh)' },
-            subjectName: { type: 'string', description: 'Tên môn học' },
-            dayOfWeek: { type: 'number', description: 'Thứ trong tuần (1: Thứ 2, 2: Thứ 3, ..., 6: Thứ 7, 7: Chủ nhật)' },
-            startLocalTime: { type: 'string', description: 'Giờ bắt đầu theo định dạng HH:mm (ví dụ: 07:30)' },
-            endLocalTime: { type: 'string', description: 'Giờ kết thúc theo định dạng HH:mm (ví dụ: 08:15)' },
-            room: { type: 'string', description: 'Phòng học (tùy chọn)' },
-            teacher: { type: 'string', description: 'Tên giáo viên (tùy chọn)' },
-          },
-          required: ['title', 'dayOfWeek', 'startLocalTime', 'endLocalTime'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'preview_add_busy_event',
-        description: 'Tạo bản xem trước sự kiện bận/lịch học thêm và yêu cầu học sinh xác nhận trước khi lưu.',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Tiêu đề sự kiện (ví dụ: Học thêm Toán, Học bơi)' },
-            startsAt: { type: 'string', description: 'Thời gian bắt đầu (ISO string)' },
-            endsAt: { type: 'string', description: 'Thời gian kết thúc (ISO string)' },
-            type: { type: 'string', enum: ['extra_class', 'meal', 'sleep', 'commute', 'personal'] },
-          },
-          required: ['title', 'startsAt', 'endsAt'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'preview_replan_tasks',
-        description: 'Tạo bản xem trước sắp xếp lại thời khóa biểu thông minh cho các nhiệm vụ.',
-        parameters: {
-          type: 'object',
-          properties: {
-            reason: { type: 'string', description: 'Lý do cần xếp lại lịch' },
-            daysCount: { type: 'number', description: 'Số ngày cần xếp lịch (mặc định 7)' },
-          },
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'preview_create_exam',
-        description: 'Tạo bản xem trước bài kiểm tra/kỳ thi mới và yêu cầu học sinh xác nhận.',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Tiêu đề bài kiểm tra (ví dụ: Kiểm tra 1 tiết Toán)' },
-            subjectName: { type: 'string', description: 'Tên môn học' },
-            examAt: { type: 'string', description: 'Thời gian thi (ISO string)' },
-            importance: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
-          },
-          required: ['title', 'examAt'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'mark_task_completed',
-        description: 'Đánh dấu hoàn thành một nhiệm vụ học tập của học sinh.',
-        parameters: {
-          type: 'object',
-          properties: {
-            taskId: { type: 'string', description: 'Mã nhiệm vụ (tùy chọn)' },
-            taskTitle: { type: 'string', description: 'Tiêu đề nhiệm vụ cần hoàn thành' },
-          },
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'create_reminder',
-        description: 'Tạo nhắc nhở học tập bằng câu lệnh tự nhiên (ví dụ: nhắc học Toán lúc 19:00).',
-        parameters: {
-          type: 'object',
-          properties: {
-            content: { type: 'string', description: 'Nội dung nhắc nhở' },
-            timeStr: { type: 'string', description: 'Thời gian nhắc nhở' },
-          },
-          required: ['content'],
-        },
-      },
-      {
-        type: 'function',
-        name: 'suggest_priority_task',
-        description: 'Phân tích hạn nộp, kỳ thi, độ khó và đề xuất nhiệm vụ ưu tiên tiếp theo kèm giải thích lý do.',
-        parameters: {
-          type: 'object',
-          properties: {},
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'open_material',
-        description: 'Mở trang tài liệu học tập hoặc xem tài liệu cụ thể.',
-        parameters: {
-          type: 'object',
-          properties: {
-            materialId: { type: 'string', description: 'Mã tài liệu (tùy chọn)' },
-          },
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'create_quiz_revision',
-        description: 'Tạo đề luyện tập ôn thi trắc nghiệm theo môn học hoặc kỳ thi.',
-        parameters: {
-          type: 'object',
-          properties: {
-            subjectName: { type: 'string', description: 'Tên môn học (Toán, Văn, Anh, ...)' },
-          },
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'read_report',
-        description: 'Đọc tổng kết báo cáo tiến độ học tập, giờ tập trung và tỷ lệ hoàn thành trong tuần.',
-        parameters: {
-          type: 'object',
-          properties: {},
-          required: [],
-        },
-      },
-      {
-        type: 'function',
-        name: 'confirm_pending_proposal',
-        description: 'Xác nhận (đồng ý) hoặc hủy bỏ đề xuất thay đổi đang chờ duyệt gần nhất.',
-        parameters: {
-          type: 'object',
-          properties: {
-            decision: {
-              type: 'string',
-              enum: ['confirm', 'reject'],
-              description: 'Quyết định của học sinh: confirm (đồng ý/xác nhận) hoặc reject (hủy/từ chối).',
-            },
-            proposalId: {
-              type: 'string',
-              description: 'Mã đề xuất cần xác nhận (tùy chọn).',
-            },
-          },
-          required: ['decision'],
-        },
-      },
-    ];
+    return [];
   }
 
   /**
@@ -411,6 +115,45 @@ export class JamiActionService {
     args: any,
     conversationId?: string
   ): Promise<ActionResult> {
+    // Compatibility adapter only: all behavior remains in the canonical registry.
+    const legacyToolMap: Record<string, string> = {
+      get_today_schedule: 'get_daily_schedule',
+      create_task: 'preview_create_task',
+      preview_create_task: 'preview_create_task',
+      create_scheduled_task: 'preview_create_scheduled_task',
+      preview_create_scheduled_task: 'preview_create_scheduled_task',
+      create_schedule: 'preview_create_scheduled_task',
+      add_schedule: 'preview_create_scheduled_task',
+      schedule_study_session: 'preview_create_scheduled_task',
+      create_study_session: 'preview_create_scheduled_task',
+      create_timetable_entry: 'preview_add_timetable_entry',
+      preview_create_timetable_entry: 'preview_add_timetable_entry',
+      preview_add_timetable_entry: 'preview_add_timetable_entry',
+      add_timetable_entry: 'preview_add_timetable_entry',
+      add_busy_event: 'preview_add_busy_event',
+      preview_add_busy_event: 'preview_add_busy_event',
+      preview_replan: 'preview_replan_tasks',
+      create_exam: 'preview_create_exam',
+      create_exam_plan: 'preview_create_exam',
+      create_mistake_entry: 'preview_create_mistake_entry',
+      create_reminder: 'preview_create_reminder',
+      preview_create_reminder: 'preview_create_reminder',
+      mark_task_completed: 'preview_mark_task_completed',
+      cancel_event: 'preview_cancel_event',
+      navigate_to: 'navigate_to',
+      start_focus_timer: 'start_focus_timer',
+    };
+    const canonicalName = legacyToolMap[toolName];
+    if (!canonicalName) return { success: false, message: 'TOOL_NOT_ALLOWED' };
+    const normalizedArgs = { ...(args || {}) };
+    if (canonicalName === 'preview_create_reminder') {
+      normalizedArgs.title = normalizedArgs.title || normalizedArgs.content;
+      normalizedArgs.scheduledFor = normalizedArgs.scheduledFor || calculateCanonicalTargetDateTimeIso(undefined, normalizedArgs.timeStr, undefined, 'Asia/Ho_Chi_Minh');
+    }
+    const { executeRegisteredTool } = await import('../ai/tool-registry');
+    return executeRegisteredTool(userId, canonicalName, normalizedArgs, { conversationId });
+
+    /* istanbul ignore next -- retained only as a compatibility tombstone during migration. */
     try {
       switch (toolName) {
         case 'get_today_schedule': {
@@ -466,7 +209,7 @@ export class JamiActionService {
           if (!ALLOWED_NAVIGATE_ROUTES.includes(route as AllowedNavigateRoute)) {
             return {
               success: false,
-              message: `Đường dẫn không hợp lệ. Chỉ được phép chuyển đến các trang chính của ứng dụng.`,
+              message: `Đường dẫn không hợp lệ. Chỉ được phép chuyển đến các trang chính của ứng dụng.`, 
             };
           }
 
@@ -570,9 +313,9 @@ export class JamiActionService {
           const priority = (args?.priority === 'high' || args?.priority === 'low') ? args.priority : 'medium';
 
           const targetDow = (args?.dayOfWeek !== undefined || args?.day !== undefined || args?.dayName !== undefined)
-            ? resolveVietnameseDayOfWeek(args?.dayOfWeek ?? args?.day ?? args?.dayName)
+            ? resolveCanonicalVietnameseDayOfWeek(args?.dayOfWeek ?? args?.day ?? args?.dayName)
             : undefined;
-          const startsAt = calculateTargetDateTimeIso(targetDow, args?.timeStr || args?.startLocalTime, args?.scheduledStartAt || args?.startsAt);
+          const startsAt = calculateCanonicalTargetDateTimeIso(targetDow, args?.timeStr || args?.startLocalTime, args?.scheduledStartAt || args?.startsAt);
           const endsAt = args?.scheduledEndAt || args?.endsAt || new Date(new Date(startsAt).getTime() + estimatedMinutes * 60 * 1000).toISOString();
 
           const subjects = await subjectRepo.getByUserId(userId);
@@ -616,7 +359,7 @@ export class JamiActionService {
           const title = String(args?.title || args?.subjectName || 'Tiết học').trim();
           const subjectName = args?.subjectName || title;
           const rawDow = args?.dayOfWeek ?? args?.day ?? args?.dayName ?? args?.title;
-          const dayOfWeek = resolveVietnameseDayOfWeek(rawDow);
+          const dayOfWeek = resolveCanonicalVietnameseDayOfWeek(rawDow);
           const startLocalTime = String(args?.startLocalTime || args?.startTime || '07:30').trim();
           const endLocalTime = String(args?.endLocalTime || args?.endTime || '08:15').trim();
           const room = args?.room || args?.location || '';
@@ -662,9 +405,9 @@ export class JamiActionService {
         case 'preview_add_busy_event': {
           const title = String(args?.title || '').trim();
           const targetDow = (args?.dayOfWeek !== undefined || args?.day !== undefined || args?.dayName !== undefined)
-            ? resolveVietnameseDayOfWeek(args?.dayOfWeek ?? args?.day ?? args?.dayName)
+            ? resolveCanonicalVietnameseDayOfWeek(args?.dayOfWeek ?? args?.day ?? args?.dayName)
             : undefined;
-          const startsAt = calculateTargetDateTimeIso(targetDow, args?.timeStr || args?.startLocalTime, args?.startsAt);
+          const startsAt = calculateCanonicalTargetDateTimeIso(targetDow, args?.timeStr || args?.startLocalTime, args?.startsAt);
           const endsAt = args?.endsAt
             ? new Date(args.endsAt).toISOString()
             : new Date(new Date(startsAt).getTime() + 90 * 60 * 1000).toISOString();
@@ -846,7 +589,7 @@ export class JamiActionService {
           const title = String(args?.title || args?.content || '').trim();
           const scheduledFor = args?.scheduledFor
             ? new Date(args.scheduledFor).toISOString()
-            : (args?.timeStr ? calculateTargetDateTimeIso(undefined, args.timeStr) : undefined);
+            : (args?.timeStr ? calculateCanonicalTargetDateTimeIso(undefined, args.timeStr) : undefined);
           if (!title || !scheduledFor) {
             return { success: false, message: 'Vui lòng cung cấp tiêu đề và thời điểm nhắc hợp lệ.' };
           }
@@ -1020,7 +763,7 @@ export class JamiActionService {
       console.error(`[JamiActionService] Error executing tool ${toolName}:`, err);
       return {
         success: false,
-        message: `Đã xảy ra lỗi khi thực hiện thao tác: ${err.message}`,
+        message: 'Không thể thực hiện thao tác lúc này. Vui lòng thử lại sau.',
       };
     }
   }
@@ -1037,9 +780,10 @@ export class JamiActionService {
       previewText: string;
     }
   ): Promise<ActionProposalRecord> {
-    const id = 'act_' + crypto.randomUUID().replace(/-/g, '').substring(0, 16);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
+    const id = 'prop_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
     const createdAt = new Date().toISOString();
+    const executionKey = `jami-proposal:${userId}:${id}`;
 
     const record: ActionProposalRecord = {
       id,
@@ -1050,25 +794,42 @@ export class JamiActionService {
       previewText: data.previewText,
       status: 'pending',
       expiresAt,
+      executionKey,
       createdAt,
     };
+
+    if (isProduction && !db.isHealthy()) {
+      const serviceError = new Error('PROPOSAL_PERSISTENCE_UNAVAILABLE');
+      (serviceError as any).code = 'PROPOSAL_PERSISTENCE_UNAVAILABLE';
+      (serviceError as any).status = 503;
+      throw serviceError;
+    }
 
     if (db.isHealthy()) {
       try {
         await db.execute(
           `INSERT INTO jami_action_proposals
-           (id, user_id, conversation_id, action_type, payload_json, preview_text, status, expires_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NOW(3))`,
-          [id, userId, data.conversationId || null, data.actionType, JSON.stringify(data.payload), data.previewText, new Date(expiresAt)]
+           (id, user_id, conversation_id, action_type, payload_json, preview_text, status, expires_at, execution_key, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW(3), NOW(3))`,
+          [id, userId, data.conversationId || null, data.actionType, JSON.stringify(data.payload), data.previewText, new Date(expiresAt), executionKey]
         );
       } catch (err: any) {
         console.warn('[JamiActionService] Error saving proposal to DB, falling back to memory:', err.message);
+        if (isProduction) {
+          const serviceError = new Error('PROPOSAL_PERSISTENCE_UNAVAILABLE');
+          (serviceError as any).code = 'PROPOSAL_PERSISTENCE_UNAVAILABLE';
+          (serviceError as any).status = 503;
+          throw serviceError;
+        }
       }
     }
 
-    const list = this.demoProposals.get(userId) || [];
-    list.unshift(record);
-    this.demoProposals.set(userId, list);
+    if (!isProduction) {
+      const list = this.demoProposals.get(userId) || [];
+      list.unshift(record);
+      if (list.length > 50) list.pop();
+      this.demoProposals.set(userId, list);
+    }
 
     return record;
   }
@@ -1082,17 +843,17 @@ export class JamiActionService {
         let rows: any[] = [];
         if (proposalId) {
           rows = await db.query<any>(
-            `SELECT id, user_id, conversation_id, action_type, payload_json, preview_text, status, expires_at, confirmed_at, created_at
+          `SELECT id, user_id, conversation_id, action_type, payload_json, preview_text, status, expires_at, confirmed_at, execution_key, result_json, created_at
              FROM jami_action_proposals
-             WHERE id = ? AND user_id = ? AND status = 'pending' AND expires_at > NOW(3)
+             WHERE id = ? AND user_id = ?
              LIMIT 1`,
             [proposalId, userId]
           );
         } else {
           rows = await db.query<any>(
-            `SELECT id, user_id, conversation_id, action_type, payload_json, preview_text, status, expires_at, confirmed_at, created_at
+            `SELECT id, user_id, conversation_id, action_type, payload_json, preview_text, status, expires_at, confirmed_at, execution_key, created_at
              FROM jami_action_proposals
-             WHERE user_id = ? AND status = 'pending' AND expires_at > NOW(3)
+             WHERE user_id = ? AND status = 'pending' AND (expires_at IS NULL OR expires_at > NOW(3))
              ORDER BY created_at DESC
              LIMIT 1`,
             [userId]
@@ -1111,6 +872,8 @@ export class JamiActionService {
             status: r.status,
             expiresAt: r.expires_at?.toISOString?.() || String(r.expires_at),
             confirmedAt: r.confirmed_at ? (r.confirmed_at.toISOString?.() || String(r.confirmed_at)) : undefined,
+            executionKey: r.execution_key || undefined,
+            resultJson: typeof r.result_json === 'string' ? JSON.parse(r.result_json) : r.result_json,
             createdAt: r.created_at?.toISOString?.() || String(r.created_at),
           };
         }
@@ -1119,12 +882,13 @@ export class JamiActionService {
       }
     }
 
+    if (isProduction) return null;
     const list = this.demoProposals.get(userId) || [];
+    if (proposalId) {
+      return list.find((p) => p.id === proposalId) || null;
+    }
     const now = new Date().toISOString();
-    return list.find((p) => {
-      if (proposalId && p.id !== proposalId) return false;
-      return p.status === 'pending' && p.expiresAt > now;
-    }) || null;
+    return list.find((p) => p.status === 'pending' && (!p.expiresAt || p.expiresAt > now)) || null;
   }
 
   /**
@@ -1180,6 +944,18 @@ export class JamiActionService {
           rejectClaimed = true;
         }
       }
+      if (!rejectClaimed) {
+        const current = await this.getProposalById(userId, proposalId);
+        if (current?.status === 'rejected') {
+          return { success: true, message: 'De xuat nay da duoc huy truoc do.', isAlreadyConfirmed: false };
+        }
+        return {
+          success: false,
+          message: current?.status === 'processing'
+            ? 'De xuat dang duoc xu ly, khong the huy luc nay.'
+            : 'De xuat khong con o trang thai cho huy.',
+        };
+      }
       return {
         success: true,
         message: 'Đã hủy đề xuất theo yêu cầu của bạn.',
@@ -1205,6 +981,16 @@ export class JamiActionService {
     let claimed = false;
     if (db.isHealthy()) {
       try {
+        // Recover abandoned claims only after a bounded lease; active workers
+        // keep the processing timestamp fresh through the normal transaction.
+        await db.execute(
+          `UPDATE jami_action_proposals
+           SET status = 'pending', updated_at = NOW(3)
+           WHERE id = ? AND user_id = ? AND status = 'processing'
+             AND processing_at IS NOT NULL
+             AND processing_at < DATE_SUB(NOW(3), INTERVAL 15 MINUTE)`,
+          [proposal.id, userId]
+        );
         const claimResult = await db.execute(
           `UPDATE jami_action_proposals
            SET status = 'processing', updated_at = NOW(3)
@@ -1247,189 +1033,85 @@ export class JamiActionService {
       };
     }
 
-    // Execute the mutation in MySQL / Repository
+    // Execute the mutation via canonical Tool Registry confirmExecutor
     try {
-      let resultMsg = 'Thao tác đã được thực hiện thành công.';
-      let clientAction: any = { type: 'refresh' };
-
-      switch (proposal.actionType) {
-        case 'create_task':
-        case 'create_scheduled_task': {
-          const p = proposal.payload;
-          const task = await taskRepo.createTask(userId, {
-            title: p.title,
-            subjectId: p.subjectId,
-            estimatedMinutes: p.estimatedMinutes,
-            priority: p.priority,
-            difficulty: p.difficulty,
-            dueAt: p.dueAt,
-            scheduledStartAt: p.scheduledStartAt,
-            scheduledEndAt: p.scheduledEndAt,
-          });
-          resultMsg = p.scheduledStartAt
-            ? `Đã tạo và xếp lịch học "${task.title}" (${p.subjectName || ''}) vào thời khóa biểu thành công.`
-            : `Đã tạo nhiệm vụ "${task.title}" môn ${p.subjectName || ''} thành công.`;
-          clientAction = { type: 'navigate', route: p.scheduledStartAt ? '/timetable' : '/tasks' };
-          break;
-        }
-
-        case 'create_timetable_entry': {
-          const p = proposal.payload;
-          const entry = await timetableRepo.createTimetableEntry(userId, {
-            title: p.title,
-            subjectId: p.subjectId,
-            subjectName: p.subjectName,
-            dayOfWeek: p.dayOfWeek,
-            startLocalTime: p.startLocalTime,
-            endLocalTime: p.endLocalTime,
-            location: p.location || p.room,
-            teacher: p.teacher,
-            commuteBeforeMinutes: p.commuteBeforeMinutes ?? 0,
-            commuteAfterMinutes: p.commuteAfterMinutes ?? 0,
-          });
-          resultMsg = `Đã thêm tiết học "${entry.title}" vào thời khóa biểu chính khóa thành công.`;
-          clientAction = { type: 'navigate', route: '/timetable' };
-          break;
-        }
-
-        case 'add_busy_event': {
-          const p = proposal.payload;
-          const event = await timetableRepo.createBusyEvent(userId, {
-            title: p.title,
-            startsAt: p.startsAt,
-            endsAt: p.endsAt,
-            type: p.type,
-            timezone: p.timezone || 'Asia/Ho_Chi_Minh',
-            isFixed: true,
-            location: p.location,
-            commuteBeforeMinutes: p.commuteBeforeMinutes ?? 0,
-            commuteAfterMinutes: p.commuteAfterMinutes ?? 0,
-            source: 'jami_voice',
-          });
-          resultMsg = `Đã thêm lịch bận "${event.title}" vào thời khóa biểu thành công.`;
-          clientAction = { type: 'navigate', route: '/timetable' };
-          break;
-        }
-
-        case 'replan_tasks':
-        case 'preview_replan_tasks': {
-          const p = proposal.payload;
-          await plannerRepo.confirmProposal(userId, p.id || proposal.id);
-          resultMsg = `Đã áp dụng toàn bộ thời khóa biểu mới cho các nhiệm vụ học tập thành công.`;
-          clientAction = { type: 'navigate', route: '/timetable' };
-          break;
-        }
-
-        case 'create_exam': {
-          const p = proposal.payload;
-          const exam = await examRepo.createExam(userId, {
-            title: p.title,
-            subjectId: p.subjectId,
-            examAt: p.examAt,
-            importance: p.importance,
-            scopeText: p.scopeText,
-            topics: p.topics,
-          });
-          resultMsg = `Đã thêm bài kiểm tra "${exam.title}" vào kế hoạch ôn thi thành công.`;
-          clientAction = { type: 'navigate', route: '/exams' };
-          break;
-        }
-
-        case 'mark_task_completed': {
-          const p = proposal.payload;
-          const existingTask = await taskRepo.getById(userId, p.taskId);
-          if (!existingTask) {
-            throw new Error('Nhiệm vụ không tồn tại hoặc không thuộc quyền sở hữu.');
-          }
-          await taskRepo.update(userId, p.taskId, { status: 'completed', completionPercent: 100 });
-          resultMsg = `Đã hoàn thành nhiệm vụ "${existingTask.title}" thành công.`;
-          clientAction = { type: 'navigate', route: '/tasks' };
-          break;
-        }
-
-        case 'create_reminder': {
-          const p = proposal.payload;
-          const title = p.title || p.content;
-          const scheduledFor = p.scheduledFor
-            ? new Date(p.scheduledFor).toISOString()
-            : (p.timeStr ? calculateTargetDateTimeIso(undefined, p.timeStr) : undefined);
-          if (!title || !scheduledFor) {
-            throw new Error('Payload lời nhắc thiếu tiêu đề hoặc thời điểm nhắc.');
-          }
-          await notificationRepo.create(userId, {
-            type: 'system',
-            title: `Nhắc nhở: ${title}`,
-            body: p.body || (p.timeStr ? `Lên lịch: ${p.timeStr}` : 'Nhắc nhở học tập từ trợ lý Jami'),
-            actionUrl: p.actionUrl || '/notifications',
-            scheduledFor,
-            dedupeKey: `remind_${proposal.id}`,
-          });
-          resultMsg = `Đã tạo lời nhắc "${title}" vào danh sách thông báo thành công.`;
-          clientAction = { type: 'navigate', route: '/notifications' };
-          break;
-        }
-
-        case 'create_mistake_entry': {
-          const p = proposal.payload;
-          const mistake = await mistakeRepo.create(userId, {
-            subjectId: p.subjectId || null,
-            topic: p.topic || 'Khác',
-            questionText: p.questionText,
-            selectedAnswer: p.selectedAnswer || null,
-            correctAnswer: p.correctAnswer,
-            mistakeReason: p.mistakeReason || 'other',
-            correctExplanation: [p.correctSolution, p.lessonLearned ? `Bài học: ${p.lessonLearned}` : '']
-              .filter(Boolean)
-              .join('\n\n'),
-            difficulty: p.difficulty || 'medium',
-            sourceType: 'manual',
-          });
-          resultMsg = `Đã lưu lỗi sai vào Sổ lỗi sai: "${mistake.topic}".`;
-          clientAction = { type: 'navigate', route: '/reports' };
-          break;
-        }
-
-        case 'cancel_event': {
-          const p = proposal.payload;
-          let ok = false;
-          if (p.eventType === 'task') {
-            const existing = await taskRepo.getById(userId, p.eventId);
-            if (!existing) throw new Error('Nhiệm vụ không tồn tại hoặc không thuộc quyền sở hữu.');
-            const updated = await taskRepo.update(userId, p.eventId, { status: 'cancelled' });
-            ok = Boolean(updated);
-            clientAction = { type: 'navigate', route: '/tasks' };
-          } else if (p.eventType === 'busy_event') {
-            ok = await timetableRepo.deleteBusyEvent(userId, p.eventId);
-            clientAction = { type: 'navigate', route: '/timetable' };
-          } else if (p.eventType === 'timetable_entry') {
-            ok = await timetableRepo.deleteTimetableEntry(userId, p.eventId);
-            clientAction = { type: 'navigate', route: '/timetable' };
-          } else if (p.eventType === 'reminder') {
-            ok = await notificationRepo.delete(userId, p.eventId);
-            clientAction = { type: 'navigate', route: '/notifications' };
-          }
-          if (!ok) throw new Error('Không thể hủy mục đã chọn hoặc mục không tồn tại.');
-          resultMsg = `Đã hủy "${p.label || p.eventId}" thành công.`;
-          break;
-        }
-
-        default:
-          throw new Error(`Loại đề xuất không xác định: ${proposal.actionType}`);
+      const tool = findMutateToolByActionType(proposal.actionType);
+      if (!tool) {
+        throw new Error(`Loại đề xuất "${proposal.actionType}" không có trình thực thi (confirmExecutor) hợp lệ trong Tool Registry.`);
       }
 
-      await this.updateProposalStatus(userId, proposal.id, 'confirmed');
-
-      return {
-        success: true,
-        message: resultMsg,
-        clientAction,
+      const toolContext = {
+        userId,
+        conversationId,
+        source: 'text' as const,
+        timezone: 'Asia/Ho_Chi_Minh',
+        now: new Date(),
       };
+
+       const payloadResult = (tool.proposalSchema || tool.schema).safeParse(proposal.payload);
+       if (!payloadResult.success) {
+         await this.markProposalFailed(userId, proposal.id, 'INVALID_PROPOSAL_PAYLOAD');
+         return { success: false, message: 'Dữ liệu đề xuất không còn hợp lệ. Vui lòng tạo đề xuất mới.' };
+       }
+
+       let execResult: ActionResult;
+       if (db.isHealthy()) {
+         execResult = await db.withTransaction(async (conn) => {
+          const [lockedRows] = await conn.query<any[]>(
+            `SELECT status, user_id, expires_at, result_resource_id, result_json
+             FROM jami_action_proposals
+             WHERE id = ? AND user_id = ?
+             FOR UPDATE`,
+            [proposal.id, userId]
+          );
+          const lockedProposal = lockedRows[0];
+          if (!lockedProposal) {
+            throw new Error('PROPOSAL_NOT_FOUND');
+          }
+          if (lockedProposal.status !== 'processing') {
+            if (lockedProposal.status === 'confirmed') {
+              return {
+                success: true,
+                message: 'De xuat nay da duoc xac nhan truoc do.',
+                isAlreadyConfirmed: true,
+                data: lockedProposal.result_json,
+              };
+            }
+            throw new Error('PROPOSAL_STATE_CHANGED');
+          }
+          const result = await tool.confirmExecutor(toolContext, payloadResult.data, conn);
+          if (result.success) {
+            await this.completeProposal(userId, proposal.id, getResultResourceId(result.data), result.data, conn);
+          }
+          return result;
+         });
+       } else {
+        execResult = await tool.confirmExecutor(toolContext, payloadResult.data);
+      }
+
+      if (execResult.success) {
+        if (!db.isHealthy()) {
+          await this.completeProposal(userId, proposal.id, getResultResourceId(execResult.data), execResult.data);
+        }
+        return {
+          success: true,
+          message: execResult.message,
+          clientAction: execResult.clientAction || { type: 'refresh' },
+          data: execResult.data,
+        };
+      } else {
+        await this.updateProposalStatus(userId, proposal.id, 'failed');
+        return {
+          success: false,
+          message: execResult.message || 'Thao tác không thành công.',
+        };
+      }
     } catch (err: any) {
       console.error('[JamiActionService] Mutation execution error:', err);
-      await this.updateProposalStatus(userId, proposal.id, 'failed');
+      await this.markProposalFailed(userId, proposal.id, 'EXECUTION_FAILED');
       return {
         success: false,
-        message: `Không thể hoàn tất thao tác: ${err.message}.`,
+        message: 'Không thể hoàn tất thao tác lúc này. Vui lòng thử lại sau.',
       };
     }
   }
@@ -1438,7 +1120,7 @@ export class JamiActionService {
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT id, user_id, conversation_id, action_type, payload_json, preview_text, expires_at, status, confirmed_at, created_at
+          `SELECT id, user_id, conversation_id, action_type, payload_json, preview_text, expires_at, status, confirmed_at, result_json, created_at
            FROM jami_action_proposals
            WHERE id = ? AND user_id = ?`,
           [proposalId, userId]
@@ -1456,6 +1138,7 @@ export class JamiActionService {
             expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : new Date().toISOString(),
             confirmedAt: r.confirmed_at ? new Date(r.confirmed_at).toISOString() : undefined,
             createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+            resultJson: typeof r.result_json === 'string' ? JSON.parse(r.result_json) : r.result_json,
           };
         }
       } catch (err: any) {
@@ -1463,6 +1146,7 @@ export class JamiActionService {
       }
     }
 
+    if (isProduction) return null;
     const list = this.demoProposals.get(userId) || [];
     return list.find((p) => p.id === proposalId) || null;
   }
@@ -1501,6 +1185,52 @@ export class JamiActionService {
       }
     }
   }
+
+  private async markProposalFailed(userId: string, proposalId: string, errorCode: string): Promise<void> {
+    if (isProduction && !db.isHealthy()) {
+      const serviceError = new Error('PROPOSAL_PERSISTENCE_UNAVAILABLE');
+      (serviceError as any).code = 'PROPOSAL_PERSISTENCE_UNAVAILABLE';
+      (serviceError as any).status = 503;
+      throw serviceError;
+    }
+
+    if (db.isHealthy()) {
+      await db.execute(
+        `UPDATE jami_action_proposals
+         SET status = 'failed', error_code = ?, error_message = ?, updated_at = NOW(3)
+         WHERE id = ? AND user_id = ?`,
+        [errorCode, 'Proposal could not be completed safely.', proposalId, userId]
+      );
+      return;
+    }
+    await this.updateProposalStatus(userId, proposalId, 'failed');
+  }
+
+  private async completeProposal(userId: string, proposalId: string, resultResourceId?: string, resultData?: unknown, executor?: DbExecutor): Promise<void> {
+    if (executor || db.isHealthy()) {
+      const writer = executor || db;
+      await writer.execute(
+        `UPDATE jami_action_proposals
+         SET status = 'confirmed', result_resource_id = ?, result_json = ?, confirmed_at = NOW(3), updated_at = NOW(3)
+         WHERE id = ? AND user_id = ? AND status = 'processing'`,
+        [resultResourceId || null, resultData === undefined ? null : JSON.stringify(resultData), proposalId, userId]
+      );
+      return;
+    }
+    await this.updateProposalStatus(userId, proposalId, 'confirmed');
+  }
+}
+
+function getResultResourceId(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const record = data as Record<string, unknown>;
+  for (const key of ['task', 'exam', 'entry', 'event', 'notification', 'session', 'applied']) {
+    const value = record[key];
+    if (value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string') return (value as { id: string }).id;
+  }
+  return undefined;
 }
 
 export const jamiActionService = JamiActionService.getInstance();
+
+

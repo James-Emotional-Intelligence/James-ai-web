@@ -45,9 +45,165 @@ export function resolveUserTimeZone(tz?: string | null): string {
 /**
  * Resolves Vietnamese weekday text or raw numbers to canonical 1..7 (1=Thứ 2, 7=Chủ Nhật)
  */
+export interface ZonedDateParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  date: string;
+  time: string;
+}
+
+function getPart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {
+  return parts.find((p) => p.type === type)?.value || '';
+}
+
+export function getZonedDateParts(now: Date = new Date(), timeZone: string = DEFAULT_TIMEZONE): ZonedDateParts {
+  const tz = resolveUserTimeZone(timeZone);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+
+  const year = Number(getPart(parts, 'year'));
+  const month = Number(getPart(parts, 'month'));
+  const day = Number(getPart(parts, 'day'));
+  const hour = Number(getPart(parts, 'hour')) % 24;
+  const minute = Number(getPart(parts, 'minute'));
+  const second = Number(getPart(parts, 'second'));
+
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    date: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`,
+  };
+}
+
+export function getCanonicalWeekday(now: Date = new Date(), timeZone: string = DEFAULT_TIMEZONE): number {
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveUserTimeZone(timeZone),
+    weekday: 'short',
+  }).format(now).toLowerCase();
+  const map: Record<string, number> = { mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6, sun: 7 };
+  return map[weekday.slice(0, 3)] || 1;
+}
+
+function zonedWallTimeDeltaMs(
+  instant: Date,
+  target: Pick<ZonedDateParts, 'year' | 'month' | 'day' | 'hour' | 'minute' | 'second'>,
+  timeZone: string
+): number {
+  const actual = getZonedDateParts(instant, timeZone);
+  const actualUtc = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second);
+  const targetUtc = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute, target.second);
+  return targetUtc - actualUtc;
+}
+
+function addLocalCalendarDays(date: string, days: number): string {
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error('INVALID_LOCAL_DATE');
+  const value = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
+}
+
+export function parseLocalDateTime(params: { date: string; time: string; timeZone?: string }): Date {
+  const tz = resolveUserTimeZone(params.timeZone);
+  const dateMatch = params.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = params.time.match(/^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/);
+  if (!dateMatch || !timeMatch) {
+    throw new Error('INVALID_LOCAL_DATETIME');
+  }
+
+  const target = {
+    year: Number(dateMatch[1]),
+    month: Number(dateMatch[2]),
+    day: Number(dateMatch[3]),
+    hour: Number(timeMatch[1]),
+    minute: Number(timeMatch[2]),
+    second: Number(timeMatch[3] || 0),
+  };
+
+  let guess = new Date(Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute, target.second));
+  for (let i = 0; i < 3; i += 1) {
+    const delta = zonedWallTimeDeltaMs(guess, target, tz);
+    if (delta === 0) break;
+    guess = new Date(guess.getTime() + delta);
+  }
+  return guess;
+}
+
+export function ensureFutureDateTime(date: Date, now: Date = new Date()): Date {
+  if (date.getTime() <= now.getTime()) {
+    throw new Error('TARGET_DATETIME_IN_PAST');
+  }
+  return date;
+}
+
+export function resolveNaturalTarget(params: {
+  dayOfWeek?: number;
+  dateText?: string;
+  timeText?: string;
+  timeZone?: string;
+  now?: Date;
+  preferFuture?: boolean;
+}): Date {
+  const tz = resolveUserTimeZone(params.timeZone);
+  const now = params.now || new Date();
+  const nowParts = getZonedDateParts(now, tz);
+  const timeMatch = (params.timeText || '19:00').match(/(\d{1,2})(?::|h)?(\d{2})?/i);
+  const hour = timeMatch ? Math.min(23, Math.max(0, Number(timeMatch[1]))) : 19;
+  const minute = timeMatch?.[2] ? Math.min(59, Math.max(0, Number(timeMatch[2]))) : 0;
+
+  let date = params.dateText && /^\d{4}-\d{2}-\d{2}$/.test(params.dateText)
+    ? params.dateText
+    : nowParts.date;
+
+  const hasExplicitDate = Boolean(params.dateText && /^\d{4}-\d{2}-\d{2}$/.test(params.dateText));
+  const hasWeekday = Boolean(params.dayOfWeek && params.dayOfWeek >= 1 && params.dayOfWeek <= 7);
+  if (!hasExplicitDate && hasWeekday) {
+    const currentDow = getCanonicalWeekday(now, tz);
+    let offset = params.dayOfWeek - currentDow;
+    if (offset < 0) {
+      offset += 7;
+    }
+    date = addLocalCalendarDays(nowParts.date, offset);
+  }
+
+  let resolved = parseLocalDateTime({
+    date,
+    time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    timeZone: tz,
+  });
+
+  if (params.preferFuture !== false && resolved.getTime() <= now.getTime()) {
+    if (hasExplicitDate) throw new Error('TARGET_DATETIME_IN_PAST');
+    const nextDate = addLocalCalendarDays(date, hasWeekday ? 7 : 1);
+    resolved = parseLocalDateTime({
+      date: nextDate,
+      time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+      timeZone: tz,
+    });
+  }
+  return resolved;
+}
+
 export function resolveVietnameseDayOfWeek(input: any, defaultJsDay?: number): number {
   if (input === undefined || input === null || input === '') {
-    const jsDay = defaultJsDay !== undefined ? defaultJsDay : new Date().getDay();
+    if (defaultJsDay === undefined) throw new Error('DAY_OF_WEEK_REQUIRED');
+    const jsDay = defaultJsDay;
     return jsDay === 0 ? 7 : jsDay;
   }
 
@@ -128,8 +284,7 @@ export function resolveVietnameseDayOfWeek(input: any, defaultJsDay?: number): n
     return Math.floor(num);
   }
 
-  const jsDay = new Date().getDay();
-  return jsDay === 0 ? 7 : jsDay;
+  throw new Error('INVALID_DAY_OF_WEEK');
 }
 
 /**
@@ -139,38 +294,30 @@ export function calculateTargetDateTimeIso(
   targetDow?: number,
   timeStr?: string,
   explicitIso?: string,
-  timeZone: string = DEFAULT_TIMEZONE
+  timeZone: string = DEFAULT_TIMEZONE,
+  now: Date = new Date()
 ): string {
   if (explicitIso) {
-    const parsed = new Date(explicitIso);
+    const hasOffset = /(?:Z|[+-]\d{2}:\d{2})$/i.test(explicitIso);
+    const parsed = hasOffset
+      ? new Date(explicitIso)
+      : parseLocalDateTime({
+          date: explicitIso.slice(0, 10),
+          time: explicitIso.slice(11, 16) || '00:00',
+          timeZone,
+        });
     if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 2000) {
       return parsed.toISOString();
     }
   }
 
-  const now = new Date();
-  // Get current day of week in target timezone
-  const currentJsDay = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const currentCanonicalDow = currentJsDay === 0 ? 7 : currentJsDay; // 1=T2 .. 7=CN
-  const dow = targetDow && targetDow >= 1 && targetDow <= 7 ? targetDow : currentCanonicalDow;
-
-  // Compute offset from current day in current week
-  const dayDifference = dow - currentCanonicalDow;
-  const targetDate = new Date(now);
-  targetDate.setDate(now.getDate() + dayDifference);
-
-  let hours = 19;
-  let minutes = 0;
-  if (timeStr) {
-    const match = timeStr.match(/(\d{1,2})[:h](\d{2})?/i);
-    if (match) {
-      hours = Math.min(23, Math.max(0, parseInt(match[1], 10)));
-      minutes = match[2] ? Math.min(59, Math.max(0, parseInt(match[2], 10))) : 0;
-    }
-  }
-
-  targetDate.setHours(hours, minutes, 0, 0);
-  return targetDate.toISOString();
+  return resolveNaturalTarget({
+    dayOfWeek: targetDow,
+    timeText: timeStr,
+    timeZone,
+    now,
+    preferFuture: true,
+  }).toISOString();
 }
 
 /**
@@ -180,12 +327,6 @@ export function getNowInTimeZone(timeZone: string = DEFAULT_TIMEZONE) {
   const tz = resolveUserTimeZone(timeZone);
   const now = new Date();
 
-  const formatterDate = new Intl.DateTimeFormat('vi-VN', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
   const formatterTime = new Intl.DateTimeFormat('vi-VN', {
     timeZone: tz,
     hour: '2-digit',
@@ -194,15 +335,10 @@ export function getNowInTimeZone(timeZone: string = DEFAULT_TIMEZONE) {
     hour12: false,
   });
 
-  const parts = formatterDate.formatToParts(now);
-  const year = parts.find((p) => p.type === 'year')?.value || `${now.getFullYear()}`;
-  const month = parts.find((p) => p.type === 'month')?.value || `${now.getMonth() + 1}`.padStart(2, '0');
-  const day = parts.find((p) => p.type === 'day')?.value || `${now.getDate()}`.padStart(2, '0');
-
-  const dateIsoYmd = `${year}-${month}-${day}`;
+  const zoned = getZonedDateParts(now, tz);
+  const dateIsoYmd = zoned.date;
   const timeStr = formatterTime.format(now);
-  const jsDay = now.getDay();
-  const canonicalDow = jsDay === 0 ? 7 : jsDay;
+  const canonicalDow = getCanonicalWeekday(now, tz);
 
   return {
     now,

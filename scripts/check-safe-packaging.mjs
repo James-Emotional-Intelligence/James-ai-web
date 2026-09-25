@@ -1,16 +1,16 @@
-/* global console */
-import fs from 'fs';
-import path from 'path';
-import process from 'process';
+import fs from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
 
 // Checks that sensitive and non-portable files are never packaged into source releases
 const FORBIDDEN_PATTERNS = [
   /^\.env$/,
-  /^\.env\.local$/,
-  /^\.env\.production$/,
+  /^\.env\.(?!example$).+/,
+  /^certs\/(?!README)/,
   /^node_modules(?:\/|$)/,
   /^\.git(?:\/|$)/,
-  /^storage\/(?!test-fixtures)/,
+  /^storage\/(?:materials|temporary|quarantine)(?:\/|$)/,
+  /^storage\/(?!test-fixtures|\.gitkeep$)/,
   /^dist(?:\/|$)/,
   /^coverage(?:\/|$)/,
   /^test-results(?:\/|$)/,
@@ -18,9 +18,12 @@ const FORBIDDEN_PATTERNS = [
 ];
 
 const SENSITIVE_CONTENT_PATTERNS = [
+  /OPENAI_API_KEY\s*=\s*['"]?sk-[A-Za-z0-9_-]{20,}['"]?/,
   /AIVEN_APP_PASSWORD\s*=\s*['"]?[a-zA-Z0-9_-]{8,}['"]?/,
   /SESSION_SECRET\s*=\s*['"]?[a-zA-Z0-9_-]{16,}['"]?/,
   /INTERNAL_CRON_SECRET\s*=\s*['"]?[a-zA-Z0-9_-]{16,}['"]?/,
+  /ADMIN_SECRET_KEY\s*=\s*['"]?[a-zA-Z0-9_-]{16,}['"]?/,
+  /REGISTRATION_CODE_PEPPER\s*=\s*['"]?[a-zA-Z0-9_-]{16,}['"]?/,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
 ];
 
@@ -56,7 +59,7 @@ export function checkSafeArtifacts(rootDir = process.cwd()) {
         }
       }
 
-      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git' && entry.name !== 'dist' && entry.name !== 'storage') {
+      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git' && entry.name !== 'dist') {
         scanDir(fullPath, rel);
       }
     }

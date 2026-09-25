@@ -18,6 +18,14 @@ import { env } from '../config/env';
 export const PRICING_VERSION = '2026-09-19-standard';
 export const PRICING_TIER = 'standard';
 export const DEFAULT_EXCHANGE_RATE_VND = 27000;
+export const REALTIME_DURATION_ESTIMATOR_VERSION = 'realtime-duration-v1';
+export const REALTIME_ESTIMATED_VND_PER_MINUTE = 300;
+
+/** Conservative server-duration fallback when provider token usage is unavailable. */
+export function estimateRealtimeDurationCostMilliVnd(durationMs: number): bigint {
+  const boundedMs = Math.max(0, Math.round(durationMs));
+  return ceilDiv(BigInt(boundedMs) * vndToMilliVnd(REALTIME_ESTIMATED_VND_PER_MINUTE), 60_000n);
+}
 
 export interface ModelPricingTier {
   modelId: string;

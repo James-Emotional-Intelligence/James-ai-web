@@ -86,6 +86,46 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const currentTurnIdRef = useRef<string>('');
   const activeUtteranceIdRef = useRef<number>(0);
   const activeRealtimeSessionIdRef = useRef<string | null>(null);
+  const speechResumeIntervalRef = useRef<number | null>(null);
+  const processedRealtimeEventIdsRef = useRef<Set<string>>(new Set());
+  const processedRealtimeCallIdsRef = useRef<Set<string>>(new Set());
+  const realtimeTranscriptBuffersRef = useRef<Map<string, string>>(new Map());
+
+  const clearSpeechResumeInterval = useCallback(() => {
+    if (speechResumeIntervalRef.current !== null) {
+      window.clearInterval(speechResumeIntervalRef.current);
+      speechResumeIntervalRef.current = null;
+    }
+  }, []);
+
+  const loadSpeechVoices = useCallback((timeoutMs = 1500): Promise<SpeechSynthesisVoice[]> => {
+    if (!('speechSynthesis' in window)) return Promise.resolve([]);
+    const initial = window.speechSynthesis.getVoices();
+    if (initial.length > 0) return Promise.resolve(initial);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (typeof window.speechSynthesis.removeEventListener === 'function') {
+          window.speechSynthesis.removeEventListener('voiceschanged', finish);
+        } else if ('onvoiceschanged' in window.speechSynthesis) {
+          window.speechSynthesis.onvoiceschanged = null;
+        }
+        window.clearTimeout(timeoutId);
+        resolve(window.speechSynthesis.getVoices());
+      };
+      const timeoutId = window.setTimeout(finish, timeoutMs);
+      if (typeof window.speechSynthesis.addEventListener === 'function') {
+        window.speechSynthesis.addEventListener('voiceschanged', finish, { once: true });
+      } else if ('onvoiceschanged' in window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = finish;
+      } else {
+        finish();
+      }
+    });
+  }, []);
 
   /**
    * Unified Text-to-Speech Engine using SpeechSynthesis with Intelligent Language Detection & Voice Selection
@@ -98,30 +138,42 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
 
       // Cancel any ongoing speech and advance speech ID to cancel active queue
+      clearSpeechResumeInterval();
       window.speechSynthesis.cancel();
       const currentSpeechId = ++activeUtteranceIdRef.current;
 
-      const segments = segmentTextByLanguage(text, options?.lang);
-      if (segments.length === 0) {
-        options?.onEnd?.();
-        return;
-      }
-
-      const fullCleanText = segments.map((s) => s.text).join(' ');
-      const voices = window.speechSynthesis.getVoices();
-      let currentSegmentIdx = 0;
-
-      const speakNextSegment = () => {
+      void (async () => {
+        const voices = await loadSpeechVoices();
         if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) {
           return;
         }
 
-        if (currentSegmentIdx >= segments.length) {
+        const segments = segmentTextByLanguage(text, options?.lang || 'vi-VN');
+        if (segments.length === 0) {
+          options?.onEnd?.();
+          return;
+        }
+
+        const fullCleanText = segments.map((s) => s.text).join(' ');
+        let currentSegmentIdx = 0;
+
+        const finishSpeech = () => {
+          clearSpeechResumeInterval();
           isSpeakingRef.current = false;
           setIsSpeaking(false);
           setSpeakingMessageId(null);
           setCurrentUtteranceText('');
           options?.onEnd?.();
+        };
+
+        const speakNextSegment = () => {
+        if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) {
+          clearSpeechResumeInterval();
+          return;
+        }
+
+        if (currentSegmentIdx >= segments.length) {
+          finishSpeech();
           return;
         }
 
@@ -159,27 +211,27 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         window.speechSynthesis.speak(utterance);
       };
 
-      // Workaround for Chrome SpeechSynthesis pause bug
-      const resumeInterval = setInterval(() => {
+        speechResumeIntervalRef.current = window.setInterval(() => {
         if (activeUtteranceIdRef.current !== currentSpeechId) {
-          clearInterval(resumeInterval);
+          clearSpeechResumeInterval();
           return;
         }
-        if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
-          window.speechSynthesis.pause();
+        if (window.speechSynthesis.speaking && window.speechSynthesis.paused) {
           window.speechSynthesis.resume();
         } else if (!window.speechSynthesis.speaking) {
-          clearInterval(resumeInterval);
+          clearSpeechResumeInterval();
         }
       }, 5000);
 
-      speakNextSegment();
+        speakNextSegment();
+      })();
     },
-    []
+    [clearSpeechResumeInterval, loadSpeechVoices]
   );
 
   const stopSpeaking = useCallback(() => {
     activeUtteranceIdRef.current++;
+    clearSpeechResumeInterval();
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -187,7 +239,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIsSpeaking(false);
     setSpeakingMessageId(null);
     setCurrentUtteranceText('');
-  }, []);
+  }, [clearSpeechResumeInterval]);
 
   const speakText = useCallback(
     (text: string, onEnd?: () => void, lang?: SpeechLanguage) => {
@@ -201,6 +253,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
    */
   const cleanupHardware = useCallback(() => {
     activeUtteranceIdRef.current++;
+    clearSpeechResumeInterval();
     if (speechRecognitionRef.current) {
       try {
         speechRecognitionRef.current.onresult = null;
@@ -260,7 +313,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIsSpeaking(false);
     setSpeakingMessageId(null);
     setIsMicActive(false);
-  }, []);
+  }, [clearSpeechResumeInterval]);
 
   /**
    * Disable Hands-free mode completely
@@ -626,17 +679,32 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           dc.onmessage = (e) => {
             try {
               const event = JSON.parse(e.data);
-              if (
+              const eventId = event.event_id || event.id;
+              if (eventId) {
+                if (processedRealtimeEventIdsRef.current.has(eventId)) return;
+                processedRealtimeEventIdsRef.current.add(eventId);
+              }
+
+              if (event.type === 'response.created' && event.response?.id) {
+                realtimeTranscriptBuffersRef.current.set(event.response.id, '');
+                setLastReply('');
+              } else if (
                 event.type === 'response.output_audio_transcript.delta' ||
                 event.type === 'response.audio_transcript.delta'
               ) {
                 if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-                setLastReply((prev) => prev + (event.delta || ''));
+                const responseId = event.response_id || event.response?.id || 'default';
+                const nextValue = (realtimeTranscriptBuffersRef.current.get(responseId) || '') + (event.delta || '');
+                realtimeTranscriptBuffersRef.current.set(responseId, nextValue);
+                setLastReply(nextValue);
                 if (isMountedRef.current) {
                   isSpeakingRef.current = true;
                   setIsSpeaking(true);
                   setState('speaking');
                 }
+              } else if (event.type === 'response.done' && event.response?.id) {
+                const finalText = realtimeTranscriptBuffersRef.current.get(event.response.id);
+                if (finalText !== undefined) setLastReply(finalText);
               } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
                 if (event.transcript) {
                   setLastTranscript(event.transcript);
@@ -650,8 +718,11 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 const callId = call.call_id || event.call_id;
                 const rawArgs = call.arguments || event.arguments;
 
-                if (toolName) {
-                  api.executeRealtimeToolCall(toolName, callId, rawArgs).then((result) => {
+                if (toolName && callId && activeRealtimeSessionIdRef.current) {
+                  const callKey = `${activeRealtimeSessionIdRef.current}:${callId}`;
+                  if (processedRealtimeCallIdsRef.current.has(callKey)) return;
+                  processedRealtimeCallIdsRef.current.add(callKey);
+                  api.executeRealtimeToolCall(activeRealtimeSessionIdRef.current, toolName, callId, rawArgs).then((result) => {
                     if (result.proposal) {
                       setPendingProposal(result.proposal);
                       setState('confirmation_pending');
@@ -710,6 +781,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             if (sdpRes.mode === 'openai_realtime' && sdpRes.sdpAnswer) {
               await pc.setRemoteDescription({ type: 'answer', sdp: sdpRes.sdpAnswer });
               activeRealtimeSessionIdRef.current = sdpRes.sessionId || null;
+              processedRealtimeEventIdsRef.current.clear();
+              processedRealtimeCallIdsRef.current.clear();
+              realtimeTranscriptBuffersRef.current.clear();
               setPrivacyMode('openai_realtime');
               webrtcConnected = true;
               setState('armed');

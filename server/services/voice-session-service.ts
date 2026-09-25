@@ -6,8 +6,12 @@ import { jamiActionService } from './jami-action-service';
 import { jamiOrchestrator } from './jami-orchestrator';
 import { jamiRepo } from '../repositories/jami-repository';
 import { aiWalletRepo } from '../repositories/ai-wallet-repository';
-import { vndToMilliVnd, calculateTokenCostMilliVnd } from '../ai/model-pricing';
-import { getAllOpenAiToolDefinitions } from '../ai/tool-registry';
+import { UserRepository } from '../repositories/user-repository';
+import { vndToMilliVnd, estimateRealtimeDurationCostMilliVnd, PRICING_VERSION, REALTIME_DURATION_ESTIMATOR_VERSION } from '../ai/model-pricing';
+import { executeRegisteredTool, getAllOpenAiToolDefinitions } from '../ai/tool-registry';
+import { getNowInTimeZone, resolveUserTimeZone } from '../lib/date-time';
+
+const userRepo = UserRepository.getInstance();
 
 export interface VoiceRequestLogRecord {
   id: string;
@@ -71,7 +75,7 @@ export class VoiceSessionService {
           idempotencyKey: `cancel_dup_${sess.reservationIdempotencyKey}`,
           success: false,
           reason: 'Hủy phiên cũ để khởi tạo phiên Realtime mới',
-        }).catch(() => {});
+        }).catch((err) => console.error('[VoiceSessionService] duplicate-session reconciliation failed', { userId, error: err instanceof Error ? err.message : String(err) }));
       }
     }
 
@@ -92,12 +96,12 @@ export class VoiceSessionService {
             idempotencyKey: `cancel_dup_${r.reservation_idempotency_key}`,
             success: false,
             reason: 'Hủy phiên cũ để khởi tạo phiên Realtime mới (DB)',
-          }).catch(() => {});
+          }).catch((err) => console.error('[VoiceSessionService] duplicate DB session reconciliation failed', { sessionId: r.id, error: err instanceof Error ? err.message : String(err) }));
 
           await db.execute(
             `UPDATE ai_realtime_sessions SET status = 'cancelled', ended_at = NOW(3), updated_at = NOW(3) WHERE id = ?`,
             [r.id]
-          ).catch(() => {});
+          ).catch((err) => console.error('[VoiceSessionService] duplicate DB session status update failed', { sessionId: r.id, error: err instanceof Error ? err.message : String(err) }));
         }
       } catch (err: any) {
         console.warn('[VoiceSessionService] cancelActiveSessionsForUser error:', err.message);
@@ -288,7 +292,7 @@ export class VoiceSessionService {
           idempotencyKey: `rel_${idempotencyKey}`,
           success: false,
           reason: 'Giải phóng tạm giữ do lỗi ngoại lệ WebRTC',
-        }).catch(() => {});
+        }).catch((err) => console.error('[VoiceSessionService] realtime setup reconciliation failed', { sessionId, error: err instanceof Error ? err.message : String(err) }));
       }
 
       const memSess = this.inMemorySessions.get(sessionId);
@@ -451,7 +455,7 @@ export class VoiceSessionService {
             idempotencyKey: `rel_${idempotencyKey}`,
             success: false,
             reason: 'Giải phóng tạm giữ do lỗi tạo client secret',
-          }).catch(() => {});
+          }).catch((err) => console.error('[VoiceSessionService] realtime client-secret reconciliation failed', { sessionId, error: err instanceof Error ? err.message : String(err) }));
         }
 
         const memSess = this.inMemorySessions.get(sessionId);
@@ -464,7 +468,7 @@ export class VoiceSessionService {
           await db.execute(
             `UPDATE ai_realtime_sessions SET status = 'failed', ended_at = NOW(3), updated_at = NOW(3) WHERE id = ?`,
             [sessionId]
-          ).catch(() => {});
+          ).catch((err) => console.error('[VoiceSessionService] realtime setup status update failed', { sessionId, error: err instanceof Error ? err.message : String(err) }));
         }
 
         return {
@@ -577,7 +581,6 @@ export class VoiceSessionService {
     userId: string,
     sessionId: string,
     options?: {
-      rawUsage?: any;
       reason?: string;
     }
   ): Promise<{ success: boolean; message: string }> {
@@ -586,12 +589,13 @@ export class VoiceSessionService {
       reservationIdempotencyKey: string;
       reservedMilliVnd: bigint;
       status: string;
+      startedAt?: Date;
     } | null = null;
 
     if (db.isHealthy()) {
       try {
         const rows = await db.query<any>(
-          `SELECT user_id, reservation_idempotency_key, reserved_milli_vnd, status
+          `SELECT user_id, reservation_idempotency_key, reserved_milli_vnd, status, started_at
            FROM ai_realtime_sessions WHERE id = ? LIMIT 1`,
           [sessionId]
         );
@@ -601,6 +605,7 @@ export class VoiceSessionService {
             reservationIdempotencyKey: rows[0].reservation_idempotency_key,
             reservedMilliVnd: BigInt(rows[0].reserved_milli_vnd || '0'),
             status: rows[0].status,
+            startedAt: rows[0].started_at ? new Date(rows[0].started_at) : undefined,
           };
         }
       } catch (err: any) {
@@ -616,6 +621,7 @@ export class VoiceSessionService {
           reservationIdempotencyKey: mem.reservationIdempotencyKey,
           reservedMilliVnd: mem.reservedMilliVnd,
           status: mem.status,
+          startedAt: mem.startedAt,
         };
       }
     }
@@ -632,58 +638,50 @@ export class VoiceSessionService {
       return { success: true, message: 'Phiên thoại đã được kết thúc trước đó.' };
     }
 
-    // Server-authoritative cost calculation: compute from usage tokens or elapsed duration, clamped to reservation
-    let calculatedCost = 0n;
-    if (options?.rawUsage) {
-      try {
-        const u = options.rawUsage;
-        const promptTokens = u.input_tokens || u.promptTokens || u.total_tokens?.input_tokens || 0;
-        const completionTokens = u.output_tokens || u.completionTokens || u.total_tokens?.output_tokens || 0;
-        const audioIn = u.input_token_details?.audio_tokens || u.audioInputTokens || 0;
-        const audioOut = u.output_token_details?.audio_tokens || u.audioOutputTokens || 0;
-        const cached = u.input_token_details?.cached_tokens || u.cachedTokens || 0;
-        if (promptTokens > 0 || completionTokens > 0 || audioIn > 0 || audioOut > 0) {
-          calculatedCost = calculateTokenCostMilliVnd('gpt-realtime', {
-            promptTokens,
-            completionTokens,
-            audioInputTokens: audioIn,
-            audioOutputTokens: audioOut,
-            cachedTokens: cached,
-          }).costMilliVnd;
-        }
-      } catch (err: any) {
-        console.warn('[VoiceSessionService] Error calculating usage-based cost:', err.message);
+    if (db.isHealthy()) {
+      const claim = await db.execute(
+        `UPDATE ai_realtime_sessions SET status = 'finalizing', updated_at = NOW(3)
+         WHERE id = ? AND user_id = ? AND status = 'active'`,
+        [sessionId, userId]
+      );
+      if ((claim?.affectedRows || 0) !== 1) {
+        return { success: false, message: 'Phiên thoại đang được kết thúc bởi một yêu cầu khác.' };
       }
     }
 
-    // Default duration-based safety charge if no usage tokens reported
-    if (calculatedCost === 0n) {
-      const memSess = this.inMemorySessions.get(sessionId);
-      const startTime = memSess?.startedAt ? memSess.startedAt.getTime() : Date.now();
-      const elapsedMinutes = Math.max(0.1, (Date.now() - startTime) / 60000);
-      calculatedCost = BigInt(Math.ceil(elapsedMinutes * 300_000));
-    }
+    // Server-authoritative cost calculation. WebRTC usage is not trusted from the browser.
+    const memSess = this.inMemorySessions.get(sessionId);
+    const startObj = sessionData.startedAt || memSess?.startedAt || new Date();
+    const startTime = startObj.getTime();
+    const durationMs = Math.max(0, Date.now() - startTime);
+    const calculatedCost = estimateRealtimeDurationCostMilliVnd(durationMs);
 
     // Clamp actual cost to reserved amount to prevent overdraft
     const actualCost = calculatedCost <= sessionData.reservedMilliVnd ? calculatedCost : sessionData.reservedMilliVnd;
 
-    await aiWalletRepo.reconcileCredit({
-      userId,
-      reservedMilliVnd: sessionData.reservedMilliVnd,
-      actualCostMilliVnd: actualCost,
-      isUnlimited: sessionData.reservedMilliVnd === 0n,
-      idempotencyKey: `fin_${sessionData.reservationIdempotencyKey}`,
-      success: true,
-      reason: options?.reason || 'Kết thúc phiên thoại Realtime',
-    }).catch((reconcileErr: any) => {
-      console.warn('[VoiceSessionService] reconcileCredit on finalize failed:', reconcileErr.message);
-    });
+    try {
+      await aiWalletRepo.reconcileCredit({
+        userId,
+        reservedMilliVnd: sessionData.reservedMilliVnd,
+        actualCostMilliVnd: actualCost,
+        isUnlimited: sessionData.reservedMilliVnd === 0n,
+        idempotencyKey: `fin_${sessionData.reservationIdempotencyKey}`,
+        success: true,
+        reason: options?.reason || 'Kết thúc phiên thoại Realtime',
+      });
+    } catch (reconcileErr: any) {
+      console.error('[VoiceSessionService] reconcileCredit on finalize failed:', reconcileErr.message);
+      if (db.isHealthy()) {
+        await db.execute(`UPDATE ai_realtime_sessions SET status = 'reconciliation_failed', updated_at = NOW(3) WHERE id = ? AND user_id = ?`, [sessionId, userId]);
+      }
+      return { success: false, message: 'Chưa thể đối soát chi phí phiên thoại. Hệ thống sẽ thử lại an toàn.' };
+    }
 
     const mem = this.inMemorySessions.get(sessionId);
     if (mem) {
       mem.status = 'completed';
       mem.actualCostMilliVnd = actualCost;
-      mem.rawUsage = options?.rawUsage;
+      mem.rawUsage = { estimated: true, source: 'server_duration', durationMs, pricingVersion: PRICING_VERSION, estimatorVersion: REALTIME_DURATION_ESTIMATOR_VERSION };
       mem.endedAt = new Date();
     }
 
@@ -699,7 +697,7 @@ export class VoiceSessionService {
            WHERE id = ?`,
           [
             actualCost.toString(),
-            options?.rawUsage ? JSON.stringify(options.rawUsage) : null,
+            JSON.stringify({ estimated: true, source: 'server_duration', durationMs, pricingVersion: PRICING_VERSION, estimatorVersion: REALTIME_DURATION_ESTIMATOR_VERSION }),
             sessionId,
           ]
         );
@@ -791,7 +789,7 @@ export class VoiceSessionService {
       }
     }, intervalMs);
     // Initial run immediately
-    this.sweepStaleSessions().catch(() => {});
+    this.sweepStaleSessions().catch((err) => console.error('[VoiceSessionService] initial stale session sweep failed', { error: err instanceof Error ? err.message : String(err) }));
   }
 
   public stopStaleSessionSweeper(): void {
@@ -879,13 +877,6 @@ export class VoiceSessionService {
       };
     }
 
-    // Save user message to MySQL
-    await jamiRepo.saveMessage(userId, {
-      conversationId: options?.conversationId,
-      sender: 'user',
-      text: cleanTranscript,
-    });
-
     const lower = cleanTranscript.toLowerCase();
 
     // Check if the user is confirming or rejecting a pending proposal
@@ -901,20 +892,19 @@ export class VoiceSessionService {
       lower === 'yep' ||
       lower === 'xác nhận lưu';
 
-    const isRejectPhrase =
-      lower.includes('không') ||
-      lower.includes('hủy') ||
-      lower.includes('thôi') ||
-      lower.includes('bỏ qua') ||
-      lower.includes('đừng') ||
-      lower === 'no' ||
-      lower === 'cancel';
+    const pendingDecision = classifyPendingDecision(lower);
+    const isRejectPhrase = pendingDecision === 'reject';
+    const isModifyPhrase = pendingDecision === 'modify';
 
-    if (isConfirmPhrase || isRejectPhrase || options?.pendingProposalId) {
+    if (options?.pendingProposalId && (isConfirmPhrase || isRejectPhrase)) {
       const decision = isRejectPhrase ? 'reject' : 'confirm';
-      const targetProposal = options?.pendingProposalId
-        ? await jamiActionService.getProposalById(userId, options.pendingProposalId)
-        : await jamiActionService.getLatestPendingProposal(userId);
+      await jamiRepo.saveMessage(userId, {
+        conversationId: options?.conversationId,
+        sender: 'user',
+        text: cleanTranscript,
+        clientMessageId: options?.clientTurnId,
+      });
+      const targetProposal = await jamiActionService.getProposalById(userId, options.pendingProposalId);
 
       if (targetProposal) {
         const actionRes = await jamiActionService.handleProposalDecision(
@@ -967,12 +957,29 @@ export class VoiceSessionService {
       }
     }
 
+    // A proposed edit is new intent, never an implicit rejection.
+    if (options?.pendingProposalId && isModifyPhrase) {
+      return jamiOrchestrator.processTurn({
+        userId, message: cleanTranscript, conversationId: options.conversationId,
+        clientMessageId: options.clientTurnId, source: 'voice',
+      });
+    }
+
     // Check direct command intents
     if (lower.includes('mở lịch') || lower.includes('thời khóa biểu') || lower.includes('xem lịch')) {
-      const actionRes = await jamiActionService.executeTool(userId, 'navigate_to', { route: '/timetable' });
+      await jamiRepo.saveMessage(userId, {
+        conversationId: options?.conversationId,
+        sender: 'user',
+        text: cleanTranscript,
+        clientMessageId: options?.clientTurnId,
+      });
+      const user = await userRepo.findById(userId);
+      const timeInfo = getNowInTimeZone(resolveUserTimeZone(user?.timezone));
+      const actionRes = await executeRegisteredTool({ userId, conversationId: options?.conversationId, source: 'voice', clientTurnId: options?.clientTurnId, timezone: timeInfo.timeZone, now: timeInfo.now }, 'navigate_to', { route: '/timetable' });
       const replyText = 'Jami đang mở thời khóa biểu của bạn đây.';
-      const replyMsg = await jamiRepo.saveMessage(userId, {
-        sender: 'jami',
+       const replyMsg = await jamiRepo.saveMessage(userId, {
+         conversationId: options?.conversationId,
+         sender: 'jami',
         text: replyText,
         emotion: 'guiding',
       });
@@ -994,12 +1001,21 @@ export class VoiceSessionService {
 
     if (lower.includes('tập trung') || lower.includes('hẹn giờ') || lower.includes('pomodoro')) {
       const match = lower.match(/(\d+)\s*phút/);
+      await jamiRepo.saveMessage(userId, {
+        conversationId: options?.conversationId,
+        sender: 'user',
+        text: cleanTranscript,
+        clientMessageId: options?.clientTurnId,
+      });
       const minutes = match ? parseInt(match[1], 10) : 25;
-      const actionRes = await jamiActionService.executeTool(userId, 'start_focus_timer', { plannedMinutes: minutes });
+      const user = await userRepo.findById(userId);
+      const timeInfo = getNowInTimeZone(resolveUserTimeZone(user?.timezone));
+      const actionRes = await executeRegisteredTool({ userId, conversationId: options?.conversationId, source: 'voice', clientTurnId: options?.clientTurnId, timezone: timeInfo.timeZone, now: timeInfo.now }, 'start_focus_timer', { plannedMinutes: minutes });
 
       const replyText = `Đã bắt đầu phiên tập trung ${minutes} phút cho bạn. Hãy sẵn sàng nhé!`;
-      const replyMsg = await jamiRepo.saveMessage(userId, {
-        sender: 'jami',
+       const replyMsg = await jamiRepo.saveMessage(userId, {
+         conversationId: options?.conversationId,
+         sender: 'jami',
         text: replyText,
         emotion: 'focus',
       });
@@ -1025,6 +1041,7 @@ export class VoiceSessionService {
         userId,
         message: cleanTranscript,
         conversationId: options?.conversationId,
+        clientMessageId: options?.clientTurnId,
         source: 'voice',
       });
 
@@ -1046,65 +1063,41 @@ export class VoiceSessionService {
         success: true,
       };
     } catch (err: any) {
-      console.warn('[VoiceSessionService] Orchestrator voice turn error, falling back:', err.message);
-    }
-
-    // Local heuristic fallback for common learning commands
-    let replyText: string;
-    let emotion: string;
-    let requiresConfirmation = false;
-    let proposal: any = undefined;
-    let clientAction: any = undefined;
-
-    if (lower.includes('toán') && (lower.includes('xếp') || lower.includes('học') || lower.includes('lịch'))) {
-      const match = lower.match(/(\d+)\s*phút/);
-      const minutes = match ? parseInt(match[1], 10) : 45;
-      const previewRes = await jamiActionService.executeTool(userId, 'preview_create_task', {
-        title: `Ôn tập Toán học (${minutes} phút)`,
-        subjectName: 'Toán học',
-        estimatedMinutes: minutes,
-        priority: 'high',
+      console.warn('[VoiceSessionService] Orchestrator voice turn error:', err.message);
+      const replyText = 'Jami đang gặp gián đoạn kết nối với máy chủ AI. Bạn vui lòng thử lại câu hỏi sau giây lát nhé.';
+      const replyMsg = await jamiRepo.saveMessage(userId, {
+        conversationId: options?.conversationId,
+        sender: 'jami',
+        text: replyText,
+        emotion: 'speaking',
       });
-      replyText = previewRes.message;
-      emotion = 'reminding';
-      requiresConfirmation = true;
-      proposal = previewRes.proposal;
-    } else if (lower.includes('báo cáo') || lower.includes('kết quả') || lower.includes('tiến độ')) {
-      const repRes = await jamiActionService.executeTool(userId, 'read_report', {});
-      replyText = repRes.message;
-      emotion = 'speaking';
-      clientAction = repRes.clientAction;
-    } else {
-      replyText = 'Jami đã ghi nhận câu hỏi của bạn. Hãy kiểm tra lại các nhiệm vụ và lịch học trên ứng dụng nhé!';
-      emotion = 'speaking';
+
+      await this.logVoiceRequest(userId, {
+        purpose: 'voice_error_fallback',
+        transcript: cleanTranscript,
+        mode: options?.mode || 'error_fallback',
+        clientTurnId: options?.clientTurnId,
+        errorCode: 'ORCHESTRATOR_ERROR',
+      });
+
+      return {
+        replyText,
+        emotion: 'speaking',
+        requiresConfirmation: false,
+        replyMessage: replyMsg,
+        success: false,
+      };
     }
-
-    const replyMsg = await jamiRepo.saveMessage(userId, {
-      conversationId: options?.conversationId,
-      sender: 'jami',
-      text: replyText,
-      emotion,
-      requiresConfirmation,
-      confirmationSummary: requiresConfirmation ? replyText : undefined,
-      proposalId: proposal?.id,
-    });
-
-    await this.logVoiceRequest(userId, {
-      purpose: 'local_fallback_command',
-      transcript: cleanTranscript,
-      mode: options?.mode || 'local_fallback',
-      clientTurnId: options?.clientTurnId,
-    });
-
-    return {
-      replyText,
-      emotion,
-      requiresConfirmation,
-      proposal,
-      clientAction,
-      replyMessage: replyMsg,
-    };
   }
+}
+
+function classifyPendingDecision(text: string): 'confirm' | 'reject' | 'modify' | 'normal' {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
+  const reject = new Set(['không', 'không đồng ý', 'hủy', 'hủy đi', 'bỏ qua', 'thôi', 'đừng lưu', 'cancel', 'no']);
+  if (reject.has(normalized)) return 'reject';
+  if (/^(không|hủy|thôi|no|cancel)[,\s].+/.test(normalized) || /\b(đổi|sửa|chuyển sang|thay thành)\b/.test(normalized)) return 'modify';
+  if (['ok', 'oke', 'yes', 'yep', 'có', 'đồng ý', 'xác nhận', 'làm đi', 'được rồi', 'xác nhận lưu'].includes(normalized)) return 'confirm';
+  return 'normal';
 }
 
 export const voiceSessionService = VoiceSessionService.getInstance();

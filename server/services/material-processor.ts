@@ -246,7 +246,7 @@ export class MaterialProcessor {
         });
 
         const result = await aiGateway.executeStructured(
-          'quiz_draft',
+          'material_quiz_generation',
           { title: material.title, subjectName: material.subjectName, summaryText, questionCount, difficulty },
           QuizResponseSchema,
           { userId }

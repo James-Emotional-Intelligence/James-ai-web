@@ -76,6 +76,7 @@ export interface TimetableEntry {
   endLocalTime: string;   // "11:45"
   room?: string;
   location?: string;
+  notes?: string;
   commuteBeforeMinutes: number;
   commuteAfterMinutes: number;
   isSkippedThisWeek?: boolean;
@@ -227,6 +228,8 @@ export interface BusyEvent {
   recurrenceRule?: string;
   timezone: string;
   isFixed: boolean;
+  isAllDay?: boolean;
+  notes?: string;
   location?: string;
   commuteBeforeMinutes?: number;
   commuteAfterMinutes?: number;
@@ -403,8 +406,10 @@ export interface MistakeNotebookEntry {
   questionDataJson?: string;
   selectedAnswer?: string;
   correctAnswer: string;
+  correctSolution?: string;
   mistakeReason: MistakeReason;
   correctExplanation?: string;
+  lessonLearned?: string;
   difficulty: MistakeDifficulty;
   sourceType: MistakeSourceType;
   sourceId?: string;
@@ -492,6 +497,7 @@ export interface StudyTask {
   examId?: string;
   title: string;
   objective?: string;
+  notes?: string;
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
   priority: 'low' | 'medium' | 'high';
   difficulty: 'easy' | 'medium' | 'hard';
@@ -909,6 +915,7 @@ export interface JamiActionProposal {
   preview?: any;
   status: 'pending' | 'confirmed' | 'executed' | 'rejected' | 'expired' | 'failed';
   idempotencyKey?: string;
+  executionKey?: string;
   expiresAt: string;
   executedAt?: string;
   createdAt: string;

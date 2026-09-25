@@ -1,4 +1,5 @@
 import { db } from '../db/mysql';
+import type { DbExecutor } from '../db/mysql';
 import { isProduction, isDatabaseRequired } from '../config/env';
 import { TimetableEntry, BusyEvent, BusyEventException, AvailabilityRule, SchoolTimetable, TimetableEntryException } from '../../shared/types';
 import crypto from 'crypto';
@@ -65,7 +66,7 @@ export class TimetableRepository {
     return list.find((t) => t.isActive) || list[0] || null;
   }
 
-  public async createTimetable(userId: string, data: Partial<SchoolTimetable>): Promise<SchoolTimetable> {
+  public async createTimetable(userId: string, data: Partial<SchoolTimetable>, executor?: DbExecutor): Promise<SchoolTimetable> {
     const id = 'tt_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const timetable: SchoolTimetable = {
       id,
@@ -78,13 +79,14 @@ export class TimetableRepository {
       entries: [],
     };
 
-    if (db.isHealthy()) {
+    if (executor || db.isHealthy()) {
+      const writer = executor || db;
       // If active, optionally unset other active timetables
       if (timetable.isActive) {
-        await db.execute('UPDATE school_timetables SET is_active = FALSE WHERE user_id = ?', [userId]);
+        await writer.execute('UPDATE school_timetables SET is_active = FALSE WHERE user_id = ?', [userId]);
       }
 
-      await db.execute(
+      await writer.execute(
         `INSERT INTO school_timetables (id, user_id, name, valid_from, valid_to, timezone, is_active)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -174,7 +176,7 @@ export class TimetableRepository {
     let entries: TimetableEntry[];
     if (db.isHealthy()) {
       let query = `
-        SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.day_of_week, e.start_local_time, e.end_local_time,
+        SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.notes, e.day_of_week, e.start_local_time, e.end_local_time,
                e.location, e.commute_before_minutes, e.commute_after_minutes,
                s.name as subject_name, s.color as subject_color
         FROM school_timetable_entries e
@@ -204,6 +206,7 @@ export class TimetableRepository {
         subjectColor: r.subject_color || '#16A34A',
         title: r.title,
         teacher: r.teacher || undefined,
+        notes: r.notes || undefined,
         room: r.location || '',
         location: r.location || '',
         startLocalTime: r.start_local_time,
@@ -240,7 +243,7 @@ export class TimetableRepository {
   public async getEntryById(userId: string, entryId: string): Promise<TimetableEntry | null> {
     if (db.isHealthy()) {
       const rows = await db.query<any>(
-        `SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.day_of_week, e.start_local_time, e.end_local_time,
+        `SELECT e.id, e.timetable_id, e.subject_id, e.title, e.teacher, e.notes, e.day_of_week, e.start_local_time, e.end_local_time,
                 e.location, e.commute_before_minutes, e.commute_after_minutes,
                 s.name as subject_name, s.color as subject_color
          FROM school_timetable_entries e
@@ -260,6 +263,7 @@ export class TimetableRepository {
         subjectColor: r.subject_color || '#16A34A',
         title: r.title,
         teacher: r.teacher || undefined,
+        notes: r.notes || undefined,
         room: r.location || '',
         location: r.location || '',
         startLocalTime: r.start_local_time,
@@ -461,14 +465,16 @@ export class TimetableRepository {
     return false;
   }
 
-  public async createTimetableEntry(userId: string, data: Partial<TimetableEntry>): Promise<TimetableEntry> {
+  public async createTimetableEntry(userId: string, data: Partial<TimetableEntry>, executor?: DbExecutor): Promise<TimetableEntry> {
     let targetTimetableId = data.timetableId;
     if (!targetTimetableId) {
-      const active = await this.getActiveTimetable(userId);
+      const active = executor
+        ? ((await executor.query<any>('SELECT id FROM school_timetables WHERE user_id = ? ORDER BY is_active DESC LIMIT 1', [userId]))[0] as { id: string } | undefined)
+        : await this.getActiveTimetable(userId);
       if (active) {
         targetTimetableId = active.id;
       } else {
-        const created = await this.createTimetable(userId, { name: 'Thời khóa biểu chính khóa', isActive: true });
+        const created = await this.createTimetable(userId, { name: 'Thời khóa biểu chính khóa', isActive: true }, executor);
         targetTimetableId = created.id;
       }
     }
@@ -490,10 +496,14 @@ export class TimetableRepository {
       commuteAfterMinutes: data.commuteAfterMinutes ?? 15,
     };
 
-    if (db.isHealthy()) {
+    if (executor || db.isHealthy()) {
+      const writer = executor || db;
       // Validate subject ownership if subjectId provided
       if (entry.subjectId) {
-        const sub = await db.query<any>('SELECT id, name, color FROM subjects WHERE id = ? AND user_id = ?', [entry.subjectId, userId]);
+        const subResult = executor
+          ? await executor.query<any>('SELECT id, name, color FROM subjects WHERE id = ? AND user_id = ?', [entry.subjectId, userId])
+          : await db.query<any>('SELECT id, name, color FROM subjects WHERE id = ? AND user_id = ?', [entry.subjectId, userId]);
+        const sub = executor ? (subResult[0] as any[]) : subResult;
         if (sub.length > 0) {
           entry.subjectName = sub[0].name;
           entry.subjectColor = sub[0].color;
@@ -502,15 +512,16 @@ export class TimetableRepository {
         }
       }
 
-      await db.execute(
-        `INSERT INTO school_timetable_entries (id, timetable_id, subject_id, title, teacher, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      await writer.execute(
+        `INSERT INTO school_timetable_entries (id, timetable_id, subject_id, title, teacher, notes, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.id,
           entry.timetableId,
           entry.subjectId || null,
           entry.title,
           entry.teacher || null,
+          entry.notes || null,
           entry.dayOfWeek,
           entry.startLocalTime,
           entry.endLocalTime,
@@ -547,6 +558,7 @@ export class TimetableRepository {
 
       if (data.title !== undefined) { sets.push('title = ?'); params.push(data.title); }
       if (data.teacher !== undefined) { sets.push('teacher = ?'); params.push(data.teacher || null); }
+      if (data.notes !== undefined) { sets.push('notes = ?'); params.push(data.notes || null); }
       if (data.subjectId !== undefined) {
         if (data.subjectId) {
           const sub = await db.query<any>('SELECT id FROM subjects WHERE id = ? AND user_id = ?', [data.subjectId, userId]);
@@ -584,9 +596,10 @@ export class TimetableRepository {
     return item;
   }
 
-  public async deleteTimetableEntry(userId: string, id: string): Promise<boolean> {
-    if (db.isHealthy()) {
-      const res = await db.execute(
+  public async deleteTimetableEntry(userId: string, id: string, executor?: DbExecutor): Promise<boolean> {
+    if (executor || db.isHealthy()) {
+      const writer = executor || db;
+      const res = await writer.execute(
         `DELETE e FROM school_timetable_entries e
          JOIN school_timetables t ON e.timetable_id = t.id
          WHERE e.id = ? AND t.user_id = ?`,
@@ -698,14 +711,15 @@ export class TimetableRepository {
 
           await conn.execute(
             `INSERT INTO school_timetable_entries
-             (id, timetable_id, subject_id, title, teacher, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, timetable_id, subject_id, title, teacher, notes, day_of_week, start_local_time, end_local_time, location, commute_before_minutes, commute_after_minutes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               entryId,
               timetableId,
               item.subjectId || null,
               item.title.trim(),
               item.teacher || null,
+              item.notes || null,
               dayOfWeek,
               startLocalTime,
               endLocalTime,
@@ -722,6 +736,7 @@ export class TimetableRepository {
             subjectId: item.subjectId,
             title: item.title.trim(),
             teacher: item.teacher,
+            notes: item.notes,
             startLocalTime,
             endLocalTime,
             location,
@@ -768,7 +783,7 @@ export class TimetableRepository {
   public async getBusyEvents(userId: string, from?: string, to?: string): Promise<BusyEvent[]> {
     if (db.isHealthy()) {
       let query = `
-        SELECT b.id, b.user_id, b.type, b.title, b.starts_at, b.ends_at, b.recurrence_rule, b.timezone,
+        SELECT b.id, b.user_id, b.type, b.title, b.notes, b.is_all_day, b.starts_at, b.ends_at, b.recurrence_rule, b.timezone,
                b.is_fixed, b.location, b.commute_before_minutes, b.commute_after_minutes, b.source, s.name as subject_name
         FROM busy_events b
         LEFT JOIN subjects s ON b.title = s.name
@@ -790,6 +805,8 @@ export class TimetableRepository {
         userId: r.user_id,
         type: r.type,
         title: r.title,
+        notes: r.notes || undefined,
+        isAllDay: Boolean(r.is_all_day),
         startsAt: r.starts_at?.toISOString?.() || String(r.starts_at),
         endsAt: r.ends_at?.toISOString?.() || String(r.ends_at),
         recurrenceRule: r.recurrence_rule || undefined,
@@ -810,7 +827,7 @@ export class TimetableRepository {
     return this.demoBusyEvents.get(userId) || [];
   }
 
-  public async createBusyEvent(userId: string, event: Partial<BusyEvent>): Promise<BusyEvent> {
+  public async createBusyEvent(userId: string, event: Partial<BusyEvent>, executor?: DbExecutor): Promise<BusyEvent> {
     const id = 'busy_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const now = new Date();
     const startsAt = event.startsAt || now.toISOString();
@@ -821,6 +838,8 @@ export class TimetableRepository {
       userId,
       type: event.type || 'personal',
       title: (event.title || 'Việc bận').trim(),
+      notes: event.notes,
+      isAllDay: event.isAllDay ?? false,
       startsAt,
       endsAt,
       recurrenceRule: event.recurrenceRule || undefined,
@@ -833,15 +852,18 @@ export class TimetableRepository {
       source: event.source || 'user',
     };
 
-    if (db.isHealthy()) {
-      await db.execute(
-        `INSERT INTO busy_events (id, user_id, type, title, starts_at, ends_at, recurrence_rule, timezone, is_fixed, location, commute_before_minutes, commute_after_minutes, source, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
+    if (executor || db.isHealthy()) {
+      const writer = executor || db;
+      await writer.execute(
+        `INSERT INTO busy_events (id, user_id, type, title, notes, is_all_day, starts_at, ends_at, recurrence_rule, timezone, is_fixed, location, commute_before_minutes, commute_after_minutes, source, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`,
         [
           created.id,
           userId,
           created.type,
           created.title,
+          created.notes || null,
+          created.isAllDay ? 1 : 0,
           new Date(created.startsAt),
           new Date(created.endsAt),
           created.recurrenceRule || null,
@@ -875,6 +897,8 @@ export class TimetableRepository {
 
       if (data.title !== undefined) { sets.push('title = ?'); params.push(data.title); }
       if (data.type !== undefined) { sets.push('type = ?'); params.push(data.type); }
+      if (data.notes !== undefined) { sets.push('notes = ?'); params.push(data.notes || null); }
+      if (data.isAllDay !== undefined) { sets.push('is_all_day = ?'); params.push(data.isAllDay ? 1 : 0); }
       if (data.startsAt !== undefined) { sets.push('starts_at = ?'); params.push(new Date(data.startsAt)); }
       if (data.endsAt !== undefined) { sets.push('ends_at = ?'); params.push(new Date(data.endsAt)); }
       if (data.recurrenceRule !== undefined) { sets.push('recurrence_rule = ?'); params.push(data.recurrenceRule || null); }
@@ -905,10 +929,11 @@ export class TimetableRepository {
     return item;
   }
 
-  public async deleteBusyEvent(userId: string, id: string): Promise<boolean> {
-    if (db.isHealthy()) {
-      await db.execute('DELETE FROM busy_event_exceptions WHERE busy_event_id = ? AND user_id = ?', [id, userId]);
-      const res = await db.execute('DELETE FROM busy_events WHERE id = ? AND user_id = ?', [id, userId]);
+  public async deleteBusyEvent(userId: string, id: string, executor?: DbExecutor): Promise<boolean> {
+    if (executor || db.isHealthy()) {
+      const writer = executor || db;
+      await writer.execute('DELETE FROM busy_event_exceptions WHERE busy_event_id = ? AND user_id = ?', [id, userId]);
+      const res = await writer.execute('DELETE FROM busy_events WHERE id = ? AND user_id = ?', [id, userId]);
       return res?.affectedRows > 0;
     }
 
