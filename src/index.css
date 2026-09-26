@@ -184,8 +184,11 @@ body {
 }
 
 .jami-page-transition {
-  animation: jamiPageSlideIn 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: opacity, transform;
+  /* No 'forwards' fill-mode: after the animation completes the element returns
+     to transform:none, so it no longer creates a new stacking context.
+     Child position:fixed elements (modals, dropdowns) will anchor to the
+     viewport correctly instead of being clipped inside this wrapper. */
+  animation: jamiPageSlideIn 280ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 4. Scroll Reveal (Fade-up via IntersectionObserver) */

@@ -68,6 +68,93 @@ describe('ModalPortal Accessibility, Scroll Lock & Z-Index Isolation Tests', () 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(closed).toBe(true);
   });
+
+  it('4. Renders into document.body (portal), not inside any ancestor element', () => {
+    const { container } = render(
+      <ModalPortal isOpen={true} onClose={() => {}} title="Portal Test">
+        <p>Content in portal</p>
+      </ModalPortal>
+    );
+
+    // The rendered container of the component should be empty (content went to portal)
+    expect(container.children.length).toBe(0);
+    // But document.body should have the dialog
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain('Portal Test');
+  });
+
+  it('5. data-modal-open is cleared when isOpen transitions from true to false', () => {
+    const { rerender } = render(
+      <ModalPortal isOpen={true} onClose={() => {}}>
+        <div>Open</div>
+      </ModalPortal>
+    );
+    expect(document.body.getAttribute('data-modal-open')).toBe('true');
+
+    rerender(
+      <ModalPortal isOpen={false} onClose={() => {}}>
+        <div>Closed</div>
+      </ModalPortal>
+    );
+    expect(document.body.getAttribute('data-modal-open')).toBeNull();
+  });
+
+  it('6. Body overflow is hidden while open and restored to empty string when closed', () => {
+    document.body.style.overflow = 'auto';
+
+    const { rerender } = render(
+      <ModalPortal isOpen={true} onClose={() => {}}>
+        <div>Test</div>
+      </ModalPortal>
+    );
+    expect(document.body.style.overflow).toBe('hidden');
+
+    rerender(
+      <ModalPortal isOpen={false} onClose={() => {}}>
+        <div>Test</div>
+      </ModalPortal>
+    );
+    // Restored to previous value ('auto')
+    expect(document.body.style.overflow).toBe('auto');
+    document.body.style.overflow = '';
+  });
+
+  it('7. Renders title and subtitle in header when provided', () => {
+    render(
+      <ModalPortal isOpen={true} onClose={() => {}} title="Modal Title" subtitle="SUBTITLE TAG">
+        <span>body</span>
+      </ModalPortal>
+    );
+    expect(screen.getByText('Modal Title')).toBeDefined();
+    expect(screen.getByText('SUBTITLE TAG')).toBeDefined();
+  });
+
+  it('8. Close (X) button triggers onClose', () => {
+    let closed = false;
+    render(
+      <ModalPortal isOpen={true} onClose={() => { closed = true; }} title="Closeable">
+        <span>body</span>
+      </ModalPortal>
+    );
+    const closeBtn = screen.getByLabelText('Đóng cửa sổ');
+    fireEvent.click(closeBtn);
+    expect(closed).toBe(true);
+  });
+
+  it('9. Clicking the backdrop (outside panel) triggers onClose', () => {
+    let closed = false;
+    render(
+      <ModalPortal isOpen={true} onClose={() => { closed = true; }} title="Backdrop Test">
+        <span>inside</span>
+      </ModalPortal>
+    );
+    const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement;
+    // The backdrop is the first child of the dialog (aria-hidden)
+    const backdrop = dialog.querySelector('[aria-hidden="true"]') as HTMLElement;
+    fireEvent.click(backdrop);
+    expect(closed).toBe(true);
+  });
 });
 
 describe('Theme Management ("Hai Bà Trưng" & "Default") Tests', () => {

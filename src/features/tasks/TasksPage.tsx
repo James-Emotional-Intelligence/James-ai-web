@@ -23,6 +23,7 @@ import { StudyTask, Subject } from '../../../shared/types';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportTasksToPdf } from '../../lib/pdf-export-service';
 import confetti from '../../lib/safe-confetti';
+import { ModalPortal } from '../../components/common/ModalPortal';
 
 export const TasksPage: React.FC = () => {
   const navigate = useNavigate();
@@ -411,144 +412,134 @@ export const TasksPage: React.FC = () => {
         </div>
       )}
 
-      {/* Create / Edit Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0B120D] border border-[rgba(34,197,94,0.3)] rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden text-[#F3FAF5] jami-modal-animate">
-            <div className="px-6 py-4 border-b border-[rgba(34,197,94,0.18)] flex items-center justify-between bg-[#101A13]">
-              <h2 className="text-sm font-bold text-[#F3FAF5]">
-                {editingTask ? 'Chỉnh sửa nhiệm vụ' : 'Thêm nhiệm vụ học tập mới'}
-              </h2>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="p-1 text-[#A9B8AE] hover:text-[#F3FAF5] rounded-lg"
+      {/* Create / Edit Modal — rendered via portal so it covers full viewport including header/nav */}
+      <ModalPortal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title={editingTask ? 'Chỉnh sửa nhiệm vụ' : 'Thêm nhiệm vụ học tập mới'}
+        icon={<CheckSquare className="w-5 h-5" />}
+        maxWidthClass="max-w-lg"
+      >
+        <form onSubmit={handleFormSubmit} className="space-y-4 text-xs">
+          {formError && (
+            <div className="p-3 bg-rose-950/40 border border-rose-800 text-rose-300 rounded-2xl flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <label className="font-bold text-[#A9B8AE]">Tiêu đề bài học / nhiệm vụ *</label>
+            <input
+              type="text"
+              required
+              value={formTitle}
+              onChange={(e) => setFormTitle(e.target.value)}
+              placeholder="Ví dụ: Ôn tập Hình học chương 3, Giải bài tập 1-5"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="font-bold text-[#A9B8AE]">Môn học *</label>
+              <select
+                value={formSubjectId}
+                onChange={(e) => setFormSubjectId(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E] cursor-pointer [&>option]:bg-[#101A13] [&>option]:text-[#F3FAF5]"
               >
-                <X className="w-5 h-5" />
-              </button>
+                {subjects.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <form onSubmit={handleFormSubmit} className="p-6 space-y-4 text-xs">
-              {formError && (
-                <div className="p-3 bg-rose-950/40 border border-rose-800 text-rose-300 rounded-2xl flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span>{formError}</span>
-                </div>
-              )}
-
-              <div className="space-y-1.5">
-                <label className="font-bold text-[#A9B8AE]">Tiêu đề bài học / nhiệm vụ *</label>
-                <input
-                  type="text"
-                  required
-                  value={formTitle}
-                  onChange={(e) => setFormTitle(e.target.value)}
-                  placeholder="Ví dụ: Ôn tập Hình học chương 3, Giải bài tập 1-5"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="font-bold text-[#A9B8AE]">Môn học *</label>
-                  <select
-                    value={formSubjectId}
-                    onChange={(e) => setFormSubjectId(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E] cursor-pointer [&>option]:bg-[#101A13] [&>option]:text-[#F3FAF5]"
-                  >
-                    {subjects.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="font-bold text-[#A9B8AE]">Thời lượng ước tính (phút)</label>
-                  <input
-                    type="number"
-                    min={5}
-                    max={300}
-                    value={formEstimatedMinutes}
-                    onChange={(e) => setFormEstimatedMinutes(parseInt(e.target.value, 10) || 45)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="font-bold text-[#A9B8AE]">Mức độ ưu tiên</label>
-                  <select
-                    value={formPriority}
-                    onChange={(e) => setFormPriority(e.target.value as any)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E] cursor-pointer [&>option]:bg-[#101A13] [&>option]:text-[#F3FAF5]"
-                  >
-                    <option value="high">Cao</option>
-                    <option value="medium">Trung bình</option>
-                    <option value="low">Thấp</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="font-bold text-[#A9B8AE]">Độ khó</label>
-                  <select
-                    value={formDifficulty}
-                    onChange={(e) => setFormDifficulty(e.target.value as any)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E] cursor-pointer [&>option]:bg-[#101A13] [&>option]:text-[#F3FAF5]"
-                  >
-                    <option value="easy">Dễ</option>
-                    <option value="medium">Vừa sức</option>
-                    <option value="hard">Nâng cao</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="font-bold text-[#A9B8AE]">Mục tiêu bài học (tùy chọn)</label>
-                <textarea
-                  value={formObjective}
-                  onChange={(e) => setFormObjective(e.target.value)}
-                  rows={2}
-                  placeholder="Ghi chú mục tiêu cần đạt được sau khi làm xong..."
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="font-bold text-[#A9B8AE]">Hạn hoàn thành (tùy chọn)</label>
-                <input
-                  type="datetime-local"
-                  value={formDueAt}
-                  onChange={(e) => setFormDueAt(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
-                />
-              </div>
-
-              <div className="pt-3 border-t border-[rgba(34,197,94,0.18)] flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl bg-[#101A13] text-[#A9B8AE] hover:text-[#F3FAF5] font-bold"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={formSubmitting}
-                  className="px-5 py-2.5 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] font-black shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
-                >
-                  {formSubmitting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <span>{editingTask ? 'Lưu thay đổi' : 'Tạo nhiệm vụ'}</span>
-                  )}
-                </button>
-              </div>
-            </form>
+            <div className="space-y-1.5">
+              <label className="font-bold text-[#A9B8AE]">Thời lượng ước tính (phút)</label>
+              <input
+                type="number"
+                min={5}
+                max={300}
+                value={formEstimatedMinutes}
+                onChange={(e) => setFormEstimatedMinutes(parseInt(e.target.value, 10) || 45)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+              />
+            </div>
           </div>
-        </div>
-      )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="font-bold text-[#A9B8AE]">Mức độ ưu tiên</label>
+              <select
+                value={formPriority}
+                onChange={(e) => setFormPriority(e.target.value as any)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E] cursor-pointer [&>option]:bg-[#101A13] [&>option]:text-[#F3FAF5]"
+              >
+                <option value="high">Cao</option>
+                <option value="medium">Trung bình</option>
+                <option value="low">Thấp</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="font-bold text-[#A9B8AE]">Độ khó</label>
+              <select
+                value={formDifficulty}
+                onChange={(e) => setFormDifficulty(e.target.value as any)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E] cursor-pointer [&>option]:bg-[#101A13] [&>option]:text-[#F3FAF5]"
+              >
+                <option value="easy">Dễ</option>
+                <option value="medium">Vừa sức</option>
+                <option value="hard">Nâng cao</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="font-bold text-[#A9B8AE]">Mục tiêu bài học (tùy chọn)</label>
+            <textarea
+              value={formObjective}
+              onChange={(e) => setFormObjective(e.target.value)}
+              rows={2}
+              placeholder="Ghi chú mục tiêu cần đạt được sau khi làm xong..."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="font-bold text-[#A9B8AE]">Hạn hoàn thành (tùy chọn)</label>
+            <input
+              type="datetime-local"
+              value={formDueAt}
+              onChange={(e) => setFormDueAt(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] text-[#F3FAF5] focus:outline-none focus:border-[#22C55E]"
+            />
+          </div>
+
+          <div className="pt-3 border-t border-[rgba(34,197,94,0.18)] flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(false)}
+              className="px-4 py-2.5 rounded-xl bg-[#101A13] text-[#A9B8AE] hover:text-[#F3FAF5] font-bold"
+            >
+              Hủy
+            </button>
+            <button
+              type="submit"
+              disabled={formSubmitting}
+              className="px-5 py-2.5 rounded-xl bg-[#16A34A] hover:bg-[#22C55E] text-[#050806] font-black shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              {formSubmitting ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <span>{editingTask ? 'Lưu thay đổi' : 'Tạo nhiệm vụ'}</span>
+              )}
+            </button>
+          </div>
+        </form>
+      </ModalPortal>
     </div>
   );
 };
