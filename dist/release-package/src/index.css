@@ -1,0 +1,361 @@
+@import "tailwindcss";
+@import "@fontsource/be-vietnam-pro/400.css";
+@import "@fontsource/be-vietnam-pro/500.css";
+@import "@fontsource/be-vietnam-pro/600.css";
+@import "@fontsource/be-vietnam-pro/700.css";
+
+:root {
+  --color-bg: #050806;
+  --color-bg-soft: #080D09;
+  --color-surface: #0B120D;
+  --color-surface-elevated: #101A13;
+  --color-surface-hover: #142219;
+  --color-primary: #16A34A;
+  --color-primary-hover: #22C55E;
+  --color-primary-strong: #15803D;
+  --color-green-dark: #14532D;
+  --color-green-muted: #86EFAC;
+  --color-text: #F3FAF5;
+  --color-text-muted: #A9B8AE;
+  --color-border: rgba(34, 197, 94, 0.22);
+  --color-focus: #4ADE80;
+}
+
+[data-theme="hai-ba-trung"] {
+  --color-bg: #06130E;
+  --color-bg-soft: #091A14;
+  --color-surface: #0B2118;
+  --color-surface-elevated: #102B20;
+  --color-surface-hover: #163B2C;
+  --color-primary: #19C76F;
+  --color-primary-hover: #26DE81;
+  --color-primary-strong: #118C4E;
+  --color-accent-gold: #D2A84A;
+  --color-accent-gold-light: #E8C66A;
+  --color-accent-crimson: #B83A3A;
+  --color-accent-crimson-hover: #D34A46;
+  --color-ivory: #E9E5DC;
+  --color-text: #F5F4EF;
+  --color-text-muted: #B9C8BE;
+  --color-border: rgba(210, 168, 74, 0.28);
+  --color-focus: #D2A84A;
+}
+
+/* Modal Open Isolation */
+body[data-modal-open="true"] {
+  overflow: hidden !important;
+}
+
+body[data-modal-open="true"] .jami-floating-robot-stage {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+body {
+  font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* Accessible focus visible styles */
+*:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Custom Scrollbar for desktop */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: #1B3524;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #275236;
+}
+
+/* Reduced motion accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* PlayStation-inspired subtle mesh and emerald surface glow */
+.jami-bg-canvas {
+  background-color: var(--color-bg);
+}
+
+.jami-bg-surface {
+  background-color: var(--color-surface);
+}
+
+.jami-bg-elevated {
+  background-color: var(--color-surface-elevated);
+}
+
+.jami-mesh-gradient {
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(22, 163, 74, 0.15) 0px, transparent 55%),
+    radial-gradient(at 85% 20%, rgba(34, 197, 94, 0.12) 0px, transparent 50%),
+    radial-gradient(at 50% 80%, rgba(8, 13, 9, 0.95) 0px, transparent 100%);
+}
+
+/* ========================================================================= */
+/* PLAYSTATION-INSPIRED UI INTERACTIONS & ANIMATION SUITE */
+/* ========================================================================= */
+
+/* 1. Interactive Cards: Scale 1.02x, Lift 3-4px, Glow & Sibling Dimming */
+.jami-card-interactive,
+.jami-card-hover {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              border-color 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 220ms ease,
+              filter 220ms ease;
+  will-change: transform, box-shadow;
+}
+
+.jami-card-interactive:hover,
+.jami-card-hover:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.7), 0 0 25px -4px rgba(34, 197, 94, 0.22);
+  border-color: rgba(34, 197, 94, 0.55);
+  filter: brightness(1.03);
+}
+
+/* Sibling focus effect: Dim other cards when a card in the grid is hovered */
+@media (hover: hover) and (pointer: fine) {
+  .jami-card-grid:hover > div:not(:hover),
+  .jami-card-grid:hover > .jami-card-interactive:not(:hover) {
+    opacity: 0.86;
+    filter: brightness(0.96);
+  }
+}
+
+/* 2. Responsive Interactive Buttons: Hover Glow & Active Press */
+.jami-btn,
+.jami-btn-glow {
+  transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 150ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              filter 150ms ease,
+              background-color 150ms ease,
+              border-color 150ms ease;
+  will-change: transform, box-shadow;
+}
+
+.jami-btn:hover,
+.jami-btn-glow:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.35);
+  filter: brightness(1.06);
+}
+
+.jami-btn:active,
+.jami-btn-glow:active {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.96);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.2);
+}
+
+/* 3. Page & Module Route Transitions (Fade + 10px Horizontal Slide in 280ms) */
+@keyframes jamiPageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.jami-page-transition {
+  animation: jamiPageSlideIn 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity, transform;
+}
+
+/* 4. Scroll Reveal (Fade-up via IntersectionObserver) */
+.jami-scroll-reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 600ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.jami-scroll-reveal.is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* 5. PlayStation-Style Modal Entrance (Fade + Scale from 0.96 to 1.0) */
+@keyframes jamiModalEntrance {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.jami-modal-animate {
+  animation: jamiModalEntrance 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity, transform;
+}
+
+/* 6. Toast Notification Slide In / Out */
+@keyframes jamiToastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(40px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes jamiToastSlideOut {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(40px) scale(0.96);
+  }
+}
+
+.jami-toast-enter {
+  animation: jamiToastSlideIn 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.jami-toast-exit {
+  animation: jamiToastSlideOut 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 7. Robot Character Ambient Float */
+@keyframes jamiRobotIdleFloat {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(0.4deg);
+  }
+}
+
+.jami-robot-float {
+  animation: jamiRobotIdleFloat 4.2s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* ========================================================================= */
+/* PRINT & PDF EXPORT STYLES (@media print)                                   */
+/* ========================================================================= */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm;
+  }
+
+  *, *::before, *::after {
+    background-color: transparent !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11pt !important;
+    line-height: 1.4 !important;
+  }
+
+  /* Hide Navigation, Floating Robot, Voice Modal, Toasts & Action buttons */
+  header,
+  nav,
+  .no-print,
+  .jami-floating-robot-stage,
+  [data-modal-open="true"] ~ *,
+  button:not(.print-include) {
+    display: none !important;
+  }
+
+  main {
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Page break rules */
+  .print-avoid-break,
+  .jami-card-interactive,
+  .jami-card-hover,
+  table,
+  tr,
+  figure {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Clean contrast for cards & surfaces */
+  div[class*="bg-[#0B120D]"],
+  div[class*="bg-[#050806]"],
+  div[class*="bg-[#101A13]"],
+  div[class*="bg-emerald-950"],
+  div[class*="bg-amber-950"],
+  div[class*="bg-violet-950"],
+  div[class*="bg-cyan-950"],
+  div[class*="bg-rose-950"] {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: #065f46 !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
+
+  p, span, li, td, th {
+    color: #1e293b !important;
+  }
+
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  th, td {
+    border: 1px solid #e2e8f0 !important;
+    padding: 6px 8px !important;
+  }
+
+  th {
+    background: #f1f5f9 !important;
+    font-weight: bold !important;
+  }
+
+  a {
+    text-decoration: none !important;
+    color: inherit !important;
+  }
+}
