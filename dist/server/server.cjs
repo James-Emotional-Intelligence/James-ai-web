@@ -5499,7 +5499,7 @@ var init_timetable_repository = __esm({
       async hasOwnedTimetable(userId, timetableId, executor) {
         if (executor) {
           const [rows] = await executor.query(
-            "SELECT id FROM school_timetables WHERE id = ? AND user_id = ? LIMIT 1",
+            "SELECT id FROM school_timetables WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE",
             [timetableId, userId]
           );
           return rows.length > 0;
@@ -10864,7 +10864,13 @@ var init_jami_action_service = __esm({
             };
           }
         } catch (err) {
-          console.error("[JamiActionService] Mutation execution error:", err);
+          console.error("[JamiActionService] Mutation execution error", {
+            userId,
+            proposalId: proposal.id,
+            actionType: proposal.actionType,
+            errorCode: typeof err?.code === "string" ? err.code : "EXECUTION_FAILED",
+            errorName: typeof err?.name === "string" ? err.name : "Error"
+          });
           await this.markProposalFailed(userId, proposal.id, "EXECUTION_FAILED");
           return {
             success: false,

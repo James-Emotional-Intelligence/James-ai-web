@@ -104,8 +104,11 @@ export class TimetableRepository {
 
   private async hasOwnedTimetable(userId: string, timetableId: string, executor?: DbExecutor): Promise<boolean> {
     if (executor) {
+      // Use FOR UPDATE to lock the row within the transaction, preventing a
+      // TOCTOU race where the timetable is deleted between this check and the
+      // subsequent INSERT into school_timetable_entries (FK constraint failure).
       const [rows] = await executor.query<any[]>(
-        'SELECT id FROM school_timetables WHERE id = ? AND user_id = ? LIMIT 1',
+        'SELECT id FROM school_timetables WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
         [timetableId, userId]
       );
       return rows.length > 0;

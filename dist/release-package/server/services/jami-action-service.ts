@@ -1109,7 +1109,13 @@ export class JamiActionService {
         };
       }
     } catch (err: any) {
-      console.error('[JamiActionService] Mutation execution error:', err);
+      console.error('[JamiActionService] Mutation execution error', {
+        userId,
+        proposalId: proposal.id,
+        actionType: proposal.actionType,
+        errorCode: typeof err?.code === 'string' ? err.code : 'EXECUTION_FAILED',
+        errorName: typeof err?.name === 'string' ? err.name : 'Error',
+      });
       await this.markProposalFailed(userId, proposal.id, 'EXECUTION_FAILED');
       return {
         success: false,

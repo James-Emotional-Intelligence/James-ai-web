@@ -87,6 +87,11 @@ export const JamiAssistantPage: React.FC = () => {
         voice.stopSpeaking();
         return;
       }
+      // Prime audio within user gesture to satisfy browser autoplay policy
+      if ('speechSynthesis' in window) {
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+        window.speechSynthesis.getVoices();
+      }
       voice.speak(text, { msgId });
     },
     [voice]
@@ -107,9 +112,15 @@ export const JamiAssistantPage: React.FC = () => {
     if (voice.isHandsFreeEnabled) {
       voice.disableHandsFree();
     } else {
+      // Prime audio in this user gesture before async enableHandsFree starts
+      if ('speechSynthesis' in window) {
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+        window.speechSynthesis.getVoices();
+      }
       void voice.enableHandsFree();
     }
   };
+
 
   // Load conversations on mount
   const fetchConversations = useCallback(async () => {
@@ -649,7 +660,7 @@ export const JamiAssistantPage: React.FC = () => {
           </div>
         )}
 
-        {/* Error banner */}
+        {/* API error banner */}
         {error && (
           <div className="p-3 mt-2 bg-rose-950/40 border border-rose-800 rounded-xl text-rose-300 text-xs flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -664,6 +675,17 @@ export const JamiAssistantPage: React.FC = () => {
             </button>
           </div>
         )}
+
+        {/* Voice / TTS error banner – shown when speak() encounters not-allowed, watchdog, etc. */}
+        {voice.errorMessage && (
+          <div className="p-3 mt-2 bg-amber-950/40 border border-amber-700 rounded-xl text-amber-300 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{voice.errorMessage}</span>
+            </div>
+          </div>
+        )}
+
 
         {/* Attached Material Preview Pill */}
         {attachedMaterial && (

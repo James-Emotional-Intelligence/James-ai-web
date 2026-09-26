@@ -53,6 +53,21 @@ export interface VoiceJamiContextType {
 
 const VoiceJamiContext = createContext<VoiceJamiContextType | null>(null);
 
+/**
+ * Prime the browser's speech synthesis engine within a user gesture.
+ * Calling this during a click handler prevents "not-allowed" autoplay policy
+ * from blocking the first real utterance.
+ */
+function primeSpeechOutput(): void {
+  if (!('speechSynthesis' in window)) return;
+  // Resume if paused (Chrome sometimes suspends after tab switch)
+  if (window.speechSynthesis.paused) {
+    window.speechSynthesis.resume();
+  }
+  // Warm-up voice list synchronously (no await – must stay in gesture)
+  window.speechSynthesis.getVoices();
+}
+
 export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
 
@@ -69,8 +84,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [currentUtteranceText, setCurrentUtteranceText] = useState<string>('');
 
-  // Audio & Hardware References
-  const mediaStreamRef = useRef<MediaStream | null>(null);
+  // ── Hardware / session refs ────────────────────────────────────────────────
+  const mediaStreamRef = useRef<MediaStream | null>(null);          // local mic (permission probe only)
+  const remoteMediaStreamRef = useRef<MediaStream | null>(null);    // OpenAI Realtime remote audio
   const speechRecognitionRef = useRef<any>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
@@ -94,9 +110,40 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const processedRealtimeCallIdsRef = useRef<Set<string>>(new Set());
   const realtimeTranscriptBuffersRef = useRef<Map<string, string>>(new Map());
 
+  // ── TTS-specific refs (new) ────────────────────────────────────────────────
+  /** The currently-speaking SpeechSynthesisUtterance — kept alive to prevent GC mid-speech */
+  const activeSpeechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  /** Cached voice list populated by voiceschanged listener; avoids async wait before speak() */
+  const availableVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  /** Watchdog timer: fires if onstart never arrives after speechSynthesis.speak() */
+  const ttsStartWatchdogRef = useRef<number | null>(null);
+
   useEffect(() => {
     privacyModeRef.current = privacyMode;
   }, [privacyMode]);
+
+  // ── Register voiceschanged once at mount ──────────────────────────────────
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return;
+
+    const updateVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) availableVoicesRef.current = voices;
+    };
+
+    // Populate immediately in case voices are already available (Firefox / some Chrome builds)
+    updateVoices();
+
+    if (typeof window.speechSynthesis.addEventListener === 'function') {
+      window.speechSynthesis.addEventListener('voiceschanged', updateVoices);
+      return () => window.speechSynthesis.removeEventListener('voiceschanged', updateVoices);
+    } else if ('onvoiceschanged' in window.speechSynthesis) {
+      (window.speechSynthesis as any).onvoiceschanged = updateVoices;
+      return () => { (window.speechSynthesis as any).onvoiceschanged = null; };
+    }
+  }, []);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   const stopCurrentRecognition = useCallback((intentional = true) => {
     intentionalRecognitionStopRef.current = intentional;
@@ -115,7 +162,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       current.stop();
       current.abort();
     } catch {
-      // SpeechRecognition can throw when already ended; it is safe to discard.
+      // SpeechRecognition can throw when already ended; safe to discard.
     }
   }, []);
 
@@ -126,37 +173,38 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, []);
 
-  const loadSpeechVoices = useCallback((timeoutMs = 1500): Promise<SpeechSynthesisVoice[]> => {
-    if (!('speechSynthesis' in window)) return Promise.resolve([]);
-    const initial = window.speechSynthesis.getVoices();
-    if (initial.length > 0) return Promise.resolve(initial);
-
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        if (typeof window.speechSynthesis.removeEventListener === 'function') {
-          window.speechSynthesis.removeEventListener('voiceschanged', finish);
-        } else if ('onvoiceschanged' in window.speechSynthesis) {
-          window.speechSynthesis.onvoiceschanged = null;
-        }
-        window.clearTimeout(timeoutId);
-        resolve(window.speechSynthesis.getVoices());
-      };
-      const timeoutId = window.setTimeout(finish, timeoutMs);
-      if (typeof window.speechSynthesis.addEventListener === 'function') {
-        window.speechSynthesis.addEventListener('voiceschanged', finish, { once: true });
-      } else if ('onvoiceschanged' in window.speechSynthesis) {
-        window.speechSynthesis.onvoiceschanged = finish;
-      } else {
-        finish();
-      }
-    });
+  const clearTtsWatchdog = useCallback(() => {
+    if (ttsStartWatchdogRef.current !== null) {
+      window.clearTimeout(ttsStartWatchdogRef.current);
+      ttsStartWatchdogRef.current = null;
+    }
   }, []);
 
   /**
-   * Unified Text-to-Speech Engine using SpeechSynthesis with Intelligent Language Detection & Voice Selection
+   * Fully reset TTS state – called from stopSpeaking, onerror, and cleanup.
+   */
+  const resetTtsState = useCallback(() => {
+    clearSpeechResumeInterval();
+    clearTtsWatchdog();
+    activeSpeechUtteranceRef.current = null;
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    setSpeakingMessageId(null);
+    setCurrentUtteranceText('');
+  }, [clearSpeechResumeInterval, clearTtsWatchdog]);
+
+  /**
+   * Unified Text-to-Speech Engine using SpeechSynthesis with intelligent
+   * language detection, watchdog, retry on voice errors, and full error reporting.
+   *
+   * KEY FIXES vs previous version:
+   * - No async await before speaking (voices pre-loaded via voiceschanged)
+   * - activeSpeechUtteranceRef held until onend/onerror
+   * - onerror classifies errors: canceled/interrupted → silent; not-allowed → banner;
+   *   voice-unavailable/language-unavailable → retry with default; others → log + retry once
+   * - watchdog fires if onstart never arrives within 2 s
+   * - isSpeaking only set true inside utterance.onstart
+   * - Language forced only when caller explicitly passes lang; otherwise auto-detected
    */
   const speak = useCallback(
     (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number; lang?: SpeechLanguage }) => {
@@ -166,81 +214,146 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
 
       stopCurrentRecognition(true);
-      // Cancel any ongoing speech and advance speech ID to cancel active queue
       clearSpeechResumeInterval();
+      clearTtsWatchdog();
       window.speechSynthesis.cancel();
+      activeSpeechUtteranceRef.current = null;
+
       const currentSpeechId = ++activeUtteranceIdRef.current;
 
-      void (async () => {
-        const voices = await loadSpeechVoices();
+      // Use pre-cached voices from voiceschanged listener.
+      // Fallback: try getVoices() synchronously (may return [] on first call in some browsers).
+      const voices =
+        availableVoicesRef.current.length > 0
+          ? availableVoicesRef.current
+          : window.speechSynthesis.getVoices();
+
+      // NOTE: lang is NOT defaulted to 'vi-VN' so segmentTextByLanguage auto-detects.
+      const segments = segmentTextByLanguage(text, options?.lang);
+      if (segments.length === 0) {
+        options?.onEnd?.();
+        return;
+      }
+
+      const fullCleanText = segments.map((s) => s.text).join(' ');
+      let currentSegmentIdx = 0;
+      let retryCount = 0;
+      const MAX_RETRIES = 1;
+
+      const finishSpeech = () => {
+        if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
+        resetTtsState();
+        options?.onEnd?.();
+      };
+
+      const speakSegment = (segIdx: number, useDefaultVoice = false) => {
         if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) {
+          resetTtsState();
           return;
         }
-
-        const segments = segmentTextByLanguage(text, options?.lang || 'vi-VN');
-        if (segments.length === 0) {
-          options?.onEnd?.();
-          return;
-        }
-
-        const fullCleanText = segments.map((s) => s.text).join(' ');
-        let currentSegmentIdx = 0;
-
-        const finishSpeech = () => {
-          clearSpeechResumeInterval();
-          isSpeakingRef.current = false;
-          setIsSpeaking(false);
-          setSpeakingMessageId(null);
-          setCurrentUtteranceText('');
-          options?.onEnd?.();
-        };
-
-        const speakNextSegment = () => {
-        if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) {
-          clearSpeechResumeInterval();
-          return;
-        }
-
-        if (currentSegmentIdx >= segments.length) {
+        if (segIdx >= segments.length) {
           finishSpeech();
           return;
         }
 
-        const segment = segments[currentSegmentIdx];
+        const segment = segments[segIdx];
         const utterance = new SpeechSynthesisUtterance(segment.text);
         utterance.lang = segment.lang;
-        utterance.rate = options?.rate || (segment.lang === 'en-US' ? 1.0 : 1.05);
+        utterance.rate = options?.rate ?? (segment.lang === 'en-US' ? 1.0 : 1.05);
         utterance.pitch = 1.0;
 
-        const optimalVoice = findOptimalVoice(voices, segment.lang);
-        if (optimalVoice) {
-          utterance.voice = optimalVoice;
+        if (!useDefaultVoice) {
+          const optimalVoice = findOptimalVoice(voices, segment.lang);
+          if (optimalVoice) utterance.voice = optimalVoice;
         }
+        // useDefaultVoice=true → leave utterance.voice null → browser picks default
+
+        activeSpeechUtteranceRef.current = utterance;
+
+        // ── Watchdog: if onstart doesn't fire within 2 s, try to unstick ────
+        clearTtsWatchdog();
+        ttsStartWatchdogRef.current = window.setTimeout(() => {
+          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
+          if (!window.speechSynthesis.speaking) {
+            console.warn('[VoiceJami TTS] Watchdog: speak() called but onstart never fired. Retrying with default voice.');
+            window.speechSynthesis.cancel();
+            activeSpeechUtteranceRef.current = null;
+            if (retryCount < MAX_RETRIES) {
+              retryCount++;
+              speakSegment(segIdx, true);
+            } else {
+              setErrorMessage('Không thể phát âm thanh. Hãy thử bấm "Nghe đọc" lại.');
+              resetTtsState();
+              options?.onEnd?.();
+            }
+          }
+        }, 2000);
 
         utterance.onstart = () => {
+          clearTtsWatchdog();
           if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
           isSpeakingRef.current = true;
           setIsSpeaking(true);
-          setSpeakingMessageId(options?.msgId || null);
+          setSpeakingMessageId(options?.msgId ?? null);
           setCurrentUtteranceText(fullCleanText);
         };
 
         utterance.onend = () => {
+          clearTtsWatchdog();
           if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
+          activeSpeechUtteranceRef.current = null;
+          retryCount = 0;
           currentSegmentIdx++;
-          speakNextSegment();
+          speakSegment(currentSegmentIdx);
         };
 
-        utterance.onerror = () => {
+        utterance.onerror = (event: SpeechSynthesisErrorEvent) => {
+          clearTtsWatchdog();
           if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
-          currentSegmentIdx++;
-          speakNextSegment();
+          activeSpeechUtteranceRef.current = null;
+
+          const errType = event.error;
+
+          if (errType === 'canceled' || errType === 'interrupted') {
+            // User-initiated stop or browser preemption – do not surface an error.
+            resetTtsState();
+            return;
+          }
+
+          if (errType === 'not-allowed') {
+            setErrorMessage('Trình duyệt đang chặn âm thanh. Hãy bấm "Nghe đọc" để phát lại.');
+            resetTtsState();
+            options?.onEnd?.();
+            return;
+          }
+
+          if (errType === 'voice-unavailable' || errType === 'language-unavailable') {
+            console.warn(`[VoiceJami TTS] ${errType} for segment ${segIdx}. Retrying with default voice.`);
+            if (retryCount < MAX_RETRIES) {
+              retryCount++;
+              speakSegment(segIdx, true);
+              return;
+            }
+          }
+
+          // Unknown / synthesis-failed / network errors
+          console.error(`[VoiceJami TTS] onerror: ${errType} on segment ${segIdx}`);
+          if (retryCount < MAX_RETRIES) {
+            retryCount++;
+            speakSegment(segIdx, true);
+          } else {
+            setErrorMessage(`Lỗi phát âm thanh: ${errType}. Hãy thử lại.`);
+            resetTtsState();
+            options?.onEnd?.();
+          }
         };
 
         window.speechSynthesis.speak(utterance);
       };
 
-        speechResumeIntervalRef.current = window.setInterval(() => {
+      // Chrome bug: speechSynthesis sometimes stalls if tab was backgrounded.
+      // Keep a resume interval to unstick it.
+      speechResumeIntervalRef.current = window.setInterval(() => {
         if (activeUtteranceIdRef.current !== currentSpeechId) {
           clearSpeechResumeInterval();
           return;
@@ -252,23 +365,25 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
       }, 5000);
 
-        speakNextSegment();
-      })();
+      speakSegment(currentSegmentIdx);
     },
-    [clearSpeechResumeInterval, loadSpeechVoices, stopCurrentRecognition]
+    [clearSpeechResumeInterval, clearTtsWatchdog, resetTtsState, stopCurrentRecognition]
   );
 
   const stopSpeaking = useCallback(() => {
+    // Advance speech ID so all in-flight callbacks become no-ops
     activeUtteranceIdRef.current++;
     clearSpeechResumeInterval();
+    clearTtsWatchdog();
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
+    activeSpeechUtteranceRef.current = null;
     isSpeakingRef.current = false;
     setIsSpeaking(false);
     setSpeakingMessageId(null);
     setCurrentUtteranceText('');
-  }, [clearSpeechResumeInterval]);
+  }, [clearSpeechResumeInterval, clearTtsWatchdog]);
 
   const speakText = useCallback(
     (text: string, onEnd?: () => void, lang?: SpeechLanguage) => {
@@ -277,12 +392,14 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [speak]
   );
 
-  /**
-   * Release hardware resources cleanly
-   */
+  // ── Hardware cleanup ───────────────────────────────────────────────────────
+
   const cleanupHardware = useCallback(() => {
     activeUtteranceIdRef.current++;
     clearSpeechResumeInterval();
+    clearTtsWatchdog();
+    activeSpeechUtteranceRef.current = null;
+
     if (speechRecognitionRef.current) {
       try {
         speechRecognitionRef.current.onresult = null;
@@ -316,16 +433,12 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
 
     if (peerConnectionRef.current) {
-      try {
-        peerConnectionRef.current.close();
-      } catch {}
+      try { peerConnectionRef.current.close(); } catch {}
       peerConnectionRef.current = null;
     }
 
     if (dataChannelRef.current) {
-      try {
-        dataChannelRef.current.close();
-      } catch {}
+      try { dataChannelRef.current.close(); } catch {}
       dataChannelRef.current = null;
     }
 
@@ -342,11 +455,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIsSpeaking(false);
     setSpeakingMessageId(null);
     setIsMicActive(false);
-  }, [clearSpeechResumeInterval]);
+  }, [clearSpeechResumeInterval, clearTtsWatchdog]);
 
-  /**
-   * Disable Hands-free mode completely
-   */
   const disableHandsFree = useCallback(() => {
     cleanupHardware();
     isHandsFreeRef.current = false;
@@ -356,9 +466,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setErrorMessage(null);
   }, [cleanupHardware]);
 
-  /**
-   * Execute voice command through backend API and handle actions / proposals
-   */
+  // ── Command execution ──────────────────────────────────────────────────────
+
   const executeCommand = useCallback(
     async (commandText: string) => {
       if (!commandText.trim()) {
@@ -367,7 +476,6 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return;
       }
 
-      // Strip wake-word prefixes if user said "Jami ơi mở bài học"
       let cleanCmd = commandText
         .replace(/^(ơi\s+jami|jami\s+ơi|chào\s+jami|hey\s+jami|jami|em\s+ơi\s+jami)[,.\s]*/i, '')
         .trim();
@@ -376,7 +484,6 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setState('thinking');
       setLastTranscript(cleanCmd);
 
-      // Abort previous command in flight
       if (activeAbortControllerRef.current) {
         activeAbortControllerRef.current.abort();
       }
@@ -389,12 +496,10 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
         const res = await api.sendVoiceCommand(cleanCmd, turnId, privacyMode, undefined, abortController.signal);
 
-        // If aborted while waiting for server
         if (abortController.signal.aborted) return;
 
         setLastReply(res.replyText);
 
-        // If action includes a client navigation or focus timer
         if (res.clientAction) {
           if (res.clientAction.type === 'navigate' && res.clientAction.route) {
             navigate(res.clientAction.route);
@@ -403,18 +508,15 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           }
         }
 
-        // If action requires user confirmation
         if (res.requiresConfirmation && res.proposal) {
           setPendingProposal(res.proposal);
           setState('confirmation_pending');
           speakText(res.replyText, () => {
-            // After speaking confirmation question, start listening for "Đồng ý" / "Hủy"
             startCommandListening();
           });
           return;
         }
 
-        // Normal response speech
         setState('speaking');
         speakText(res.replyText, () => {
           if (isHandsFreeRef.current && !document.hidden) {
@@ -426,7 +528,6 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         });
       } catch (err: any) {
         if (err.name === 'AbortError' || abortController.signal.aborted) {
-          // User aborted/cancelled turn, return silently
           if (isHandsFreeRef.current && !document.hidden) {
             setState('armed');
             startWakeWordRecognizer();
@@ -449,9 +550,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [privacyMode, navigate, speakText]
   );
 
-  /**
-   * Starts listening for user's command after wake word is detected
-   */
+  // ── Command listening ──────────────────────────────────────────────────────
+
   const startCommandListening = useCallback(() => {
     setState('listening_command');
     setErrorMessage(null);
@@ -489,11 +589,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
         setLastTranscript(finalCommand || interim);
 
-        // Reset silence timer on speech activity
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = setTimeout(() => {
-          recognizer.stop();
-        }, 2200);
+        silenceTimerRef.current = setTimeout(() => { recognizer.stop(); }, 2200);
       };
 
       recognizer.onerror = (event: any) => {
@@ -508,7 +605,6 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (finalCommand.trim()) {
           executeCommand(finalCommand.trim());
         } else {
-          // If silence, re-arm wake word detector
           setState('armed');
           startWakeWordRecognizer();
         }
@@ -516,12 +612,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       recognizer.start();
 
-      // Fallback max command timeout: 8 seconds
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = setTimeout(() => {
-        try {
-          recognizer.stop();
-        } catch {}
+        try { recognizer.stop(); } catch {}
       }, 8000);
     } catch (err: any) {
       console.warn('[VoiceJami] Failed to start command recognizer:', err);
@@ -530,9 +623,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, [executeCommand, stopCurrentRecognition]);
 
-  /**
-   * Continuous Wake Word Recognizer ("Jami ơi")
-   */
+  // ── Wake word recognizer ───────────────────────────────────────────────────
+
   const startWakeWordRecognizer = useCallback(() => {
     if (!isHandsFreeRef.current || isSpeakingRef.current || privacyModeRef.current === 'openai_realtime') return;
 
@@ -563,25 +655,17 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
           if (wakeCheck.matched) {
             const now = Date.now();
-            // Debounce duplicate wake detections within 2.5 seconds
-            if (now - lastWakeTimeRef.current < 2500) {
-              return;
-            }
+            if (now - lastWakeTimeRef.current < 2500) return;
             lastWakeTimeRef.current = now;
 
-            // Stop the wake recognizer before speaking so it cannot hear its
-            // own acknowledgement. It is re-created only after TTS ends.
             stopCurrentRecognition(true);
-
             setState('wake_detected');
             setLastTranscript(wakeCheck.wakePhrase || 'Jami ơi');
 
-            // Robot immediately replies "Jami đang nghe đây"
             const wakeReply = 'Jami đang nghe đây';
             setLastReply(wakeReply);
 
             speakText(wakeReply, () => {
-              // If user spoke the command in the same breath (e.g. "Jami ơi mở lịch học")
               if (wakeCheck.commandSnippet && wakeCheck.commandSnippet.length > 2) {
                 executeCommand(wakeCheck.commandSnippet);
               } else {
@@ -616,7 +700,6 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       recognizer.onend = () => {
         if (generation !== recognitionGenerationRef.current || speechRecognitionRef.current !== recognizer) return;
         speechRecognitionRef.current = null;
-        // Restart with a fresh recognizer. Never restart an object that ended.
         if (isHandsFreeRef.current && !isSpeakingRef.current && !document.hidden) {
           if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
           restartTimerRef.current = setTimeout(() => {
@@ -635,41 +718,56 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, [speakText, executeCommand, startCommandListening, disableHandsFree, stopCurrentRecognition]);
 
+  // ── Enable Hands-Free ──────────────────────────────────────────────────────
   /**
-   * User Gesture: Enable Hands-Free mode & acquire microphone permission
+   * Browser-Speech-only hands-free path.
+   *
+   * Architecture:
+   *   1. getUserMedia() → proves the user granted mic permission
+   *   2. Immediately stop that permission-probe stream (SpeechRecognition
+   *      manages its own mic access)
+   *   3. Prime TTS (within user gesture – prevents not-allowed autoplay)
+   *   4. Speak greeting → then arm wake-word recognizer
+   *
+   * OpenAI Realtime is a separate function (startRealtimeSession) and is
+   * intentionally NOT started here, so there is no dead code, no stopped-
+   * stream reuse, and no two concurrent mic consumers.
    */
   const enableHandsFree = useCallback(async () => {
     setState('requesting_permission');
     setErrorMessage(null);
 
+    // Prime TTS synchronously while still in user-gesture stack
+    primeSpeechOutput();
+
     try {
-      // 1. Explicit user gesture requesting microphone stream
+      // Prove mic permission. We immediately stop this stream because
+      // SpeechRecognition manages its own mic access internally.
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
+      stream.getTracks().forEach((track) => track.stop());
+      // Do NOT store stopped stream – it is useless after .stop()
+      mediaStreamRef.current = null;
+
       isHandsFreeRef.current = true;
       setIsMicActive(true);
       setIsHandsFreeEnabled(true);
-
-      // Hands-free wake detection is intentionally browser-owned. Realtime
-      // must not replace the wake-word gate or leave two microphone consumers
-      // active at the same time. The permission stream is stopped after the
-      // grant; SpeechRecognition will acquire the microphone itself.
-      stream.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
       setPrivacyMode('browser_web_speech');
       privacyModeRef.current = 'browser_web_speech';
+
       const SpeechRecognitionClass =
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
       if (!SpeechRecognitionClass) {
-        const unsupportedMessage = 'Trình duyệt này chưa hỗ trợ gọi Jami bằng từ khóa. Hãy dùng Chrome hoặc Edge.';
-        setErrorMessage(unsupportedMessage);
+        const msg = 'Trình duyệt này chưa hỗ trợ gọi Jami bằng từ khóa. Hãy dùng Chrome hoặc Edge.';
+        setErrorMessage(msg);
         isHandsFreeRef.current = false;
         setIsHandsFreeEnabled(false);
         setIsMicActive(false);
         setState('error');
-        speakText(unsupportedMessage);
+        speakText(msg);
         return;
       }
+
       setState('speaking');
       speakText('Jami đã bật chế độ rảnh tay. Bạn chỉ cần gọi Jami ơi.', () => {
         if (isHandsFreeRef.current) {
@@ -677,208 +775,6 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           startWakeWordRecognizer();
         }
       });
-      return;
-
-      // 2. Attempt Genuine OpenAI Realtime WebRTC Negotiation
-      let webrtcConnected = false;
-      if (typeof RTCPeerConnection !== 'undefined') {
-        try {
-          setState('connecting');
-          const pc = new RTCPeerConnection();
-          peerConnectionRef.current = pc;
-
-          // Remote audio element for AI model speech output
-          const audioEl = document.createElement('audio');
-          audioEl.autoplay = true;
-          remoteAudioElementRef.current = audioEl;
-
-          audioEl.onplay = () => {
-            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-            if (isMountedRef.current) {
-              isSpeakingRef.current = true;
-              setIsSpeaking(true);
-              setState('speaking');
-            }
-          };
-
-          audioEl.onpause = () => {
-            if (isMountedRef.current) {
-              isSpeakingRef.current = false;
-              setIsSpeaking(false);
-              setState('armed');
-            }
-          };
-
-          audioEl.onended = () => {
-            if (isMountedRef.current) {
-              isSpeakingRef.current = false;
-              setIsSpeaking(false);
-              setState('armed');
-            }
-          };
-
-          pc.ontrack = (event) => {
-            if (event.streams && event.streams[0]) {
-              audioEl.srcObject = event.streams[0];
-              void audioEl.play().catch(() => {
-                setErrorMessage('Âm thanh Jami bị trình duyệt chặn. Hãy bấm vào trang để bật âm thanh.');
-              });
-            }
-          };
-
-          // Add microphone tracks to peer connection
-          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-          // Open data channel for Realtime events
-          const dc = pc.createDataChannel('oai-events');
-          dataChannelRef.current = dc;
-
-          dc.onopen = () => {
-            console.log('[VoiceJami WebRTC] oai-events data channel open');
-          };
-
-          dc.onmessage = (e) => {
-            try {
-              const event = JSON.parse(e.data);
-              const eventId = event.event_id || event.id;
-              if (eventId) {
-                if (processedRealtimeEventIdsRef.current.has(eventId)) return;
-                processedRealtimeEventIdsRef.current.add(eventId);
-              }
-
-              if (event.type === 'response.created' && event.response?.id) {
-                realtimeTranscriptBuffersRef.current.set(event.response.id, '');
-                setLastReply('');
-              } else if (
-                event.type === 'response.output_audio_transcript.delta' ||
-                event.type === 'response.audio_transcript.delta'
-              ) {
-                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-                const responseId = event.response_id || event.response?.id || 'default';
-                const nextValue = (realtimeTranscriptBuffersRef.current.get(responseId) || '') + (event.delta || '');
-                realtimeTranscriptBuffersRef.current.set(responseId, nextValue);
-                setLastReply(nextValue);
-                if (isMountedRef.current) {
-                  isSpeakingRef.current = true;
-                  setIsSpeaking(true);
-                  setState('speaking');
-                }
-              } else if (event.type === 'response.done' && event.response?.id) {
-                const finalText = realtimeTranscriptBuffersRef.current.get(event.response.id);
-                if (finalText !== undefined) setLastReply(finalText);
-                isSpeakingRef.current = false;
-                setIsSpeaking(false);
-                if (isHandsFreeRef.current) setState('armed');
-              } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
-                if (event.transcript) {
-                  setLastTranscript(event.transcript);
-                }
-              } else if (
-                event.type === 'response.function_call_arguments.done' ||
-                (event.type === 'response.output_item.done' && event.item?.type === 'function_call')
-              ) {
-                const call = event.item?.type === 'function_call' ? event.item : event;
-                const toolName = call.name || event.name;
-                const callId = call.call_id || event.call_id;
-                const rawArgs = call.arguments || event.arguments;
-
-                if (toolName && callId && activeRealtimeSessionIdRef.current) {
-                  const callKey = `${activeRealtimeSessionIdRef.current}:${callId}`;
-                  if (processedRealtimeCallIdsRef.current.has(callKey)) return;
-                  processedRealtimeCallIdsRef.current.add(callKey);
-                  api.executeRealtimeToolCall(activeRealtimeSessionIdRef.current, toolName, callId, rawArgs).then((result) => {
-                    if (result.proposal) {
-                      setPendingProposal(result.proposal);
-                      setState('confirmation_pending');
-                    }
-                    if (result.clientAction?.route) {
-                      navigate(result.clientAction.route);
-                    }
-                    if (dc.readyState === 'open' && callId) {
-                      dc.send(JSON.stringify({
-                        type: 'conversation.item.create',
-                        item: {
-                          type: 'function_call_output',
-                          call_id: callId,
-                          output: JSON.stringify(result),
-                        },
-                      }));
-                      dc.send(JSON.stringify({
-                        type: 'response.create',
-                      }));
-                    }
-                  }).catch((err) => {
-                    console.warn('[VoiceJami WebRTC] Tool execution failed:', err);
-                    if (dc.readyState === 'open' && callId) {
-                      dc.send(JSON.stringify({
-                        type: 'conversation.item.create',
-                        item: {
-                          type: 'function_call_output',
-                          call_id: callId,
-                          output: JSON.stringify({ success: false, error: err.message }),
-                        },
-                      }));
-                      dc.send(JSON.stringify({
-                        type: 'response.create',
-                      }));
-                    }
-                  });
-                }
-              } else if (event.type === 'response.output_audio_transcript.done' || event.type === 'response.done') {
-                if (isMountedRef.current) {
-                  isSpeakingRef.current = false;
-                  setIsSpeaking(false);
-                  setState('armed');
-                }
-              } else if (event.type === 'error') {
-                console.warn('[VoiceJami WebRTC] OpenAI Realtime error event:', event.error);
-              }
-            } catch {}
-          };
-
-          // Create local offer
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-
-          if (offer.sdp) {
-            const sdpRes = await api.sendRealtimeSdpOffer(offer.sdp);
-            if (sdpRes.mode === 'openai_realtime' && sdpRes.sdpAnswer) {
-              await pc.setRemoteDescription({ type: 'answer', sdp: sdpRes.sdpAnswer });
-              activeRealtimeSessionIdRef.current = sdpRes.sessionId || null;
-              processedRealtimeEventIdsRef.current.clear();
-              processedRealtimeCallIdsRef.current.clear();
-              realtimeTranscriptBuffersRef.current.clear();
-              setPrivacyMode('openai_realtime');
-              webrtcConnected = true;
-              setState('armed');
-            }
-          }
-        } catch (webrtcErr) {
-          console.warn('[VoiceJami WebRTC] WebRTC connection could not be established, falling back to Browser Web Speech:', webrtcErr);
-          if (peerConnectionRef.current) {
-            try {
-              peerConnectionRef.current.close();
-            } catch {}
-            peerConnectionRef.current = null;
-          }
-        }
-      }
-
-      if (!webrtcConnected) {
-        setPrivacyMode('browser_web_speech');
-        const greeting = 'Jami đã bật chế độ rảnh tay (Giọng nói của trình duyệt). Bạn chỉ cần gọi "Jami ơi" là Jami sẽ lắng nghe!';
-        setLastReply(greeting);
-        setState('speaking');
-
-        speakText(greeting, () => {
-          if (isHandsFreeRef.current) {
-            setState('armed');
-            startWakeWordRecognizer();
-          }
-        });
-      } else {
-        setLastReply('Jami đã kết nối trực tiếp với OpenAI Realtime. Bạn có thể trò chuyện trực tiếp hoặc nói "Jami ơi"!');
-      }
     } catch (err: any) {
       console.error('[VoiceJami] Permission denied or media error:', err);
       setErrorMessage('Không thể truy cập micro. Vui lòng cấp quyền micro để sử dụng Jami rảnh tay.');
@@ -887,11 +783,178 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setIsHandsFreeEnabled(false);
       setIsMicActive(false);
     }
-  }, [privacyMode, speakText, startWakeWordRecognizer, navigate]);
+  }, [speakText, startWakeWordRecognizer]);
 
+  // ── OpenAI Realtime (isolated, not called from enableHandsFree) ────────────
   /**
-   * Confirm or reject pending action proposal
+   * Start a genuine OpenAI Realtime WebRTC session.
+   * Acquires a FRESH getUserMedia() stream – never reuses a stopped stream.
+   * Called explicitly if/when the app decides to use Realtime mode.
    */
+  const startRealtimeSession = useCallback(async () => {
+    if (typeof RTCPeerConnection === 'undefined') {
+      console.warn('[VoiceJami Realtime] RTCPeerConnection not available');
+      return;
+    }
+
+    try {
+      setState('connecting');
+
+      // Fresh stream – live tracks – for WebRTC peer connection
+      const freshStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = freshStream;
+
+      const pc = new RTCPeerConnection();
+      peerConnectionRef.current = pc;
+
+      // Remote audio element for AI model speech output
+      const audioEl = remoteAudioElementRef.current || new Audio();
+      audioEl.autoplay = true;
+      (audioEl as any).playsInline = true; // valid runtime attr for mobile, not in TS lib
+      audioEl.muted = false;
+      audioEl.volume = 1;
+      remoteAudioElementRef.current = audioEl;
+
+      audioEl.onplay = () => {
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        if (isMountedRef.current) {
+          isSpeakingRef.current = true;
+          setIsSpeaking(true);
+          setState('speaking');
+        }
+      };
+      audioEl.onpause = () => {
+        if (isMountedRef.current) { isSpeakingRef.current = false; setIsSpeaking(false); setState('armed'); }
+      };
+      audioEl.onended = () => {
+        if (isMountedRef.current) { isSpeakingRef.current = false; setIsSpeaking(false); setState('armed'); }
+      };
+
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          // Assign to REMOTE ref – not to local mic ref
+          remoteMediaStreamRef.current = event.streams[0];
+          audioEl.srcObject = event.streams[0];
+          audioEl.play().catch((playErr) => {
+            console.error('[VoiceJami Realtime] audio.play() rejected:', playErr);
+            setErrorMessage('Âm thanh Jami bị trình duyệt chặn. Hãy bấm vào trang để bật âm thanh.');
+          });
+        }
+      };
+
+      // Add LIVE (not stopped) microphone tracks to peer connection
+      freshStream.getTracks().forEach((track) => {
+        if (track.readyState !== 'ended') {
+          pc.addTrack(track, freshStream);
+        }
+      });
+
+      const dc = pc.createDataChannel('oai-events');
+      dataChannelRef.current = dc;
+
+      dc.onopen = () => console.log('[VoiceJami WebRTC] oai-events data channel open');
+      dc.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data);
+          const eventId = event.event_id || event.id;
+          if (eventId) {
+            if (processedRealtimeEventIdsRef.current.has(eventId)) return;
+            processedRealtimeEventIdsRef.current.add(eventId);
+          }
+
+          if (event.type === 'response.created' && event.response?.id) {
+            realtimeTranscriptBuffersRef.current.set(event.response.id, '');
+            setLastReply('');
+          } else if (
+            event.type === 'response.output_audio_transcript.delta' ||
+            event.type === 'response.audio_transcript.delta'
+          ) {
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            const responseId = event.response_id || event.response?.id || 'default';
+            const nextValue = (realtimeTranscriptBuffersRef.current.get(responseId) || '') + (event.delta || '');
+            realtimeTranscriptBuffersRef.current.set(responseId, nextValue);
+            setLastReply(nextValue);
+            if (isMountedRef.current) { isSpeakingRef.current = true; setIsSpeaking(true); setState('speaking'); }
+          } else if (event.type === 'response.done' && event.response?.id) {
+            const finalText = realtimeTranscriptBuffersRef.current.get(event.response.id);
+            if (finalText !== undefined) setLastReply(finalText);
+            isSpeakingRef.current = false;
+            setIsSpeaking(false);
+            if (isHandsFreeRef.current) setState('armed');
+          } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
+            if (event.transcript) setLastTranscript(event.transcript);
+          } else if (
+            event.type === 'response.function_call_arguments.done' ||
+            (event.type === 'response.output_item.done' && event.item?.type === 'function_call')
+          ) {
+            const call = event.item?.type === 'function_call' ? event.item : event;
+            const toolName = call.name || event.name;
+            const callId = call.call_id || event.call_id;
+            const rawArgs = call.arguments || event.arguments;
+
+            if (toolName && callId && activeRealtimeSessionIdRef.current) {
+              const callKey = `${activeRealtimeSessionIdRef.current}:${callId}`;
+              if (processedRealtimeCallIdsRef.current.has(callKey)) return;
+              processedRealtimeCallIdsRef.current.add(callKey);
+              api.executeRealtimeToolCall(activeRealtimeSessionIdRef.current, toolName, callId, rawArgs).then((result) => {
+                if (result.proposal) { setPendingProposal(result.proposal); setState('confirmation_pending'); }
+                if (result.clientAction?.route) navigate(result.clientAction.route);
+                if (dc.readyState === 'open' && callId) {
+                  dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) } }));
+                  dc.send(JSON.stringify({ type: 'response.create' }));
+                }
+              }).catch((err) => {
+                console.warn('[VoiceJami WebRTC] Tool execution failed:', err);
+                if (dc.readyState === 'open' && callId) {
+                  dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ success: false, error: err.message }) } }));
+                  dc.send(JSON.stringify({ type: 'response.create' }));
+                }
+              });
+            }
+          } else if (event.type === 'response.output_audio_transcript.done' || event.type === 'response.done') {
+            if (isMountedRef.current) { isSpeakingRef.current = false; setIsSpeaking(false); setState('armed'); }
+          } else if (event.type === 'error') {
+            console.warn('[VoiceJami WebRTC] OpenAI Realtime error event:', event.error);
+          }
+        } catch {}
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      if (offer.sdp) {
+        const sdpRes = await api.sendRealtimeSdpOffer(offer.sdp);
+        if (sdpRes.mode === 'openai_realtime' && sdpRes.sdpAnswer) {
+          await pc.setRemoteDescription({ type: 'answer', sdp: sdpRes.sdpAnswer });
+          activeRealtimeSessionIdRef.current = sdpRes.sessionId || null;
+          processedRealtimeEventIdsRef.current.clear();
+          processedRealtimeCallIdsRef.current.clear();
+          realtimeTranscriptBuffersRef.current.clear();
+          setPrivacyMode('openai_realtime');
+          privacyModeRef.current = 'openai_realtime';
+          setState('armed');
+          return;
+        }
+      }
+
+      // SDP negotiation failed – clean up
+      throw new Error('SDP negotiation failed or server did not return openai_realtime mode');
+    } catch (rtcErr) {
+      console.warn('[VoiceJami Realtime] Session could not be established:', rtcErr);
+      if (peerConnectionRef.current) {
+        try { peerConnectionRef.current.close(); } catch {}
+        peerConnectionRef.current = null;
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+      }
+      remoteMediaStreamRef.current = null;
+    }
+  }, [navigate]);
+
+  // ── Confirm/reject proposal ────────────────────────────────────────────────
+
   const confirmProposal = useCallback(
     async (decision: 'confirm' | 'reject' = 'confirm') => {
       if (!pendingProposal) return;
@@ -902,9 +965,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setPendingProposal(null);
         setLastReply(res.message);
 
-        if (res.clientAction?.route) {
-          navigate(res.clientAction.route);
-        }
+        if (res.clientAction?.route) navigate(res.clientAction.route);
 
         setState('speaking');
         speakText(res.message, () => {
@@ -923,30 +984,19 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [pendingProposal, navigate, speakText, startWakeWordRecognizer]
   );
 
-  /**
-   * Cancel current turn and return to armed state
-   */
+  // ── Cancel current turn ────────────────────────────────────────────────────
+
   const cancelCurrentTurn = useCallback(() => {
     if (activeAbortControllerRef.current) {
       activeAbortControllerRef.current.abort();
       activeAbortControllerRef.current = null;
     }
-    if (restartTimerRef.current) {
-      clearTimeout(restartTimerRef.current);
-      restartTimerRef.current = null;
-    }
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
+    if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
     if (speechRecognitionRef.current) {
-      try {
-        speechRecognitionRef.current.abort();
-      } catch {}
+      try { speechRecognitionRef.current.abort(); } catch {}
     }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setPendingProposal(null);
     if (isHandsFreeRef.current) {
       setState('armed');
@@ -956,17 +1006,14 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, [startWakeWordRecognizer]);
 
-  /**
-   * Send a manual text command through the voice agent pipeline
-   */
   const sendManualCommand = useCallback(
-    async (text: string) => {
-      await executeCommand(text);
-    },
+    async (text: string) => { await executeCommand(text); },
     [executeCommand]
   );
 
-  // Audio element initialization for WebRTC remote output
+  // ── Effects ────────────────────────────────────────────────────────────────
+
+  // Audio element for WebRTC remote output
   useEffect(() => {
     isMountedRef.current = true;
     const audio = new Audio();
@@ -981,62 +1028,48 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
   }, [cleanupHardware]);
 
-  // Session Duration Timer
+  // Session duration timer
   useEffect(() => {
     if (isHandsFreeEnabled && state !== 'disabled') {
       sessionTimerRef.current = setInterval(() => {
-        if (isMountedRef.current) {
-          setSessionDuration((prev) => prev + 1);
-        }
+        if (isMountedRef.current) setSessionDuration((prev) => prev + 1);
       }, 1000);
     } else {
       if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
       if (isMountedRef.current) setSessionDuration(0);
     }
-    return () => {
-      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-    };
+    return () => { if (sessionTimerRef.current) clearInterval(sessionTimerRef.current); };
   }, [isHandsFreeEnabled, state]);
 
-  // Tab visibility suspension handling
+  // Tab visibility suspension
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        // Suspend microphone tracks and speech recognition when tab is hidden
         if (mediaStreamRef.current) {
           mediaStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = false));
         }
         if (state === 'armed' || state === 'listening_command') {
           if (speechRecognitionRef.current) {
-            try {
-              speechRecognitionRef.current.abort();
-            } catch {}
+            try { speechRecognitionRef.current.abort(); } catch {}
           }
-          if (silenceTimerRef.current) {
-            clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = null;
-          }
-          if (isMountedRef.current) {
-            setState('suspended');
-          }
+          if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+          if (isMountedRef.current) setState('suspended');
         }
       } else {
-        // Resume microphone tracks and re-arm when tab is visible again
         if (mediaStreamRef.current) {
           mediaStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = true));
         }
-        if (state === 'suspended' && isHandsFreeRef.current) {
-          if (isMountedRef.current) {
-            setState('armed');
-            startWakeWordRecognizer();
-          }
+        if (state === 'suspended' && isHandsFreeRef.current && isMountedRef.current) {
+          setState('armed');
+          startWakeWordRecognizer();
         }
       }
     };
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [state, startWakeWordRecognizer]);
+
+  // ── Provider value ─────────────────────────────────────────────────────────
 
   return (
     <VoiceJamiContext.Provider
@@ -1054,7 +1087,8 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         pendingProposal,
         errorMessage,
         remoteAudioElement: remoteAudioElementRef.current,
-        remoteMediaStream: mediaStreamRef.current,
+        // ← remoteMediaStream is now the REMOTE OpenAI stream, not the local mic
+        remoteMediaStream: remoteMediaStreamRef.current,
         enableHandsFree,
         disableHandsFree,
         confirmProposal,
@@ -1076,7 +1110,6 @@ export const useVoiceJamiOptional = () => {
 export const useVoiceJami = () => {
   const context = useContext(VoiceJamiContext);
   if (!context) {
-    // Return safe inert default context for standalone usage
     return {
       state: 'disabled' as VoiceState,
       isHandsFreeEnabled: false,

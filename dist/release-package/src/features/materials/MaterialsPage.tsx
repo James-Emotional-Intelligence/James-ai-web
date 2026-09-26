@@ -32,6 +32,7 @@ import { api } from '../../lib/api-client';
 import { LearningMaterial, Subject, Outline, BookProgress } from '../../../shared/types';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportMaterialSummaryToPdf } from '../../lib/pdf-export-service';
+import { ModalPortal } from '../../components/common/ModalPortal';
 import confetti from '../../lib/safe-confetti';
 
 type ActiveTab = 'materials' | 'books' | 'outlines';
@@ -850,303 +851,294 @@ export const MaterialsPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 1: TẢI SÁCH MỀM LÊN (CÓ BẢO ĐẢM QUYỀN HỢP PHÁP) */}
-      {modalMode === 'upload_book' && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#0B1F17] border border-emerald-700/60 rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-emerald-900/50 pb-3">
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-emerald-400" />
-                Tải Sách Mềm Lên Kho Tài Liệu
-              </h2>
-              <button onClick={() => setModalMode(null)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* MODAL 1: TẢI SÁCH MỀM LÊN — portal covers full viewport including headers */}
+      <ModalPortal
+        isOpen={modalMode === 'upload_book'}
+        onClose={() => setModalMode(null)}
+        title="Tải Sách Mềm Lên Kho Tài Liệu"
+        icon={<BookOpen className="w-5 h-5" />}
+        maxWidthClass="max-w-lg"
+      >
+        <form onSubmit={handleUploadBookSubmit} className="space-y-4">
+          {/* Dropzone */}
+          <div
+            onClick={() => bookFileInputRef.current?.click()}
+            className="border-2 border-dashed border-emerald-800/60 hover:border-emerald-500/80 bg-black/30 rounded-2xl p-6 text-center cursor-pointer transition flex flex-col items-center gap-2"
+          >
+            <input
+              ref={bookFileInputRef}
+              type="file"
+              accept=".pdf,.epub,.docx,.txt,.md"
+              onChange={(e) => e.target.files?.[0] && handleBookFileSelected(e.target.files[0])}
+              className="hidden"
+            />
+            <Upload className="w-8 h-8 text-emerald-400" />
+            <span className="text-xs font-semibold text-slate-200">
+              {bookFile ? bookFile.name : 'Chọn hoặc kéo thả tệp sách (PDF, EPUB, DOCX, TXT)'}
+            </span>
+            <span className="text-[10px] text-slate-500">Giới hạn tối đa: 100MB</span>
+          </div>
 
-            <form onSubmit={handleUploadBookSubmit} className="space-y-4">
-              {/* Dropzone */}
-              <div
-                onClick={() => bookFileInputRef.current?.click()}
-                className="border-2 border-dashed border-emerald-800/60 hover:border-emerald-500/80 bg-black/30 rounded-2xl p-6 text-center cursor-pointer transition flex flex-col items-center gap-2"
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Tên cuốn sách:</label>
+            <input
+              type="text"
+              required
+              value={bookTitle}
+              onChange={(e) => setBookTitle(e.target.value)}
+              placeholder="VD: Toán 9 Tập 1 (Kết nối tri thức)"
+              className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">Môn học:</label>
+              <select
+                value={bookSubjectId}
+                onChange={(e) => setBookSubjectId(e.target.value)}
+                className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
               >
-                <input
-                  ref={bookFileInputRef}
-                  type="file"
-                  accept=".pdf,.epub,.docx,.txt,.md"
-                  onChange={(e) => e.target.files?.[0] && handleBookFileSelected(e.target.files[0])}
-                  className="hidden"
-                />
-                <Upload className="w-8 h-8 text-emerald-400" />
-                <span className="text-xs font-semibold text-slate-200">
-                  {bookFile ? bookFile.name : 'Chọn hoặc kéo thả tệp sách (PDF, EPUB, DOCX, TXT)'}
-                </span>
-                <span className="text-[10px] text-slate-500">Giới hạn tối đa: 100MB</span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Tên cuốn sách:</label>
-                <input
-                  type="text"
-                  required
-                  value={bookTitle}
-                  onChange={(e) => setBookTitle(e.target.value)}
-                  placeholder="VD: Toán 9 Tập 1 (Kết nối tri thức)"
-                  className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Môn học:</label>
-                  <select
-                    value={bookSubjectId}
-                    onChange={(e) => setBookSubjectId(e.target.value)}
-                    className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                  >
-                    {subjects.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Nhà xuất bản:</label>
-                  <input
-                    type="text"
-                    value={bookPublisher}
-                    onChange={(e) => setBookPublisher(e.target.value)}
-                    placeholder="VD: NXB Giáo Dục Việt Nam"
-                    className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                  />
-                </div>
-              </div>
-
-              {/* Rights confirmation checkbox */}
-              <div className="p-3 bg-emerald-950/60 border border-emerald-800/40 rounded-xl flex items-start gap-2.5">
-                <input
-                  type="checkbox"
-                  id="bookRightsCheck"
-                  checked={bookRightsConfirmed}
-                  onChange={(e) => setBookRightsConfirmed(e.target.checked)}
-                  className="mt-0.5 accent-emerald-500 cursor-pointer"
-                  required
-                />
-                <label htmlFor="bookRightsCheck" className="text-[11px] text-slate-300 leading-tight cursor-pointer select-none">
-                  <span className="font-bold text-emerald-300 flex items-center gap-1 mb-0.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Cam kết bản quyền học tập:
-                  </span>
-                  Tôi có quyền sử dụng tệp này cho mục đích học tập cá nhân và không phân phối trái phép.
-                </label>
-              </div>
-
-              {/* Progress */}
-              {isUploadingBook && (
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[11px] text-slate-400">
-                    <span>Đang tải lên...</span>
-                    <span>{bookUploadProgress}%</span>
-                  </div>
-                  <div className="h-1.5 bg-black/40 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-emerald-500 transition-all duration-300"
-                      style={{ width: `${bookUploadProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-emerald-900/40">
-                <button
-                  type="button"
-                  onClick={() => setModalMode(null)}
-                  className="px-4 py-2 text-xs text-slate-400 hover:text-white"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={isUploadingBook || !bookRightsConfirmed}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow transition flex items-center gap-1.5"
-                >
-                  {isUploadingBook ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  <span>Tải lên sách</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: TẢI LÊN TỆP NHỎ */}
-      {modalMode === 'upload' && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#0B1F17] border border-emerald-700/60 rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-emerald-900/50 pb-3">
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <Upload className="w-5 h-5 text-emerald-400" />
-                Tải Lên Tệp Tài Liệu
-              </h2>
-              <button onClick={() => setModalMode(null)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+                {subjects.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <form onSubmit={handleUploadSubmit} className="space-y-4">
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-emerald-800/60 hover:border-emerald-500/80 bg-black/30 rounded-2xl p-6 text-center cursor-pointer transition flex flex-col items-center gap-2"
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">Nhà xuất bản:</label>
+              <input
+                type="text"
+                value={bookPublisher}
+                onChange={(e) => setBookPublisher(e.target.value)}
+                placeholder="VD: NXB Giáo Dục Việt Nam"
+                className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
+              />
+            </div>
+          </div>
+
+          {/* Rights confirmation checkbox */}
+          <div className="p-3 bg-emerald-950/60 border border-emerald-800/40 rounded-xl flex items-start gap-2.5">
+            <input
+              type="checkbox"
+              id="bookRightsCheck"
+              checked={bookRightsConfirmed}
+              onChange={(e) => setBookRightsConfirmed(e.target.checked)}
+              className="mt-0.5 accent-emerald-500 cursor-pointer"
+              required
+            />
+            <label htmlFor="bookRightsCheck" className="text-[11px] text-slate-300 leading-tight cursor-pointer select-none">
+              <span className="font-bold text-emerald-300 flex items-center gap-1 mb-0.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Cam kết bản quyền học tập:
+              </span>
+              Tôi có quyền sử dụng tệp này cho mục đích học tập cá nhân và không phân phối trái phép.
+            </label>
+          </div>
+
+          {/* Progress */}
+          {isUploadingBook && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-[11px] text-slate-400">
+                <span>Đang tải lên...</span>
+                <span>{bookUploadProgress}%</span>
+              </div>
+              <div className="h-1.5 bg-black/40 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500 transition-all duration-300"
+                  style={{ width: `${bookUploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-emerald-900/40">
+            <button
+              type="button"
+              onClick={() => setModalMode(null)}
+              className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+            >
+              Hủy
+            </button>
+            <button
+              type="submit"
+              disabled={isUploadingBook || !bookRightsConfirmed}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow transition flex items-center gap-1.5"
+            >
+              {isUploadingBook ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              <span>Tải lên sách</span>
+            </button>
+          </div>
+        </form>
+      </ModalPortal>
+
+      {/* MODAL 2: TẢI LÊN TỆP NHỎ — portal */}
+      <ModalPortal
+        isOpen={modalMode === 'upload'}
+        onClose={() => setModalMode(null)}
+        title="Tải Lên Tệp Tài Liệu"
+        icon={<Upload className="w-5 h-5" />}
+        maxWidthClass="max-w-lg"
+      >
+        <form onSubmit={handleUploadSubmit} className="space-y-4">
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-emerald-800/60 hover:border-emerald-500/80 bg-black/30 rounded-2xl p-6 text-center cursor-pointer transition flex flex-col items-center gap-2"
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.webp"
+              onChange={(e) => e.target.files?.[0] && handleFileSelected(e.target.files[0])}
+              className="hidden"
+            />
+            <Upload className="w-8 h-8 text-emerald-400" />
+            <span className="text-xs font-semibold text-slate-200">
+              {selectedFile ? selectedFile.name : 'Chọn hoặc kéo thả tệp (PDF, Ảnh)'}
+            </span>
+            <span className="text-[10px] text-slate-500">Giới hạn tối đa: 25MB</span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Tiêu đề tài liệu:</label>
+            <input
+              type="text"
+              required
+              value={uploadTitle}
+              onChange={(e) => setUploadTitle(e.target.value)}
+              placeholder="VD: Đề thi thử Toán học kì 1"
+              className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Môn học:</label>
+            <select
+              value={uploadSubjectId}
+              onChange={(e) => setUploadSubjectId(e.target.value)}
+              className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
+            >
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {isUploading && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-[11px] text-slate-400">
+                <span>Đang tải lên...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="h-1.5 bg-black/40 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500 transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-emerald-900/40">
+            <button
+              type="button"
+              onClick={() => setModalMode(null)}
+              className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+            >
+              Hủy
+            </button>
+            <button
+              type="submit"
+              disabled={isUploading || !selectedFile}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow transition flex items-center gap-1.5"
+            >
+              {isUploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              <span>Tải lên</span>
+            </button>
+          </div>
+        </form>
+      </ModalPortal>
+
+      {/* MODAL 3: TẠO ĐỀ CƯƠNG THỦ CÔNG — portal */}
+      <ModalPortal
+        isOpen={modalMode === 'create_outline'}
+        onClose={() => setModalMode(null)}
+        title="Tạo Đề Cương Ôn Tập Mới"
+        icon={<Layers className="w-5 h-5" />}
+        maxWidthClass="max-w-lg"
+      >
+        <form onSubmit={handleManualOutlineSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Tiêu đề đề cương:</label>
+            <input
+              type="text"
+              required
+              value={outlineTitle}
+              onChange={(e) => setOutlineTitle(e.target.value)}
+              placeholder="VD: Trọng tâm Chương 1 - Hệ phương trình"
+              className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">Môn học:</label>
+              <select
+                value={outlineSubjectId}
+                onChange={(e) => setOutlineSubjectId(e.target.value)}
+                className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
               >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.png,.jpg,.jpeg,.webp"
-                  onChange={(e) => e.target.files?.[0] && handleFileSelected(e.target.files[0])}
-                  className="hidden"
-                />
-                <Upload className="w-8 h-8 text-emerald-400" />
-                <span className="text-xs font-semibold text-slate-200">
-                  {selectedFile ? selectedFile.name : 'Chọn hoặc kéo thả tệp (PDF, Ảnh)'}
-                </span>
-                <span className="text-[10px] text-slate-500">Giới hạn tối đa: 25MB</span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Tiêu đề tài liệu:</label>
-                <input
-                  type="text"
-                  required
-                  value={uploadTitle}
-                  onChange={(e) => setUploadTitle(e.target.value)}
-                  placeholder="VD: Đề thi thử Toán học kì 1"
-                  className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Môn học:</label>
-                <select
-                  value={uploadSubjectId}
-                  onChange={(e) => setUploadSubjectId(e.target.value)}
-                  className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                >
-                  {subjects.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-emerald-900/40">
-                <button
-                  type="button"
-                  onClick={() => setModalMode(null)}
-                  className="px-4 py-2 text-xs text-slate-400 hover:text-white"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={isUploading || !selectedFile}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow transition flex items-center gap-1.5"
-                >
-                  {isUploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  <span>Tải lên</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: TẠO ĐỀ CƯƠNG THỦ CÔNG */}
-      {modalMode === 'create_outline' && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#0B1F17] border border-emerald-700/60 rounded-3xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-emerald-900/50 pb-3">
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <Layers className="w-5 h-5 text-emerald-400" />
-                Tạo Đề Cương Ôn Tập Mới
-              </h2>
-              <button onClick={() => setModalMode(null)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+                {subjects.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
-
-            <form onSubmit={handleManualOutlineSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Tiêu đề đề cương:</label>
-                <input
-                  type="text"
-                  required
-                  value={outlineTitle}
-                  onChange={(e) => setOutlineTitle(e.target.value)}
-                  placeholder="VD: Trọng tâm Chương 1 - Hệ phương trình"
-                  className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Môn học:</label>
-                  <select
-                    value={outlineSubjectId}
-                    onChange={(e) => setOutlineSubjectId(e.target.value)}
-                    className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                  >
-                    {subjects.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Chương / Chủ đề:</label>
-                  <input
-                    type="text"
-                    value={outlineChapter}
-                    onChange={(e) => setOutlineChapter(e.target.value)}
-                    placeholder="VD: Chương 1"
-                    className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Nội dung đề cương (Markdown):</label>
-                <textarea
-                  rows={6}
-                  value={outlineMarkdown}
-                  onChange={(e) => setOutlineMarkdown(e.target.value)}
-                  placeholder="Nhập các ý chính, công thức cần ghi nhớ..."
-                  className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-3 text-xs text-slate-200 font-mono"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-emerald-900/40">
-                <button
-                  type="button"
-                  onClick={() => setModalMode(null)}
-                  className="px-4 py-2 text-xs text-slate-400 hover:text-white"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingOutline}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow transition"
-                >
-                  Lưu đề cương
-                </button>
-              </div>
-            </form>
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">Chương / Chủ đề:</label>
+              <input
+                type="text"
+                value={outlineChapter}
+                onChange={(e) => setOutlineChapter(e.target.value)}
+                placeholder="VD: Chương 1"
+                className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-2.5 text-xs text-slate-200"
+              />
+            </div>
           </div>
-        </div>
-      )}
+
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Nội dung đề cương (Markdown):</label>
+            <textarea
+              rows={6}
+              value={outlineMarkdown}
+              onChange={(e) => setOutlineMarkdown(e.target.value)}
+              placeholder="Nhập các ý chính, công thức cần ghi nhớ..."
+              className="w-full bg-[#050F0B] border border-emerald-900/50 rounded-xl p-3 text-xs text-slate-200 font-mono"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-emerald-900/40">
+            <button
+              type="button"
+              onClick={() => setModalMode(null)}
+              className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+            >
+              Hủy
+            </button>
+            <button
+              type="submit"
+              disabled={isSavingOutline}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow transition"
+            >
+              Lưu đề cương
+            </button>
+          </div>
+        </form>
+      </ModalPortal>
     </div>
   );
 };
