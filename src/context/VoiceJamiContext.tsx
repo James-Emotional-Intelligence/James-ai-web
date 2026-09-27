@@ -375,9 +375,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     activeUtteranceIdRef.current++;
     clearSpeechResumeInterval();
     clearTtsWatchdog();
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
+    
+    jamiTts.stop();
+
     activeSpeechUtteranceRef.current = null;
     isSpeakingRef.current = false;
     setIsSpeaking(false);

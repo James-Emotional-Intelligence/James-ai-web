@@ -81,14 +81,10 @@ export function detectSegmentLanguage(text: string): SpeechLanguage {
     if (COMMON_EN_WORDS.has(word)) enScore += 2;
   }
 
-  // If English score outweighs Vietnamese score
-  if (enScore > viScore) {
-    return 'en-US';
-  }
-
-  // If text is ASCII and contains multiple English words or looks like English sentence
-  const isAscii = /^[\u0020-\u007E\t\n\r]*$/.test(trimmed);
-  if (isAscii && (enScore > 0 || (words.length >= 2 && viScore === 0))) {
+  // Only if English score strictly and significantly outweighs Vietnamese score
+  // and there are actual English words found, classify as English.
+  // Otherwise, default to Vietnamese.
+  if (enScore > 0 && enScore > viScore) {
     return 'en-US';
   }
 

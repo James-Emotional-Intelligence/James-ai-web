@@ -120,6 +120,7 @@ import { materialProcessor } from '../services/material-processor';
 import { aiBillingService } from '../services/ai-billing-service';
 import { registrationCodeService } from '../services/registration-code-service';
 import { aiWalletRepo } from '../repositories/ai-wallet-repository';
+import { ttsService } from '../services/tts-service';
 
 export const apiRouter = Router();
 const userRepo = UserRepository.getInstance();
@@ -4051,7 +4052,35 @@ apiRouter.delete('/jami/messages', requireAuth, asyncHandler(async (req: Request
   const userId = (req as any).userId;
   const conversationId = req.query.conversationId as string | undefined;
   const success = await jamiRepo.clearMessages(userId, conversationId);
+
   res.json({ success });
+}));
+
+apiRouter.post('/jami/tts', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const bodySchema = z.object({
+    text: z.string().max(4096),
+    language: z.string().default('vi-VN'),
+    messageId: z.string().optional(),
+  });
+  
+  const parsed = bodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'INVALID_REQUEST' });
+    return;
+  }
+  
+  const { text, language } = parsed.data;
+  
+  try {
+    const audioBuffer = await ttsService.generateSpeech(text, language);
+    res.set('Content-Type', env.OPENAI_TTS_FORMAT === 'opus' ? 'audio/ogg' : 'audio/mpeg');
+    res.set('Cache-Control', 'no-store');
+    res.send(audioBuffer);
+  } catch (error: any) {
+    console.error('[TTS Error]', error);
+    res.status(500).json({ error: 'TTS_GENERATION_FAILED' });
+  }
 }));
 
 apiRouter.post('/jami/chat', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {

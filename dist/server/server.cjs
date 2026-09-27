@@ -197,6 +197,10 @@ var init_env = __esm({
       OPENAI_REALTIME_MODEL: import_zod.z.string().default("gpt-realtime"),
       OPENAI_TRANSCRIBE_MODEL: import_zod.z.string().default("whisper-1"),
       OPENAI_VOICE: import_zod.z.string().default("alloy"),
+      // TTS API Config
+      OPENAI_TTS_MODEL: import_zod.z.string().default("gpt-4o-mini-tts"),
+      OPENAI_TTS_VOICE: import_zod.z.string().optional(),
+      OPENAI_TTS_FORMAT: import_zod.z.string().default("mp3"),
       // Storage Configuration (Local Disk vs Cloudflare R2/S3)
       STORAGE_DRIVER: import_zod.z.enum(["local", "r2"]).default("local"),
       LOCAL_STORAGE_ROOT: import_zod.z.string().default("./storage"),
@@ -23525,6 +23529,52 @@ init_notification_scheduler_service();
 init_storage_service();
 init_ai_billing_service();
 init_ai_wallet_repository();
+
+// server/services/tts-service.ts
+init_ai_gateway();
+init_env();
+var TtsService = class _TtsService {
+  constructor() {
+    this.aiGateway = AiGateway.getInstance();
+  }
+  static getInstance() {
+    if (!_TtsService.instance) {
+      _TtsService.instance = new _TtsService();
+    }
+    return _TtsService.instance;
+  }
+  async generateSpeech(text, language = "vi-VN") {
+    const client = this.aiGateway.getClient();
+    if (!client) {
+      throw new Error("AI_NOT_CONFIGURED");
+    }
+    const model = env.OPENAI_TTS_MODEL || "tts-1";
+    const format = env.OPENAI_TTS_FORMAT || "mp3";
+    const baseVoice = env.OPENAI_TTS_VOICE || env.OPENAI_VOICE || "shimmer";
+    const voice = baseVoice;
+    try {
+      const response = await client.audio.speech.create({
+        model,
+        voice,
+        input: text,
+        response_format: format
+      });
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } catch (error) {
+      if (error?.status === 401) {
+        throw new Error("AI_UNAUTHORIZED");
+      }
+      if (error?.status === 429) {
+        throw new Error("AI_RATE_LIMIT_EXCEEDED");
+      }
+      throw error;
+    }
+  }
+};
+var ttsService = TtsService.getInstance();
+
+// server/routes/api.ts
 var apiRouter = (0, import_express.Router)();
 var userRepo6 = UserRepository.getInstance();
 var authService2 = AuthService.getInstance();
@@ -26784,6 +26834,29 @@ apiRouter.delete("/jami/messages", requireAuth, asyncHandler(async (req, res) =>
   const conversationId = req.query.conversationId;
   const success = await jamiRepo.clearMessages(userId, conversationId);
   res.json({ success });
+}));
+apiRouter.post("/jami/tts", requireAuth, aiRateLimiter, asyncHandler(async (req, res) => {
+  const userId = req.userId;
+  const bodySchema = import_zod9.z.object({
+    text: import_zod9.z.string().max(4096),
+    language: import_zod9.z.string().default("vi-VN"),
+    messageId: import_zod9.z.string().optional()
+  });
+  const parsed = bodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "INVALID_REQUEST" });
+    return;
+  }
+  const { text, language } = parsed.data;
+  try {
+    const audioBuffer = await ttsService.generateSpeech(text, language);
+    res.set("Content-Type", env.OPENAI_TTS_FORMAT === "opus" ? "audio/ogg" : "audio/mpeg");
+    res.set("Cache-Control", "no-store");
+    res.send(audioBuffer);
+  } catch (error) {
+    console.error("[TTS Error]", error);
+    res.status(500).json({ error: "TTS_GENERATION_FAILED" });
+  }
 }));
 apiRouter.post("/jami/chat", requireAuth, aiRateLimiter, asyncHandler(async (req, res) => {
   const userId = req.userId;

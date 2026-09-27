@@ -80,6 +80,11 @@ const EnvSchema = z.object({
   OPENAI_REALTIME_MODEL: z.string().default('gpt-realtime'),
   OPENAI_TRANSCRIBE_MODEL: z.string().default('whisper-1'),
   OPENAI_VOICE: z.string().default('alloy'),
+  
+  // TTS API Config
+  OPENAI_TTS_MODEL: z.string().default('gpt-4o-mini-tts'),
+  OPENAI_TTS_VOICE: z.string().optional(),
+  OPENAI_TTS_FORMAT: z.string().default('mp3'),
 
   // Storage Configuration (Local Disk vs Cloudflare R2/S3)
   STORAGE_DRIVER: z.enum(['local', 'r2']).default('local'),
