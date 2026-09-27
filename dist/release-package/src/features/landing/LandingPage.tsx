@@ -112,13 +112,13 @@ export const LandingPage: React.FC = () => {
                 <span>DÀNH RIÊNG CHO HỌC SINH LỚP 6 — 12</span>
               </div>
 
-              <h1 className="text-[32px] sm:text-5xl lg:text-[56px] font-black tracking-tight text-[#F3FAF5] leading-[1.25] lg:leading-[1.15] max-w-2xl">
-                TỪ MỤC TIÊU ĐẾN <br className="hidden sm:block" />
-                <span className="bg-gradient-to-r from-[#22C55E] via-[#86EFAC] to-[#4ADE80] bg-clip-text text-transparent">
-                  LỘ TRÌNH HỌC TẬP
-                </span> <br className="hidden sm:block" />
-                ĐƯỢC THIẾT KẾ RIÊNG <br className="hidden lg:block" />
-                CHO BẠN
+              <h1 className="text-[28px] sm:text-4xl lg:text-[40px] font-black tracking-tight text-[#F3FAF5] leading-[1.25] lg:leading-[1.15] w-full xl:whitespace-nowrap">
+                <span className="block">
+                  TỪ MỤC TIÊU ĐẾN <span className="bg-gradient-to-r from-[#22C55E] via-[#86EFAC] to-[#4ADE80] bg-clip-text text-transparent">LỘ TRÌNH HỌC TẬP</span>
+                </span>
+                <span className="block">
+                  ĐƯỢC THIẾT KẾ RIÊNG CHO BẠN
+                </span>
               </h1>
 
               {/* Action Buttons */}
