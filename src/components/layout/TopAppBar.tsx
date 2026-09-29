@@ -103,14 +103,26 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
 
   const [wallet, setWallet] = useState<AiWalletView | null>(null);
   const [showWalletModal, setShowWalletModal] = useState(false);
+  const [aiWalletEnabled, setAiWalletEnabled] = useState(true);
 
   useEffect(() => {
-    if (user) {
+    fetch('/api/v1/app-config')
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.features && typeof d.features.aiWalletEnabled !== 'undefined') {
+          setAiWalletEnabled(d.features.aiWalletEnabled);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (user && aiWalletEnabled) {
       api.getAiWalletMe()
         .then((res) => setWallet(res.wallet))
         .catch(() => {});
     }
-  }, [user, location.pathname]);
+  }, [user, location.pathname, aiWalletEnabled]);
 
   const displayName = user?.preferredName || user?.displayName || 'Học sinh';
   const grade = profile?.gradeLevel || 9;
@@ -213,7 +225,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({
           </button>
 
           {/* AI Budget Wallet Pill */}
-          {wallet && (
+          {aiWalletEnabled && wallet && (
             <button
               onClick={() => setShowWalletModal(true)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-sm cursor-pointer ${

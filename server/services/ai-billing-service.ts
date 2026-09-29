@@ -88,6 +88,16 @@ export class AiBillingService {
     pricingVersion: string;
     idempotencyKey: string;
   }> {
+    if (!env.AI_WALLET_ENABLED) {
+      return {
+        isUnlimited: true,
+        reservedMilliVnd: 0n,
+        reservationTxId: 'no-billing',
+        pricingVersion: 'none',
+        idempotencyKey: params.idempotencyKey || 'no-billing',
+      };
+    }
+
     const { userId, model, estimatedInputTokens, maxOutputTokens, promptId, requestId } = params;
 
     if (!isModelSupported(model)) {
@@ -142,6 +152,10 @@ export class AiBillingService {
     errorCode?: string;
     latencyMs?: number;
   }): Promise<{ actualCostMilliVnd: bigint; actualCostVnd: number; aiRunId: string }> {
+    if (!env.AI_WALLET_ENABLED) {
+      return { actualCostMilliVnd: 0n, actualCostVnd: 0, aiRunId: 'no-billing' };
+    }
+
     const { userId, model, reservedMilliVnd, isUnlimited, usage, promptId, requestId, success, errorCode, latencyMs } = params;
     const rawKey = params.idempotencyKey || (params as any).reservationIdempotencyKey || ('idemp_' + crypto.randomUUID().replace(/-/g, ''));
 
@@ -278,6 +292,7 @@ export class AiBillingService {
   private reconcileWorkerTimer: NodeJS.Timeout | null = null;
 
   public startReconcileQueueWorker(intervalMs = 30000): void {
+    if (!env.AI_WALLET_ENABLED) return;
     if (this.reconcileWorkerTimer) return;
     this.reconcileWorkerTimer = setInterval(async () => {
       try {

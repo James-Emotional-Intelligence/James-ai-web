@@ -145,7 +145,7 @@ export class AuthService {
             codeId: string;
           } | null = null;
 
-          if (data.registrationCode && data.registrationCode.trim()) {
+          if (env.AI_WALLET_ENABLED && data.registrationCode && data.registrationCode.trim()) {
             codeRedemption = await registrationCodeService.redeemInTransaction(
               conn,
               userId,
@@ -185,53 +185,55 @@ export class AuthService {
           }
 
           // 6. Initialize AI Wallet with default grant & code bonuses
-          const bonusCreditMilliVnd = codeRedemption?.rewardType === 'credit' ? codeRedemption.creditMilliVnd : 0n;
-          const totalBalanceMilliVnd = defaultGrantMilliVnd + bonusCreditMilliVnd;
-          const isUnlimitedForever = codeRedemption?.rewardType === 'unlimited' ? codeRedemption.unlimitedForever : false;
-          const unlimitedUntil = codeRedemption?.rewardType === 'unlimited' ? codeRedemption.unlimitedUntil : null;
+          if (env.AI_WALLET_ENABLED) {
+            const bonusCreditMilliVnd = codeRedemption?.rewardType === 'credit' ? codeRedemption.creditMilliVnd : 0n;
+            const totalBalanceMilliVnd = defaultGrantMilliVnd + bonusCreditMilliVnd;
+            const isUnlimitedForever = codeRedemption?.rewardType === 'unlimited' ? codeRedemption.unlimitedForever : false;
+            const unlimitedUntil = codeRedemption?.rewardType === 'unlimited' ? codeRedemption.unlimitedUntil : null;
 
-          await conn.execute(
-            `INSERT INTO ai_wallets (user_id, balance_milli_vnd, reserved_milli_vnd, ai_enabled, unlimited_forever, unlimited_until, version, created_at, updated_at)
-             VALUES (?, ?, 0, TRUE, ?, ?, 0, NOW(3), NOW(3))`,
-            [
-              userId,
-              totalBalanceMilliVnd.toString(),
-              isUnlimitedForever ? 1 : 0,
-              unlimitedUntil,
-            ]
-          );
-
-          // Record initial grant transaction in ledger
-          const initialTxId = 'tx_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
-          await conn.execute(
-            `INSERT INTO ai_wallet_transactions
-             (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, idempotency_key, reason, created_at)
-             VALUES (?, ?, NULL, 'initial_grant', ?, ?, 0, ?, 'Cấp ngân sách AI ban đầu (25.000đ)', NOW(3))`,
-            [
-              initialTxId,
-              userId,
-              defaultGrantMilliVnd.toString(),
-              defaultGrantMilliVnd.toString(),
-              `init_grant_${userId}`,
-            ]
-          );
-
-          // If code granted extra credit, record bonus credit transaction in ledger
-          if (bonusCreditMilliVnd > 0n && codeRedemption) {
-            const codeTxId = 'tx_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
             await conn.execute(
-              `INSERT INTO ai_wallet_transactions
-               (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, registration_code_id, idempotency_key, reason, created_at)
-               VALUES (?, ?, NULL, 'code_credit', ?, ?, 0, ?, ?, 'Cộng ngân sách AI từ mã ưu đãi', NOW(3))`,
+              `INSERT INTO ai_wallets (user_id, balance_milli_vnd, reserved_milli_vnd, ai_enabled, unlimited_forever, unlimited_until, version, created_at, updated_at)
+               VALUES (?, ?, 0, TRUE, ?, ?, 0, NOW(3), NOW(3))`,
               [
-                codeTxId,
                 userId,
-                bonusCreditMilliVnd.toString(),
                 totalBalanceMilliVnd.toString(),
-                codeRedemption.codeId,
-                `code_credit_${userId}_${codeRedemption.codeId}`,
+                isUnlimitedForever ? 1 : 0,
+                unlimitedUntil,
               ]
             );
+
+            // Record initial grant transaction in ledger
+            const initialTxId = 'tx_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+            await conn.execute(
+              `INSERT INTO ai_wallet_transactions
+               (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, idempotency_key, reason, created_at)
+               VALUES (?, ?, NULL, 'initial_grant', ?, ?, 0, ?, 'Cấp ngân sách AI ban đầu (25.000đ)', NOW(3))`,
+              [
+                initialTxId,
+                userId,
+                defaultGrantMilliVnd.toString(),
+                defaultGrantMilliVnd.toString(),
+                `init_grant_${userId}`,
+              ]
+            );
+
+            // If code granted extra credit, record bonus credit transaction in ledger
+            if (bonusCreditMilliVnd > 0n && codeRedemption) {
+              const codeTxId = 'tx_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+              await conn.execute(
+                `INSERT INTO ai_wallet_transactions
+                 (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, registration_code_id, idempotency_key, reason, created_at)
+                 VALUES (?, ?, NULL, 'code_credit', ?, ?, 0, ?, ?, 'Cộng ngân sách AI từ mã ưu đãi', NOW(3))`,
+                [
+                  codeTxId,
+                  userId,
+                  bonusCreditMilliVnd.toString(),
+                  totalBalanceMilliVnd.toString(),
+                  codeRedemption.codeId,
+                  `code_credit_${userId}_${codeRedemption.codeId}`,
+                ]
+              );
+            }
           }
 
           // 7. Insert auth session in the same transaction
@@ -277,7 +279,7 @@ export class AuthService {
       const codeSnapshot = registrationCodeService.createDemoSnapshot();
       try {
         let codeRedemption: any = null;
-        if (data.registrationCode && data.registrationCode.trim()) {
+        if (env.AI_WALLET_ENABLED && data.registrationCode && data.registrationCode.trim()) {
           codeRedemption = await registrationCodeService.redeemInTransaction(null, userId, data.registrationCode.trim());
         }
 
@@ -289,12 +291,14 @@ export class AuthService {
           gradeLevel: data.gradeLevel,
         });
 
-        const bonusVnd = codeRedemption?.rewardType === 'credit' ? Number((codeRedemption.creditMilliVnd || 0n) / 1000n) : 0;
-        const initialTotalVnd = defaultGrantVnd + bonusVnd;
-        const wallet = await aiWalletRepo.ensureWallet(createdUser.id, initialTotalVnd);
-        if (codeRedemption?.rewardType === 'unlimited') {
-          wallet.unlimitedForever = Boolean(codeRedemption.unlimitedForever);
-          wallet.unlimitedUntil = codeRedemption.unlimitedUntil || null;
+        if (env.AI_WALLET_ENABLED) {
+          const bonusVnd = codeRedemption?.rewardType === 'credit' ? Number((codeRedemption.creditMilliVnd || 0n) / 1000n) : 0;
+          const initialTotalVnd = defaultGrantVnd + bonusVnd;
+          const wallet = await aiWalletRepo.ensureWallet(createdUser.id, initialTotalVnd);
+          if (codeRedemption?.rewardType === 'unlimited') {
+            wallet.unlimitedForever = Boolean(codeRedemption.unlimitedForever);
+            wallet.unlimitedUntil = codeRedemption.unlimitedUntil || null;
+          }
         }
 
         const sess = await sessionRepo.createSession(createdUser.id, false, !!data.rememberMe);

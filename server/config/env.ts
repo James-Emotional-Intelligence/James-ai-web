@@ -112,6 +112,7 @@ const EnvSchema = z.object({
   AI_MAX_CONCURRENCY_PER_USER: z.preprocess((val) => (val ? Number(val) : 3), z.number().default(3)),
 
   // AI Wallet, Billing & Registration Code Configuration
+  AI_WALLET_ENABLED: z.preprocess(parseBooleanEnv, z.boolean().default(true)),
   AI_DEFAULT_CREDIT_VND: z.preprocess((val) => (val ? Number(val) : 25000), z.number().default(25000)),
   AI_USD_TO_VND_RATE: z.preprocess((val) => (val ? Number(val) : 27000), z.number().int().positive().default(27000)),
   AI_PRICING_TIER: z.enum(['standard']).default('standard'),
@@ -197,12 +198,14 @@ export function parseEnv(): EnvConfig {
     }
 
     // 8. Registration Code Pepper Secret Check
-    if (
-      !parsed.REGISTRATION_CODE_PEPPER ||
-      parsed.REGISTRATION_CODE_PEPPER === 'jami-registration-code-pepper-secret-32-chars' ||
-      parsed.REGISTRATION_CODE_PEPPER.length < 32
-    ) {
-      throw new Error('[JAMI Config ERROR] REGISTRATION_CODE_PEPPER must be set to a secure random string of at least 32 characters in Production mode.');
+    if (parsed.AI_WALLET_ENABLED) {
+      if (
+        !parsed.REGISTRATION_CODE_PEPPER ||
+        parsed.REGISTRATION_CODE_PEPPER === 'jami-registration-code-pepper-secret-32-chars' ||
+        parsed.REGISTRATION_CODE_PEPPER.length < 32
+      ) {
+        throw new Error('[JAMI Config ERROR] REGISTRATION_CODE_PEPPER must be set to a secure random string of at least 32 characters in Production mode.');
+      }
     }
   }
 

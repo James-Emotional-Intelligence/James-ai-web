@@ -123,6 +123,20 @@ import { aiWalletRepo } from '../repositories/ai-wallet-repository';
 import { ttsService } from '../services/tts-service';
 
 export const apiRouter = Router();
+
+apiRouter.use((req: Request, res: Response, next: NextFunction) => {
+  if (!env.AI_WALLET_ENABLED) {
+    if (req.path.includes('/ai-wallet') || req.path.includes('/admin/registration-codes')) {
+      return res.status(404).json({ message: "AI Wallet is disabled" });
+    }
+  }
+  next();
+});
+
+apiRouter.get('/app-config', (req: Request, res: Response) => {
+  res.json({ features: { aiWalletEnabled: env.AI_WALLET_ENABLED } });
+});
+
 const userRepo = UserRepository.getInstance();
 const authService = AuthService.getInstance();
 
