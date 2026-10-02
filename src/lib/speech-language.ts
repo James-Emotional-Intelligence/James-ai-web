@@ -171,18 +171,30 @@ export function findOptimalVoice(
   const localVoices = voices.filter((voice) => voice.localService === true);
   if (localVoices.length === 0) return undefined;
   const normalizedLang = (voice: SpeechSynthesisVoice) => voice.lang.replace('_', '-').toLowerCase();
+  const requestedPrefix = lang === 'vi-VN' ? 'vi-' : 'en-';
+  const matching = localVoices.filter((voice) => normalizedLang(voice).startsWith(requestedPrefix));
+  if (matching.length === 0) return undefined;
 
-  if (lang === 'vi-VN') {
-    return (
-      localVoices.find((v) => normalizedLang(v) === 'vi-vn') ||
-      localVoices.find((v) => normalizedLang(v).startsWith('vi-')) ||
-      localVoices.find((v) => v.name.toLowerCase().includes('vietnam'))
-    );
+  const savedName = typeof window !== 'undefined'
+    ? window.localStorage.getItem(`jami.tts.voice.${lang}`)
+    : null;
+  if (savedName) {
+    const saved = matching.find((voice) => voice.name === savedName);
+    if (saved) return saved;
   }
 
-  // English: Look for Natural/Online US or UK English voices
-  return (
-    localVoices.find((v) => normalizedLang(v) === 'en-us') ||
-    localVoices.find((v) => normalizedLang(v).startsWith('en-'))
-  );
+  const qualityScore = (voice: SpeechSynthesisVoice): number => {
+    const name = voice.name.toLowerCase();
+    let score = voice.default ? 10 : 0;
+    if (name.includes('natural')) score += 50;
+    if (name.includes('hoaimy') || name.includes('hoài my')) score += 40;
+    if (name.includes('namminh') || name.includes('nam minh')) score += 35;
+    if (name.includes('google')) score += 20;
+    if (normalizedLang(voice) === lang.toLowerCase()) score += 5;
+    return score;
+  };
+
+  matching.sort((a, b) => qualityScore(b) - qualityScore(a));
+
+  return matching[0];
 }

@@ -50,7 +50,7 @@ const configuredChunkSize = (): number => {
 const configuredRate = (): number => {
   if (typeof window === 'undefined') return 1.05;
   const value = Number(window.localStorage.getItem('jami.tts.rate') || 1.05);
-  return Number.isFinite(value) ? Math.min(1.5, Math.max(0.75, value)) : 1.05;
+  return Number.isFinite(value) ? Math.min(1.5, Math.max(0.75, value)) : 0.95;
 };
 
 /** Single owner for all text-to-speech output in the browser. */
@@ -188,7 +188,7 @@ export class JamiTtsEngine {
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = lang;
     utterance.voice = voice;
-    utterance.rate = rate ?? (lang === 'vi-VN' ? configuredRate() : 1);
+    utterance.rate = rate ?? (lang === 'vi-VN' ? configuredRate() : 0.95);
     active.utterance = utterance;
     return new Promise<void>((resolve, reject) => {
       let settled = false;

@@ -27,15 +27,19 @@ export const SettingsPage: React.FC = () => {
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const { theme, setTheme } = useTheme();
   const voice = useVoiceJami();
-  const [speechRate, setSpeechRate] = useState(() => Number(localStorage.getItem('jami.tts.rate') || 1.05));
+  const [speechRate, setSpeechRate] = useState(() => Number(localStorage.getItem('jami.tts.rate') || 0.95));
   const [hasLocalVietnameseVoice, setHasLocalVietnameseVoice] = useState(false);
+  const [localVietnameseVoices, setLocalVietnameseVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVietnameseVoice, setSelectedVietnameseVoice] = useState(() => localStorage.getItem('jami.tts.voice.vi-VN') || '');
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return;
     const inspectVoices = () => {
-      setHasLocalVietnameseVoice(window.speechSynthesis.getVoices().some((item) =>
-        item.localService === true && item.lang.replace('_', '-').toLowerCase().startsWith('vi')
-      ));
+      const voices = window.speechSynthesis.getVoices().filter((item) =>
+        item.localService === true && item.lang.replace('_', '-').toLowerCase().startsWith('vi-')
+      );
+      setLocalVietnameseVoices(voices);
+      setHasLocalVietnameseVoice(voices.length > 0);
     };
     inspectVoices();
     window.speechSynthesis.addEventListener?.('voiceschanged', inspectVoices);
@@ -45,6 +49,12 @@ export const SettingsPage: React.FC = () => {
   const updateSpeechRate = (value: number) => {
     setSpeechRate(value);
     localStorage.setItem('jami.tts.rate', String(value));
+  };
+
+  const updateVietnameseVoice = (name: string) => {
+    setSelectedVietnameseVoice(name);
+    if (name) localStorage.setItem('jami.tts.voice.vi-VN', name);
+    else localStorage.removeItem('jami.tts.voice.vi-VN');
   };
 
   const handleSelectTheme = (newTheme: AppTheme) => {
@@ -340,6 +350,24 @@ export const SettingsPage: React.FC = () => {
                 onChange={(event) => updateSpeechRate(Number(event.target.value))}
                 className="w-full accent-[#16A34A]"
               />
+              {localVietnameseVoices.length > 0 && (
+                <label className="block text-[11px] text-[#A9B8AE]" htmlFor="setting-vietnamese-voice">
+                  Giọng tiếng Việt
+                  <select
+                    id="setting-vietnamese-voice"
+                    value={selectedVietnameseVoice}
+                    onChange={(event) => updateVietnameseVoice(event.target.value)}
+                    className="mt-1 w-full rounded-xl bg-[#080D09] border border-[#22C55E]/25 px-3 py-2 text-[#F3FAF5]"
+                  >
+                    <option value="">Tự động chọn giọng tốt nhất</option>
+                    {localVietnameseVoices.map((item) => (
+                      <option key={`${item.name}:${item.lang}`} value={item.name}>
+                        {item.name} ({item.lang}){item.default ? ' — mặc định' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"

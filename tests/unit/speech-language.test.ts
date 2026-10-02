@@ -96,6 +96,18 @@ describe('Speech Language Detection & Segmentation Unit Tests', () => {
       expect(findOptimalVoice([{ name: 'English local', lang: 'en-US', localService: true } as any], 'vi-VN')).toBeUndefined();
     });
 
+    it('prefers a higher-quality local Vietnamese voice and honors an explicit saved choice', () => {
+      const voices = [
+        { name: 'Microsoft An', lang: 'vi-VN', localService: true, default: true } as any,
+        { name: 'Microsoft HoaiMy Natural', lang: 'vi-VN', localService: true, default: false } as any,
+      ];
+      localStorage.removeItem('jami.tts.voice.vi-VN');
+      expect(findOptimalVoice(voices, 'vi-VN')?.name).toBe('Microsoft HoaiMy Natural');
+      localStorage.setItem('jami.tts.voice.vi-VN', 'Microsoft An');
+      expect(findOptimalVoice(voices, 'vi-VN')?.name).toBe('Microsoft An');
+      localStorage.removeItem('jami.tts.voice.vi-VN');
+    });
+
     it('keeps forced-language and punctuation-free text in bounded chunks', () => {
       const text = Array.from({ length: 80 }, () => 'tiếng Việt').join(' ');
       const segments = segmentTextByLanguage(text, 'vi-VN', 100);
