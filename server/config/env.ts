@@ -84,7 +84,14 @@ const EnvSchema = z.object({
   // TTS API Config
   OPENAI_TTS_MODEL: z.string().default('gpt-4o-mini-tts'),
   OPENAI_TTS_VOICE: z.string().optional(),
-  OPENAI_TTS_FORMAT: z.string().default('mp3'),
+  OPENAI_TTS_FORMAT: z.enum(['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm']).default('mp3'),
+  JAMI_TTS_MODE: z.enum(['auto', 'browser-local', 'wasm-local', 'cloud']).default('auto'),
+  JAMI_TTS_ALLOW_CLOUD_FALLBACK: z.preprocess(parseBooleanEnv, z.boolean().default(false)),
+  JAMI_TTS_WASM_ENABLED: z.preprocess(parseBooleanEnv, z.boolean().default(true)),
+  JAMI_TTS_MODEL_ID: z.string().default('vi_VN-vais1000-medium'),
+  JAMI_TTS_ASSET_BASE_URL: z.string().default('/tts-assets/'),
+  JAMI_TTS_MAX_CHUNK_CHARS: z.preprocess((val) => (val ? Number(val) : 220), z.number().int().min(80).max(500).default(220)),
+  JAMI_TTS_CLOUD_TIMEOUT_MS: z.preprocess((val) => (val ? Number(val) : 20000), z.number().int().min(1000).max(60000).default(20000)),
 
   // Storage Configuration (Local Disk vs Cloudflare R2/S3)
   STORAGE_DRIVER: z.enum(['local', 'r2']).default('local'),

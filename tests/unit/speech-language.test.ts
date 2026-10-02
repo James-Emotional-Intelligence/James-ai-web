@@ -71,24 +71,36 @@ describe('Speech Language Detection & Segmentation Unit Tests', () => {
 
   describe('findOptimalVoice', () => {
     const mockVoices = [
-      { name: 'Microsoft HoaiMy Online (Natural) - Vietnamese (Vietnam)', lang: 'vi-VN' } as any,
-      { name: 'Microsoft Jenny Online (Natural) - English (United States)', lang: 'en-US' } as any,
-      { name: 'Google US English', lang: 'en-US' } as any,
-      { name: 'Google Tiếng Việt', lang: 'vi-VN' } as any,
+      { name: 'Microsoft HoaiMy', lang: 'vi_VN', localService: true } as any,
+      { name: 'Microsoft Jenny', lang: 'en-US', localService: true } as any,
+      { name: 'Google US English', lang: 'en-US', localService: false } as any,
+      { name: 'Google Tiếng Việt', lang: 'vi-VN', localService: false } as any,
     ];
 
     it('finds Vietnamese voice for vi-VN', () => {
       const voice = findOptimalVoice(mockVoices, 'vi-VN');
       expect(voice).toBeDefined();
-      expect(voice?.lang).toBe('vi-VN');
-      expect(voice?.name).toContain('Vietnamese');
+      expect(voice?.lang.replace('_', '-')).toBe('vi-VN');
+      expect(voice?.localService).toBe(true);
     });
 
     it('finds English voice for en-US', () => {
       const voice = findOptimalVoice(mockVoices, 'en-US');
       expect(voice).toBeDefined();
       expect(voice?.lang).toBe('en-US');
-      expect(voice?.name).toContain('English');
+      expect(voice?.localService).toBe(true);
+    });
+
+    it('does not select an online voice or silently fall back to another language', () => {
+      expect(findOptimalVoice([{ name: 'Vietnamese Online', lang: 'vi-VN', localService: false } as any], 'vi-VN')).toBeUndefined();
+      expect(findOptimalVoice([{ name: 'English local', lang: 'en-US', localService: true } as any], 'vi-VN')).toBeUndefined();
+    });
+
+    it('keeps forced-language and punctuation-free text in bounded chunks', () => {
+      const text = Array.from({ length: 80 }, () => 'tiếng Việt').join(' ');
+      const segments = segmentTextByLanguage(text, 'vi-VN', 100);
+      expect(segments.length).toBeGreaterThan(1);
+      expect(segments.every((segment) => segment.text.length <= 100 && segment.lang === 'vi-VN')).toBe(true);
     });
   });
 });

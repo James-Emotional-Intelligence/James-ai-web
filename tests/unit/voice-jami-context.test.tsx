@@ -35,7 +35,7 @@ function makeSpeechSynthesisMock(
     voices?: SpeechSynthesisVoice[];
   } = {}
 ) {
-  const { autoFire = true, speakCallback, voices = [{ lang: 'vi-VN', name: 'Vietnamese' } as SpeechSynthesisVoice] } = options;
+  const { autoFire = true, speakCallback, voices = [{ lang: 'vi-VN', name: 'Vietnamese', localService: true } as SpeechSynthesisVoice] } = options;
   const mock = {
     speaking: false,
     paused: false,
@@ -140,19 +140,21 @@ describe('VoiceJami TTS engine', () => {
     expect(screen.getByTestId('isSpeaking').textContent).toBe('false');
   });
 
-  // ── 2. getVoices()=[] still calls speechSynthesis.speak ───────────────────
-  it('2. speak() proceeds even when getVoices() returns []', async () => {
+  // ── 2. No local voice must not silently use a wrong/default voice ─────────
+  it('2. getVoices()=[] waits finitely then reports an actionable error', async () => {
     const synth = makeSpeechSynthesisMock({ voices: [] });
     Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: synth });
 
     setup();
 
     await act(async () => { fireEvent.click(screen.getByText('speak')); });
-    expect(synth.speak).toHaveBeenCalledTimes(1);
+    await act(async () => { vi.advanceTimersByTime(1300); });
+    expect(synth.speak).not.toHaveBeenCalled();
+    expect(screen.getByTestId('error').textContent).toContain('giọng tiếng Việt cục bộ');
   });
 
-  // ── 3. voice-unavailable => retry once with default voice ─────────────────
-  it('3. voice-unavailable onerror retries once with default voice (no voice set)', async () => {
+  // ── 3. voice-unavailable must not retry with a wrong default voice ────────
+  it('3. voice-unavailable reports error without default-language fallback', async () => {
     let callCount = 0;
     const utterances: SpeechSynthesisUtterance[] = [];
 
@@ -182,11 +184,10 @@ describe('VoiceJami TTS engine', () => {
     await act(async () => { fireEvent.click(screen.getByText('speak')); });
     await act(async () => { vi.advanceTimersByTime(50); });
 
-    expect(synth.speak).toHaveBeenCalledTimes(2);
-    // Second utterance should have no voice set (useDefaultVoice=true)
-    expect(utterances[1].voice).toBeNull();
+    expect(synth.speak).toHaveBeenCalledTimes(1);
+    expect(utterances[0].voice?.localService).toBe(true);
     expect(screen.getByTestId('isSpeaking').textContent).toBe('false');
-    expect(screen.getByTestId('error').textContent).toBe('');
+    expect(screen.getByTestId('error').textContent).not.toBe('');
   });
 
   // ── 4. not-allowed => errorMessage, speaking resets ──────────────────────
@@ -242,8 +243,8 @@ describe('VoiceJami TTS engine', () => {
         u.onend?.(new Event('end') as any);
       },
       voices: [
-        { lang: 'vi-VN', name: 'Vietnamese' } as SpeechSynthesisVoice,
-        { lang: 'en-US', name: 'Google US English' } as SpeechSynthesisVoice,
+        { lang: 'vi-VN', name: 'Vietnamese', localService: true } as SpeechSynthesisVoice,
+        { lang: 'en-US', name: 'English', localService: true } as SpeechSynthesisVoice,
       ],
     });
     Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: synth });
@@ -264,8 +265,8 @@ describe('VoiceJami TTS engine', () => {
     expect(langs).toContain('vi-VN');
   });
 
-  // ── 7. Watchdog: if onstart never fires, retry/error after 2 s ─────────────
-  it('7. Watchdog fires if onstart does not arrive within 2 s; retries then errors', async () => {
+  // ── 7. Watchdog is finite and does not retry with a default voice ─────────
+  it('7. Watchdog errors if onstart does not arrive within 4 s', async () => {
     let callCount = 0;
     const synth = makeSpeechSynthesisMock({
       autoFire: false,
@@ -282,13 +283,39 @@ describe('VoiceJami TTS engine', () => {
 
     await act(async () => { fireEvent.click(screen.getByText('speak')); });
 
-    // Advance past the 2 s watchdog × 2 retries
-    await act(async () => { vi.advanceTimersByTime(2100); });  // first watchdog fires → retry
-    await act(async () => { vi.advanceTimersByTime(2100); });  // second watchdog fires → error
+    await act(async () => { vi.advanceTimersByTime(4100); });
 
-    expect(synth.speak).toHaveBeenCalledTimes(2); // original + 1 retry
+    expect(synth.speak).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('isSpeaking').textContent).toBe('false');
     expect(screen.getByTestId('error').textContent).not.toBe(''); // error shown
+  });
+
+  it('8. stale callbacks from A cannot clear the speaking state of B', async () => {
+    const utterances: SpeechSynthesisUtterance[] = [];
+    const synth = makeSpeechSynthesisMock({
+      autoFire: false,
+      speakCallback: (utterance) => utterances.push(utterance),
+    });
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: synth });
+
+    const Consumer = () => {
+      const voice = useVoiceJami();
+      return <>
+        <button onClick={() => voice.speak('Lượt A')}>A</button>
+        <button onClick={() => voice.speak('Lượt B')}>B</button>
+        <span data-testid="race-speaking">{String(voice.isSpeaking)}</span>
+      </>;
+    };
+    render(<MemoryRouter><VoiceJamiProvider><Consumer /></VoiceJamiProvider></MemoryRouter>);
+
+    await act(async () => { fireEvent.click(screen.getByText('A')); });
+    const staleOnEnd = utterances[0].onend;
+    await act(async () => { fireEvent.click(screen.getByText('B')); });
+    await act(async () => { utterances[1].onstart?.(new Event('start') as any); });
+    expect(screen.getByTestId('race-speaking').textContent).toBe('true');
+
+    await act(async () => { staleOnEnd?.call(utterances[0], new Event('end') as any); });
+    expect(screen.getByTestId('race-speaking').textContent).toBe('true');
   });
 });
 

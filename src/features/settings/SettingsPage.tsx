@@ -15,6 +15,7 @@ import { useNotifications } from '../../context/NotificationContext';
 import { useTheme, AppTheme } from '../../context/ThemeContext';
 import { HAI_BA_TRUNG_ASSETS } from '../../assets/themes/hai-ba-trung';
 import confetti from '../../lib/safe-confetti';
+import { useVoiceJami } from '../../context/VoiceJamiContext';
 
 export const SettingsPage: React.FC = () => {
   const { showToast } = useNotifications();
@@ -25,6 +26,26 @@ export const SettingsPage: React.FC = () => {
   const [isSavingPrefs, setIsSavingPrefs] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const { theme, setTheme } = useTheme();
+  const voice = useVoiceJami();
+  const [speechRate, setSpeechRate] = useState(() => Number(localStorage.getItem('jami.tts.rate') || 1.05));
+  const [hasLocalVietnameseVoice, setHasLocalVietnameseVoice] = useState(false);
+
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return;
+    const inspectVoices = () => {
+      setHasLocalVietnameseVoice(window.speechSynthesis.getVoices().some((item) =>
+        item.localService === true && item.lang.replace('_', '-').toLowerCase().startsWith('vi')
+      ));
+    };
+    inspectVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', inspectVoices);
+    return () => window.speechSynthesis.removeEventListener?.('voiceschanged', inspectVoices);
+  }, []);
+
+  const updateSpeechRate = (value: number) => {
+    setSpeechRate(value);
+    localStorage.setItem('jami.tts.rate', String(value));
+  };
 
   const handleSelectTheme = (newTheme: AppTheme) => {
     setTheme(newTheme);
@@ -290,6 +311,62 @@ export const SettingsPage: React.FC = () => {
                 onChange={(e) => handleToggleSound(e.target.checked)}
                 className="w-5 h-5 accent-[#16A34A] rounded cursor-pointer disabled:opacity-50"
               />
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.18)] space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-[#F3FAF5]">Giọng đọc trên thiết bị</div>
+                  <div className="text-[11px] text-[#A9B8AE]">
+                    {hasLocalVietnameseVoice
+                      ? 'Đã tìm thấy giọng tiếng Việt cục bộ — không gọi API TTS.'
+                      : 'Chưa có giọng tiếng Việt cục bộ. Hãy cài giọng Việt trong hệ điều hành.'}
+                  </div>
+                </div>
+                <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${hasLocalVietnameseVoice ? 'text-[#86EFAC] border-[#22C55E]/30' : 'text-amber-300 border-amber-400/30'}`}>
+                  {hasLocalVietnameseVoice ? 'Giọng trên thiết bị' : 'Cần cài giọng'}
+                </span>
+              </div>
+              <label htmlFor="setting-speech-rate" className="block text-[11px] text-[#A9B8AE]">
+                Tốc độ đọc: {speechRate.toFixed(2)}×
+              </label>
+              <input
+                id="setting-speech-rate"
+                type="range"
+                min="0.75"
+                max="1.5"
+                step="0.05"
+                value={speechRate}
+                onChange={(event) => updateSpeechRate(Number(event.target.value))}
+                className="w-full accent-[#16A34A]"
+              />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => voice.speak('Xin chào! Đây là giọng tiếng Việt của Jami.', { rate: speechRate, lang: 'vi-VN' })}
+                  className="px-3 py-2 rounded-xl bg-[#14532D] text-[#F3FAF5] text-xs font-bold hover:bg-[#166534]"
+                >
+                  Thử giọng
+                </button>
+                <button
+                  type="button"
+                  onClick={voice.stopSpeaking}
+                  disabled={!voice.isSpeaking}
+                  className="px-3 py-2 rounded-xl border border-[#22C55E]/30 text-[#A9B8AE] text-xs font-bold disabled:opacity-40"
+                >
+                  Dừng đọc
+                </button>
+              </div>
+              {voice.errorMessage && (
+                <div role="alert" className="flex items-start gap-2 text-[11px] text-amber-300">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{voice.errorMessage}</span>
+                </div>
+              )}
+              <div className="text-[11px] text-[#A9B8AE] border-t border-white/5 pt-3">
+                <strong className="text-[#F3FAF5]">Giọng ngoại tuyến WASM:</strong>{' '}
+                chưa được đóng gói trong bản build này. Jami sẽ không báo sẵn sàng hoặc tải mô hình giả.
+              </div>
             </div>
           </div>
         </div>

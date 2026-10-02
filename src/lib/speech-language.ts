@@ -38,6 +38,8 @@ export interface SpeechSegment {
   lang: SpeechLanguage;
 }
 
+export const DEFAULT_MAX_SPEECH_CHARS = 220;
+
 /**
  * Clean markdown symbols, code blocks, links, and formatting noise
  */
@@ -46,6 +48,8 @@ export function cleanSpeechText(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, '')
     .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[([^]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^]]+)\]\([^)]*\)/g, '$1')
     .replace(/[*_#~>[\]]/g, '')
     .replace(/https?:\/\/\S+/g, '')
     .replace(/\s+/g, ' ')
@@ -94,13 +98,29 @@ export function detectSegmentLanguage(text: string): SpeechLanguage {
 /**
  * Splits full text into language-tagged segments for natural bilingual TTS
  */
-export function segmentTextByLanguage(text: string, defaultLang?: SpeechLanguage): SpeechSegment[] {
+export function splitSpeechText(text: string, maxChars = DEFAULT_MAX_SPEECH_CHARS): string[] {
+  const limit = Math.max(40, Math.floor(maxChars));
+  const result: string[] = [];
+  let remaining = text.trim();
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit + 1);
+    const punctuation = Math.max(window.lastIndexOf('. '), window.lastIndexOf('! '), window.lastIndexOf('? '), window.lastIndexOf('; '), window.lastIndexOf(': '), window.lastIndexOf(', '));
+    const whitespace = window.lastIndexOf(' ');
+    const cut = punctuation >= Math.floor(limit * 0.55) ? punctuation + 1 : whitespace > 0 ? whitespace : limit;
+    result.push(remaining.slice(0, cut).trim());
+    remaining = remaining.slice(cut).trim();
+  }
+  if (remaining) result.push(remaining);
+  return result;
+}
+
+export function segmentTextByLanguage(text: string, defaultLang?: SpeechLanguage, maxChars = DEFAULT_MAX_SPEECH_CHARS): SpeechSegment[] {
   const clean = cleanSpeechText(text);
   if (!clean) return [];
 
-  // If defaultLang is explicitly forced, return single segment
+  // A forced language still needs bounded utterances for mobile browsers.
   if (defaultLang) {
-    return [{ text: clean, lang: defaultLang }];
+    return splitSpeechText(clean, maxChars).map((piece) => ({ text: piece, lang: defaultLang }));
   }
 
   // Split by line breaks, quotes, or punctuation boundaries
@@ -126,13 +146,14 @@ export function segmentTextByLanguage(text: string, defaultLang?: SpeechLanguage
     rawSegments.push({ text: piece, lang });
   }
 
-  // Merge adjacent segments with identical language
+  // Merge adjacent segments with identical language without recreating an unbounded utterance.
   const merged: SpeechSegment[] = [];
   for (const seg of rawSegments) {
-    if (merged.length > 0 && merged[merged.length - 1].lang === seg.lang) {
-      merged[merged.length - 1].text += ' ' + seg.text;
+    const previous = merged[merged.length - 1];
+    if (previous && previous.lang === seg.lang && previous.text.length + seg.text.length + 1 <= maxChars) {
+      previous.text += ' ' + seg.text;
     } else {
-      merged.push({ ...seg });
+      splitSpeechText(seg.text, maxChars).forEach((piece) => merged.push({ text: piece, lang: seg.lang }));
     }
   }
 
@@ -147,33 +168,21 @@ export function findOptimalVoice(
   lang: SpeechLanguage
 ): SpeechSynthesisVoice | undefined {
   if (!voices || voices.length === 0) return undefined;
+  const localVoices = voices.filter((voice) => voice.localService === true);
+  if (localVoices.length === 0) return undefined;
+  const normalizedLang = (voice: SpeechSynthesisVoice) => voice.lang.replace('_', '-').toLowerCase();
 
   if (lang === 'vi-VN') {
     return (
-      voices.find(
-        (v) =>
-          (v.name.includes('Natural') || v.name.includes('Online')) &&
-          (v.lang === 'vi-VN' || v.lang === 'vi_VN')
-      ) ||
-      voices.find((v) => v.lang === 'vi-VN' || v.lang === 'vi_VN') ||
-      voices.find((v) => v.lang.startsWith('vi')) ||
-      voices.find((v) => v.name.toLowerCase().includes('vietnam'))
+      localVoices.find((v) => normalizedLang(v) === 'vi-vn') ||
+      localVoices.find((v) => normalizedLang(v).startsWith('vi-')) ||
+      localVoices.find((v) => v.name.toLowerCase().includes('vietnam'))
     );
   }
 
   // English: Look for Natural/Online US or UK English voices
   return (
-    voices.find(
-      (v) =>
-        (v.name.includes('Natural') || v.name.includes('Online') || v.name.includes('Google')) &&
-        (v.lang.startsWith('en-US') || v.lang.startsWith('en_US'))
-    ) ||
-    voices.find((v) => v.lang === 'en-US' || v.lang === 'en_US') ||
-    voices.find(
-      (v) =>
-        (v.name.includes('Natural') || v.name.includes('Online') || v.name.includes('Google')) &&
-        v.lang.startsWith('en')
-    ) ||
-    voices.find((v) => v.lang.startsWith('en'))
+    localVoices.find((v) => normalizedLang(v) === 'en-us') ||
+    localVoices.find((v) => normalizedLang(v).startsWith('en-'))
   );
 }

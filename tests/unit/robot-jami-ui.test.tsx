@@ -25,10 +25,13 @@ beforeEach(() => {
   Object.defineProperty(window, 'speechSynthesis', {
     value: {
       speak: vi.fn((utterance) => {
+        utterance.onstart?.();
         utterance.onend?.();
       }),
       cancel: vi.fn(),
-      getVoices: vi.fn().mockReturnValue([]),
+      getVoices: vi.fn().mockReturnValue([{ lang: 'vi-VN', name: 'Vietnamese', localService: true }]),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     },
     writable: true,
   });

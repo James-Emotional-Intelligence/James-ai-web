@@ -2,7 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { useNavigate } from 'react-router-dom';
 import { api, JamiChatMessageItem } from '../lib/api-client';
 import { isWakeWordDetected } from '../lib/wake-word';
-import { segmentTextByLanguage, findOptimalVoice, SpeechLanguage } from '../lib/speech-language';
+import { SpeechLanguage } from '../lib/speech-language';
+import { jamiTts } from '../lib/jami-tts';
 
 export type VoiceState =
   | 'disabled'
@@ -102,7 +103,6 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const currentTurnIdRef = useRef<string>('');
   const activeUtteranceIdRef = useRef<number>(0);
   const activeRealtimeSessionIdRef = useRef<string | null>(null);
-  const speechResumeIntervalRef = useRef<number | null>(null);
   const recognitionGenerationRef = useRef(0);
   const intentionalRecognitionStopRef = useRef(false);
   const privacyModeRef = useRef<'browser_web_speech' | 'wasm_local' | 'openai_realtime'>('browser_web_speech');
@@ -110,38 +110,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const processedRealtimeCallIdsRef = useRef<Set<string>>(new Set());
   const realtimeTranscriptBuffersRef = useRef<Map<string, string>>(new Map());
 
-  // ── TTS-specific refs (new) ────────────────────────────────────────────────
-  /** The currently-speaking SpeechSynthesisUtterance — kept alive to prevent GC mid-speech */
-  const activeSpeechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  /** Cached voice list populated by voiceschanged listener; avoids async wait before speak() */
-  const availableVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
-  /** Watchdog timer: fires if onstart never arrives after speechSynthesis.speak() */
-  const ttsStartWatchdogRef = useRef<number | null>(null);
-
   useEffect(() => {
     privacyModeRef.current = privacyMode;
   }, [privacyMode]);
-
-  // ── Register voiceschanged once at mount ──────────────────────────────────
-  useEffect(() => {
-    if (!('speechSynthesis' in window)) return;
-
-    const updateVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) availableVoicesRef.current = voices;
-    };
-
-    // Populate immediately in case voices are already available (Firefox / some Chrome builds)
-    updateVoices();
-
-    if (typeof window.speechSynthesis.addEventListener === 'function') {
-      window.speechSynthesis.addEventListener('voiceschanged', updateVoices);
-      return () => window.speechSynthesis.removeEventListener('voiceschanged', updateVoices);
-    } else if ('onvoiceschanged' in window.speechSynthesis) {
-      (window.speechSynthesis as any).onvoiceschanged = updateVoices;
-      return () => { (window.speechSynthesis as any).onvoiceschanged = null; };
-    }
-  }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -166,224 +137,46 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, []);
 
-  const clearSpeechResumeInterval = useCallback(() => {
-    if (speechResumeIntervalRef.current !== null) {
-      window.clearInterval(speechResumeIntervalRef.current);
-      speechResumeIntervalRef.current = null;
-    }
-  }, []);
-
-  const clearTtsWatchdog = useCallback(() => {
-    if (ttsStartWatchdogRef.current !== null) {
-      window.clearTimeout(ttsStartWatchdogRef.current);
-      ttsStartWatchdogRef.current = null;
-    }
-  }, []);
-
-  /**
-   * Fully reset TTS state – called from stopSpeaking, onerror, and cleanup.
-   */
-  const resetTtsState = useCallback(() => {
-    clearSpeechResumeInterval();
-    clearTtsWatchdog();
-    activeSpeechUtteranceRef.current = null;
-    isSpeakingRef.current = false;
-    setIsSpeaking(false);
-    setSpeakingMessageId(null);
-    setCurrentUtteranceText('');
-  }, [clearSpeechResumeInterval, clearTtsWatchdog]);
-
-  /**
-   * Unified Text-to-Speech Engine using SpeechSynthesis with intelligent
-   * language detection, watchdog, retry on voice errors, and full error reporting.
-   *
-   * KEY FIXES vs previous version:
-   * - No async await before speaking (voices pre-loaded via voiceschanged)
-   * - activeSpeechUtteranceRef held until onend/onerror
-   * - onerror classifies errors: canceled/interrupted → silent; not-allowed → banner;
-   *   voice-unavailable/language-unavailable → retry with default; others → log + retry once
-   * - watchdog fires if onstart never arrives within 2 s
-   * - isSpeaking only set true inside utterance.onstart
-   * - Language forced only when caller explicitly passes lang; otherwise auto-detected
-   */
+  // Context owns microphone coordination; jamiTts owns every playback source.
   const speak = useCallback(
     (text: string, options?: { msgId?: string; onEnd?: () => void; rate?: number; lang?: SpeechLanguage }) => {
-      if (!('speechSynthesis' in window)) {
-        options?.onEnd?.();
-        return;
-      }
-
       stopCurrentRecognition(true);
-      clearSpeechResumeInterval();
-      clearTtsWatchdog();
-      window.speechSynthesis.cancel();
-      activeSpeechUtteranceRef.current = null;
-
-      const currentSpeechId = ++activeUtteranceIdRef.current;
-
-      // Use pre-cached voices from voiceschanged listener.
-      // Fallback: try getVoices() synchronously (may return [] on first call in some browsers).
-      const voices =
-        availableVoicesRef.current.length > 0
-          ? availableVoicesRef.current
-          : window.speechSynthesis.getVoices();
-
-      // NOTE: lang is NOT defaulted to 'vi-VN' so segmentTextByLanguage auto-detects.
-      const segments = segmentTextByLanguage(text, options?.lang);
-      if (segments.length === 0) {
-        options?.onEnd?.();
-        return;
+      if (remoteAudioElementRef.current && !remoteAudioElementRef.current.paused) {
+        remoteAudioElementRef.current.pause();
       }
-
-      const fullCleanText = segments.map((s) => s.text).join(' ');
-      let currentSegmentIdx = 0;
-      let retryCount = 0;
-      const MAX_RETRIES = 1;
-
-      const finishSpeech = () => {
+      const currentSpeechId = ++activeUtteranceIdRef.current;
+      setErrorMessage(null);
+      setSpeakingMessageId(options?.msgId ?? null);
+      setCurrentUtteranceText(text);
+      void jamiTts.speak(text, { lang: options?.lang, rate: options?.rate }).then((result) => {
         if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
-        resetTtsState();
-        options?.onEnd?.();
-      };
-
-      const speakSegment = (segIdx: number, useDefaultVoice = false) => {
-        if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) {
-          resetTtsState();
-          return;
-        }
-        if (segIdx >= segments.length) {
-          finishSpeech();
-          return;
-        }
-
-        const segment = segments[segIdx];
-        const utterance = new SpeechSynthesisUtterance(segment.text);
-        utterance.lang = segment.lang;
-        utterance.rate = options?.rate ?? (segment.lang === 'en-US' ? 1.0 : 1.05);
-        utterance.pitch = 1.0;
-
-        if (!useDefaultVoice) {
-          const optimalVoice = findOptimalVoice(voices, segment.lang);
-          if (optimalVoice) utterance.voice = optimalVoice;
-        }
-        // useDefaultVoice=true → leave utterance.voice null → browser picks default
-
-        activeSpeechUtteranceRef.current = utterance;
-
-        // ── Watchdog: if onstart doesn't fire within 2 s, try to unstick ────
-        clearTtsWatchdog();
-        ttsStartWatchdogRef.current = window.setTimeout(() => {
-          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
-          if (!window.speechSynthesis.speaking) {
-            console.warn('[VoiceJami TTS] Watchdog: speak() called but onstart never fired. Retrying with default voice.');
-            window.speechSynthesis.cancel();
-            activeSpeechUtteranceRef.current = null;
-            if (retryCount < MAX_RETRIES) {
-              retryCount++;
-              speakSegment(segIdx, true);
-            } else {
-              setErrorMessage('Không thể phát âm thanh. Hãy thử bấm "Nghe đọc" lại.');
-              resetTtsState();
-              options?.onEnd?.();
-            }
-          }
-        }, 2000);
-
-        utterance.onstart = () => {
-          clearTtsWatchdog();
-          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
-          isSpeakingRef.current = true;
-          setIsSpeaking(true);
-          setSpeakingMessageId(options?.msgId ?? null);
-          setCurrentUtteranceText(fullCleanText);
-        };
-
-        utterance.onend = () => {
-          clearTtsWatchdog();
-          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
-          activeSpeechUtteranceRef.current = null;
-          retryCount = 0;
-          currentSegmentIdx++;
-          speakSegment(currentSegmentIdx);
-        };
-
-        utterance.onerror = (event: SpeechSynthesisErrorEvent) => {
-          clearTtsWatchdog();
-          if (activeUtteranceIdRef.current !== currentSpeechId || !isMountedRef.current) return;
-          activeSpeechUtteranceRef.current = null;
-
-          const errType = event.error;
-
-          if (errType === 'canceled' || errType === 'interrupted') {
-            // User-initiated stop or browser preemption – do not surface an error.
-            resetTtsState();
-            return;
-          }
-
-          if (errType === 'not-allowed') {
-            setErrorMessage('Trình duyệt đang chặn âm thanh. Hãy bấm "Nghe đọc" để phát lại.');
-            resetTtsState();
-            options?.onEnd?.();
-            return;
-          }
-
-          if (errType === 'voice-unavailable' || errType === 'language-unavailable') {
-            console.warn(`[VoiceJami TTS] ${errType} for segment ${segIdx}. Retrying with default voice.`);
-            if (retryCount < MAX_RETRIES) {
-              retryCount++;
-              speakSegment(segIdx, true);
-              return;
-            }
-          }
-
-          // Unknown / synthesis-failed / network errors
-          console.error(`[VoiceJami TTS] onerror: ${errType} on segment ${segIdx}`);
-          if (retryCount < MAX_RETRIES) {
-            retryCount++;
-            speakSegment(segIdx, true);
-          } else {
-            setErrorMessage(`Lỗi phát âm thanh: ${errType}. Hãy thử lại.`);
-            resetTtsState();
-            options?.onEnd?.();
-          }
-        };
-
-        window.speechSynthesis.speak(utterance);
-      };
-
-      // Chrome bug: speechSynthesis sometimes stalls if tab was backgrounded.
-      // Keep a resume interval to unstick it.
-      speechResumeIntervalRef.current = window.setInterval(() => {
-        if (activeUtteranceIdRef.current !== currentSpeechId) {
-          clearSpeechResumeInterval();
-          return;
-        }
-        if (window.speechSynthesis.speaking && window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
-        } else if (!window.speechSynthesis.speaking) {
-          clearSpeechResumeInterval();
-        }
-      }, 5000);
-
-      speakSegment(currentSegmentIdx);
+        isSpeakingRef.current = false;
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+        setCurrentUtteranceText('');
+        if (result.reason === 'error') setErrorMessage(result.error?.message || 'Không thể phát giọng nói.');
+        if (result.reason !== 'cancelled') options?.onEnd?.();
+      });
     },
-    [clearSpeechResumeInterval, clearTtsWatchdog, resetTtsState, stopCurrentRecognition]
+    [stopCurrentRecognition]
   );
+
+  useEffect(() => jamiTts.subscribe((snapshot) => {
+    if (!isMountedRef.current) return;
+    const speaking = snapshot.phase === 'speaking';
+    isSpeakingRef.current = speaking;
+    setIsSpeaking(speaking);
+  }), []);
 
   const stopSpeaking = useCallback(() => {
     // Advance speech ID so all in-flight callbacks become no-ops
     activeUtteranceIdRef.current++;
-    clearSpeechResumeInterval();
-    clearTtsWatchdog();
-    
     jamiTts.stop();
-
-    activeSpeechUtteranceRef.current = null;
     isSpeakingRef.current = false;
     setIsSpeaking(false);
     setSpeakingMessageId(null);
     setCurrentUtteranceText('');
-  }, [clearSpeechResumeInterval, clearTtsWatchdog]);
+  }, []);
 
   const speakText = useCallback(
     (text: string, onEnd?: () => void, lang?: SpeechLanguage) => {
@@ -396,9 +189,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const cleanupHardware = useCallback(() => {
     activeUtteranceIdRef.current++;
-    clearSpeechResumeInterval();
-    clearTtsWatchdog();
-    activeSpeechUtteranceRef.current = null;
+    jamiTts.stop();
 
     if (speechRecognitionRef.current) {
       try {
@@ -455,7 +246,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIsSpeaking(false);
     setSpeakingMessageId(null);
     setIsMicActive(false);
-  }, [clearSpeechResumeInterval, clearTtsWatchdog]);
+  }, []);
 
   const disableHandsFree = useCallback(() => {
     cleanupHardware();
@@ -816,7 +607,7 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       remoteAudioElementRef.current = audioEl;
 
       audioEl.onplay = () => {
-        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        jamiTts.stop();
         if (isMountedRef.current) {
           isSpeakingRef.current = true;
           setIsSpeaking(true);
@@ -869,18 +660,14 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             event.type === 'response.output_audio_transcript.delta' ||
             event.type === 'response.audio_transcript.delta'
           ) {
-            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            jamiTts.stop();
             const responseId = event.response_id || event.response?.id || 'default';
             const nextValue = (realtimeTranscriptBuffersRef.current.get(responseId) || '') + (event.delta || '');
             realtimeTranscriptBuffersRef.current.set(responseId, nextValue);
             setLastReply(nextValue);
-            if (isMountedRef.current) { isSpeakingRef.current = true; setIsSpeaking(true); setState('speaking'); }
           } else if (event.type === 'response.done' && event.response?.id) {
             const finalText = realtimeTranscriptBuffersRef.current.get(event.response.id);
             if (finalText !== undefined) setLastReply(finalText);
-            isSpeakingRef.current = false;
-            setIsSpeaking(false);
-            if (isHandsFreeRef.current) setState('armed');
           } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
             if (event.transcript) setLastTranscript(event.transcript);
           } else if (
@@ -911,8 +698,9 @@ export const VoiceJamiProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 }
               });
             }
-          } else if (event.type === 'response.output_audio_transcript.done' || event.type === 'response.done') {
-            if (isMountedRef.current) { isSpeakingRef.current = false; setIsSpeaking(false); setState('armed'); }
+          } else if (event.type === 'response.output_audio_transcript.done') {
+            // Transcript completion is not playback completion. The media
+            // element's pause/ended events own the audible speaking state.
           } else if (event.type === 'error') {
             console.warn('[VoiceJami WebRTC] OpenAI Realtime error event:', event.error);
           }

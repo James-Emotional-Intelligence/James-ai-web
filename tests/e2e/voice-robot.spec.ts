@@ -60,7 +60,7 @@ test.describe('Robot Jami Voice & Hands-free E2E Suite', () => {
           paused: false,
           cancel() { this.speaking = false; },
           resume() {},
-          getVoices: () => [{ lang: 'vi-VN', name: 'Vietnamese', default: true }],
+          getVoices: () => [{ lang: 'vi-VN', name: 'Vietnamese', default: true, localService: true }],
           speak(utterance: any) {
             (window as any).__ttsUtterances.push(utterance);
             this.speaking = true;
