@@ -123,6 +123,20 @@ import { aiWalletRepo } from '../repositories/ai-wallet-repository';
 import { ttsService } from '../services/tts-service';
 
 export const apiRouter = Router();
+
+apiRouter.use((req: Request, res: Response, next: NextFunction) => {
+  if (!env.AI_WALLET_ENABLED) {
+    if (req.path.includes('/ai-wallet') || req.path.includes('/admin/registration-codes')) {
+      return res.status(404).json({ message: "AI Wallet is disabled" });
+    }
+  }
+  next();
+});
+
+apiRouter.get('/app-config', (req: Request, res: Response) => {
+  res.json({ features: { aiWalletEnabled: env.AI_WALLET_ENABLED } });
+});
+
 const userRepo = UserRepository.getInstance();
 const authService = AuthService.getInstance();
 
@@ -4057,10 +4071,12 @@ apiRouter.delete('/jami/messages', requireAuth, asyncHandler(async (req: Request
 }));
 
 apiRouter.post('/jami/tts', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
-  const userId = (req as any).userId;
+  if (!env.JAMI_TTS_ALLOW_CLOUD_FALLBACK && env.JAMI_TTS_MODE !== 'cloud') {
+    return sendError(req, res, 503, 'TTS_CLOUD_DISABLED', 'Giọng trực tuyến đang tắt. Hãy dùng giọng trên thiết bị.');
+  }
   const bodySchema = z.object({
-    text: z.string().max(4096),
-    language: z.string().default('vi-VN'),
+    text: z.string().trim().min(1).max(2000),
+    language: z.enum(['vi-VN', 'en-US']).default('vi-VN'),
     messageId: z.string().optional(),
   });
   
@@ -4074,7 +4090,11 @@ apiRouter.post('/jami/tts', requireAuth, aiRateLimiter, asyncHandler(async (req:
   
   try {
     const audioBuffer = await ttsService.generateSpeech(text, language);
-    res.set('Content-Type', env.OPENAI_TTS_FORMAT === 'opus' ? 'audio/ogg' : 'audio/mpeg');
+    const mimeByFormat: Record<typeof env.OPENAI_TTS_FORMAT, string> = {
+      mp3: 'audio/mpeg', opus: 'audio/ogg; codecs=opus', aac: 'audio/aac',
+      flac: 'audio/flac', wav: 'audio/wav', pcm: 'audio/L16',
+    };
+    res.set('Content-Type', mimeByFormat[env.OPENAI_TTS_FORMAT]);
     res.set('Cache-Control', 'no-store');
     res.send(audioBuffer);
   } catch (error: any) {

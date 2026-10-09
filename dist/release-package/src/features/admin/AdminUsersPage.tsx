@@ -102,6 +102,18 @@ export const AdminUsersPage: React.FC = () => {
 
   // Processing state
   const [processing, setProcessing] = useState(false);
+  const [aiWalletEnabled, setAiWalletEnabled] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/v1/app-config')
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.features && typeof d.features.aiWalletEnabled !== 'undefined') {
+          setAiWalletEnabled(d.features.aiWalletEnabled);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const fetchUsers = async () => {
     setLoadingUsers(true);
@@ -358,6 +370,7 @@ export const AdminUsersPage: React.FC = () => {
                 <Users className="w-3.5 h-3.5" />
                 <span>Người Dùng & Ví AI</span>
               </button>
+              {aiWalletEnabled && (
               <button
                 onClick={() => setActiveTab('codes')}
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
@@ -369,6 +382,7 @@ export const AdminUsersPage: React.FC = () => {
                 <Tag className="w-3.5 h-3.5" />
                 <span>Mã Ưu Đãi / Kích Hoạt</span>
               </button>
+              )}
             </div>
 
             <button
@@ -489,7 +503,7 @@ export const AdminUsersPage: React.FC = () => {
                     <tr>
                       <th className="px-5 py-3.5">Học sinh / Người dùng</th>
                       <th className="px-4 py-3.5">Vai trò</th>
-                      <th className="px-4 py-3.5">Số dư Ví AI</th>
+                      {aiWalletEnabled && <th className="px-4 py-3.5">Số dư Ví AI</th>}
                       <th className="px-4 py-3.5">Trạng thái TK</th>
                       <th className="px-4 py-3.5">Ngày tạo</th>
                       <th className="px-5 py-3.5 text-right">Quản lý Ví AI & Quyền</th>

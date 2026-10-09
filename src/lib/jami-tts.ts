@@ -1,4 +1,5 @@
 import { SpeechLanguage, findOptimalVoice, segmentTextByLanguage } from './speech-language';
+import { offlineTts, OfflineTtsProgress } from './offline-tts';
 
 export type TtsProvider = 'browser-local' | 'wasm-local' | 'cloud';
 export type TtsPhase = 'idle' | 'loading' | 'ready' | 'speaking' | 'error';
@@ -48,8 +49,8 @@ const configuredChunkSize = (): number => {
   return Number.isFinite(parsed) ? Math.min(500, Math.max(80, Math.round(parsed))) : 220;
 };
 const configuredRate = (): number => {
-  if (typeof window === 'undefined') return 1.05;
-  const value = Number(window.localStorage.getItem('jami.tts.rate') || 1.05);
+  if (typeof window === 'undefined') return 0.95;
+  const value = Number(window.localStorage.getItem('jami.tts.rate') || 0.95);
   return Number.isFinite(value) ? Math.min(1.5, Math.max(0.75, value)) : 0.95;
 };
 
@@ -107,6 +108,18 @@ export class JamiTtsEngine {
     this.finish(active.id, { reason: 'cancelled', provider: this.snapshot.provider });
   }
 
+  public getOfflineVoiceStatus(): Promise<boolean> {
+    return offlineTts.status();
+  }
+
+  public prepareOfflineVoice(onProgress?: (progress: OfflineTtsProgress) => void): Promise<void> {
+    return offlineTts.prepare(onProgress);
+  }
+
+  public removeOfflineVoice(): Promise<void> {
+    return offlineTts.remove();
+  }
+
   private async runSpeech(
     speechId: number,
     segments: ReturnType<typeof segmentTextByLanguage>,
@@ -122,14 +135,23 @@ export class JamiTtsEngine {
         if (!this.isActive(speechId)) return;
         localError = error instanceof Error ? error : new Error(String(error));
         if (localError.name === 'AbortError') throw localError;
+        if (localError.name === 'NotAllowedError') throw localError;
         if (mode === 'browser-local') throw localError;
       }
     }
     if (mode === 'wasm-local' || (mode === 'auto' && parseBoolean(getEnv('VITE_JAMI_TTS_WASM_ENABLED'), true))) {
-      // Do not simulate an offline voice. Readiness requires the pinned sherpa
-      // runtime, model, tokens and espeak-ng data to initialize successfully.
-      localError ||= new Error('Gói giọng ngoại tuyến chưa được cài đặt hoặc kiểm chứng trên thiết bị này.');
-      if (mode === 'wasm-local') throw localError;
+      try {
+        await this.speakWithOffline(speechId, segments, options.rate);
+        return;
+      } catch (error) {
+        if (!this.isActive(speechId)) return;
+        const offlineError = error instanceof Error ? error : new Error(String(error));
+        if (offlineError.name === 'AbortError' || offlineError.name === 'NotAllowedError') throw offlineError;
+        localError = localError
+          ? new Error(`${localError.message} Giọng ngoại tuyến cũng không khả dụng: ${offlineError.message}`)
+          : offlineError;
+        if (mode === 'wasm-local') throw offlineError;
+      }
     }
     if ((mode === 'cloud' || mode === 'auto') && parseBoolean(getEnv('VITE_JAMI_TTS_ALLOW_CLOUD_FALLBACK'), false)) {
       await this.speakWithCloud(speechId, segments.map((segment) => segment.text).join(' '), options.lang || 'vi-VN');
@@ -221,12 +243,87 @@ export class JamiTtsEngine {
           settle(cancellation);
           return;
         }
-        settle(new Error(name === 'not-allowed'
+        const error = new Error(name === 'not-allowed'
           ? 'Trình duyệt đang chặn âm thanh. Hãy bấm “Thử giọng” để cho phép phát.'
-          : `Không thể phát giọng trên thiết bị (${name}).`));
+          : `Không thể phát giọng trên thiết bị (${name}).`);
+        if (name === 'not-allowed') error.name = 'NotAllowedError';
+        settle(error);
       };
       window.speechSynthesis.speak(utterance);
     });
+  }
+
+  private async speakWithOffline(
+    speechId: number,
+    segments: ReturnType<typeof segmentTextByLanguage>,
+    rate?: number,
+  ): Promise<void> {
+    for (const segment of segments) {
+      if (!this.isActive(speechId)) return;
+      if (segment.lang === 'en-US') {
+        const voices = await this.getVoicesWithDeadline(speechId);
+        const voice = findOptimalVoice(voices, 'en-US');
+        if (!voice) throw new Error('Thiết bị chưa có giọng tiếng Anh cục bộ cho đoạn tiếng Anh.');
+        await this.speakBrowserSegment(speechId, segment.text, segment.lang, voice, rate);
+      } else {
+        await this.speakOfflineSegment(speechId, segment.text, rate);
+      }
+    }
+    if (this.isActive(speechId)) this.finish(speechId, { reason: 'ended', provider: 'wasm-local' });
+  }
+
+  private async speakOfflineSegment(speechId: number, text: string, rate?: number): Promise<void> {
+    const active = this.active;
+    if (!active || active.id !== speechId) return;
+    const attemptId = ++active.attemptId;
+    this.emit({ phase: 'loading', provider: 'wasm-local', speechId, error: null });
+    active.timer = window.setTimeout(() => active.abortController.abort(), 90_000);
+    const blob = await offlineTts.synthesize(text, active.abortController.signal);
+    if (!this.matches(speechId, attemptId)) return;
+    this.clearTimer(active);
+    await this.playAudioBlob(speechId, attemptId, blob, 'wasm-local', rate ?? configuredRate());
+  }
+
+  private async playAudioBlob(
+    speechId: number,
+    attemptId: number,
+    blob: Blob,
+    provider: TtsProvider,
+    playbackRate = 1,
+  ): Promise<void> {
+    const active = this.active;
+    if (!active || !this.matches(speechId, attemptId)) return;
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.playbackRate = Math.min(1.5, Math.max(0.75, playbackRate));
+    active.objectUrl = url;
+    active.audio = audio;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        active.abortController.signal.removeEventListener('abort', onAbort);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onAbort = () => {
+        const error = new DOMException('Aborted', 'AbortError');
+        settle(error);
+      };
+      active.abortController.signal.addEventListener('abort', onAbort, { once: true });
+      audio.onplaying = () => {
+        if (this.matches(speechId, attemptId)) this.emit({ phase: 'speaking', provider, speechId, error: null });
+      };
+      audio.onended = () => settle();
+      audio.onerror = () => settle(new Error('Tệp âm thanh đã tạo không phát được.'));
+      audio.play().catch((error: unknown) => settle(error instanceof Error ? error : new Error(String(error))));
+    });
+    if (this.matches(speechId, attemptId)) {
+      active.audio = null;
+      active.objectUrl = null;
+      URL.revokeObjectURL(url);
+    }
   }
 
   private async speakWithCloud(speechId: number, text: string, lang: SpeechLanguage): Promise<void> {
@@ -245,18 +342,7 @@ export class JamiTtsEngine {
     if (!response.ok || !contentType.startsWith('audio/')) {
       throw new Error(`Dịch vụ giọng trực tuyến không khả dụng (${response.status}).`);
     }
-    const url = URL.createObjectURL(await response.blob());
-    const audio = new Audio(url);
-    active.objectUrl = url;
-    active.audio = audio;
-    await new Promise<void>((resolve, reject) => {
-      audio.onplaying = () => {
-        if (this.matches(speechId, attemptId)) this.emit({ phase: 'speaking', provider: 'cloud', speechId, error: null });
-      };
-      audio.onended = () => resolve();
-      audio.onerror = () => reject(new Error('Tệp âm thanh trực tuyến không phát được.'));
-      audio.play().catch(reject);
-    });
+    await this.playAudioBlob(speechId, attemptId, await response.blob(), 'cloud');
     if (this.matches(speechId, attemptId)) this.finish(speechId, { reason: 'ended', provider: 'cloud' });
   }
 

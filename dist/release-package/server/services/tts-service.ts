@@ -22,10 +22,12 @@ export class TtsService {
       throw new Error('AI_NOT_CONFIGURED');
     }
 
-    const model = (env as any).OPENAI_TTS_MODEL || 'tts-1';
-    const format = ((env as any).OPENAI_TTS_FORMAT || 'mp3') as 'mp3' | 'opus' | 'aac' | 'flac';
-    const baseVoice = (env as any).OPENAI_TTS_VOICE || env.OPENAI_VOICE || 'shimmer';
+    const model = env.OPENAI_TTS_MODEL;
+    const format = env.OPENAI_TTS_FORMAT;
+    const baseVoice = env.OPENAI_TTS_VOICE || env.OPENAI_VOICE || 'shimmer';
     const voice = (baseVoice) as 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), env.JAMI_TTS_CLOUD_TIMEOUT_MS);
 
     try {
       const response = await client.audio.speech.create({
@@ -33,18 +35,21 @@ export class TtsService {
         voice: voice,
         input: text,
         response_format: format,
-      });
+      }, { signal: controller.signal });
 
       const arrayBuffer = await response.arrayBuffer();
       return Buffer.from(arrayBuffer);
     } catch (error: any) {
       if (error?.status === 401) {
-        throw new Error('AI_UNAUTHORIZED');
+        throw new Error('AI_UNAUTHORIZED', { cause: error });
       }
       if (error?.status === 429) {
-        throw new Error('AI_RATE_LIMIT_EXCEEDED');
+        throw new Error('AI_RATE_LIMIT_EXCEEDED', { cause: error });
       }
+      if (error?.name === 'AbortError') throw new Error('AI_TTS_TIMEOUT', { cause: error });
       throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }

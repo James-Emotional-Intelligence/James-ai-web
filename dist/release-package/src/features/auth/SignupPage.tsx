@@ -18,6 +18,18 @@ export const SignupPage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isConflict409, setIsConflict409] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [aiWalletEnabled, setAiWalletEnabled] = useState(true);
+
+  React.useEffect(() => {
+    fetch('/api/v1/app-config')
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.features && typeof d.features.aiWalletEnabled !== 'undefined') {
+          setAiWalletEnabled(d.features.aiWalletEnabled);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const {
     register,
@@ -283,6 +295,7 @@ export const SignupPage: React.FC = () => {
           </div>
 
           {/* Optional Registration / Promotion Code */}
+          {aiWalletEnabled && (
           <div className="space-y-1 pt-1">
             <label htmlFor="registrationCode" className="text-xs font-bold text-[#F3FAF5] flex items-center justify-between">
               <span className="flex items-center gap-1">
@@ -309,6 +322,7 @@ export const SignupPage: React.FC = () => {
               Nhập mã giới thiệu của giáo viên hoặc nhà trường để nhận thêm ngân sách AI học tập.
             </p>
           </div>
+          )}
 
           {/* Terms & Conditions */}
           <div className="flex items-start gap-2 pt-1">

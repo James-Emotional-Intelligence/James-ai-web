@@ -142,8 +142,10 @@ function parseEnv() {
     if (parsed.PASSWORD_RESET_ENABLED && (!parsed.SMTP_HOST || !parsed.SMTP_USER)) {
       throw new Error("[JAMI Config ERROR] PASSWORD_RESET_ENABLED=true in production requires SMTP configuration (SMTP_HOST, SMTP_USER).");
     }
-    if (!parsed.REGISTRATION_CODE_PEPPER || parsed.REGISTRATION_CODE_PEPPER === "jami-registration-code-pepper-secret-32-chars" || parsed.REGISTRATION_CODE_PEPPER.length < 32) {
-      throw new Error("[JAMI Config ERROR] REGISTRATION_CODE_PEPPER must be set to a secure random string of at least 32 characters in Production mode.");
+    if (parsed.AI_WALLET_ENABLED) {
+      if (!parsed.REGISTRATION_CODE_PEPPER || parsed.REGISTRATION_CODE_PEPPER === "jami-registration-code-pepper-secret-32-chars" || parsed.REGISTRATION_CODE_PEPPER.length < 32) {
+        throw new Error("[JAMI Config ERROR] REGISTRATION_CODE_PEPPER must be set to a secure random string of at least 32 characters in Production mode.");
+      }
     }
   }
   if (parsed.COOKIE_SECURE === void 0) {
@@ -200,7 +202,14 @@ var init_env = __esm({
       // TTS API Config
       OPENAI_TTS_MODEL: import_zod.z.string().default("gpt-4o-mini-tts"),
       OPENAI_TTS_VOICE: import_zod.z.string().optional(),
-      OPENAI_TTS_FORMAT: import_zod.z.string().default("mp3"),
+      OPENAI_TTS_FORMAT: import_zod.z.enum(["mp3", "opus", "aac", "flac", "wav", "pcm"]).default("mp3"),
+      JAMI_TTS_MODE: import_zod.z.enum(["auto", "browser-local", "wasm-local", "cloud"]).default("auto"),
+      JAMI_TTS_ALLOW_CLOUD_FALLBACK: import_zod.z.preprocess(parseBooleanEnv, import_zod.z.boolean().default(false)),
+      JAMI_TTS_WASM_ENABLED: import_zod.z.preprocess(parseBooleanEnv, import_zod.z.boolean().default(true)),
+      JAMI_TTS_MODEL_ID: import_zod.z.string().default("vi_VN-vais1000-medium"),
+      JAMI_TTS_ASSET_BASE_URL: import_zod.z.string().default("/tts-assets/"),
+      JAMI_TTS_MAX_CHUNK_CHARS: import_zod.z.preprocess((val) => val ? Number(val) : 220, import_zod.z.number().int().min(80).max(500).default(220)),
+      JAMI_TTS_CLOUD_TIMEOUT_MS: import_zod.z.preprocess((val) => val ? Number(val) : 2e4, import_zod.z.number().int().min(1e3).max(6e4).default(2e4)),
       // Storage Configuration (Local Disk vs Cloudflare R2/S3)
       STORAGE_DRIVER: import_zod.z.enum(["local", "r2"]).default("local"),
       LOCAL_STORAGE_ROOT: import_zod.z.string().default("./storage"),
@@ -224,6 +233,7 @@ var init_env = __esm({
       AI_DAILY_QUOTA: import_zod.z.preprocess((val) => val ? Number(val) : 100, import_zod.z.number().default(100)),
       AI_MAX_CONCURRENCY_PER_USER: import_zod.z.preprocess((val) => val ? Number(val) : 3, import_zod.z.number().default(3)),
       // AI Wallet, Billing & Registration Code Configuration
+      AI_WALLET_ENABLED: import_zod.z.preprocess(parseBooleanEnv, import_zod.z.boolean().default(true)),
       AI_DEFAULT_CREDIT_VND: import_zod.z.preprocess((val) => val ? Number(val) : 25e3, import_zod.z.number().default(25e3)),
       AI_USD_TO_VND_RATE: import_zod.z.preprocess((val) => val ? Number(val) : 27e3, import_zod.z.number().int().positive().default(27e3)),
       AI_PRICING_TIER: import_zod.z.enum(["standard"]).default("standard"),
@@ -3958,6 +3968,15 @@ var init_ai_billing_service = __esm({
        * Pre-execution reservation: checks balance & reserves estimated max token cost
        */
       async reserveForAiExecution(params) {
+        if (!env.AI_WALLET_ENABLED) {
+          return {
+            isUnlimited: true,
+            reservedMilliVnd: 0n,
+            reservationTxId: "no-billing",
+            pricingVersion: "none",
+            idempotencyKey: params.idempotencyKey || "no-billing"
+          };
+        }
         const { userId, model, estimatedInputTokens, maxOutputTokens, promptId, requestId } = params;
         if (!isModelSupported(model)) {
           throw new ModelPricingUnavailableError(model);
@@ -3987,6 +4006,9 @@ var init_ai_billing_service = __esm({
        * Post-execution reconciliation: calculates actual token cost and charges/releases wallet
        */
       async reconcileAiExecution(params) {
+        if (!env.AI_WALLET_ENABLED) {
+          return { actualCostMilliVnd: 0n, actualCostVnd: 0, aiRunId: "no-billing" };
+        }
         const { userId, model, reservedMilliVnd, isUnlimited, usage, promptId, requestId, success, errorCode, latencyMs } = params;
         const rawKey = params.idempotencyKey || params.reservationIdempotencyKey || "idemp_" + import_crypto7.default.randomUUID().replace(/-/g, "");
         let actualCostMilliVnd = 0n;
@@ -4077,6 +4099,7 @@ var init_ai_billing_service = __esm({
         return aiWalletRepo.adminSetStatus(params);
       }
       startReconcileQueueWorker(intervalMs = 3e4) {
+        if (!env.AI_WALLET_ENABLED) return;
         if (this.reconcileWorkerTimer) return;
         this.reconcileWorkerTimer = setInterval(async () => {
           try {
@@ -18860,7 +18883,7 @@ var AuthService = class _AuthService {
             ]
           );
           let codeRedemption = null;
-          if (data.registrationCode && data.registrationCode.trim()) {
+          if (env.AI_WALLET_ENABLED && data.registrationCode && data.registrationCode.trim()) {
             codeRedemption = await registrationCodeService.redeemInTransaction(
               conn,
               userId,
@@ -18894,48 +18917,50 @@ var AuthService = class _AuthService {
               [s.id, userId, s.name, s.color, s.icon, s.order]
             );
           }
-          const bonusCreditMilliVnd = codeRedemption?.rewardType === "credit" ? codeRedemption.creditMilliVnd : 0n;
-          const totalBalanceMilliVnd = defaultGrantMilliVnd + bonusCreditMilliVnd;
-          const isUnlimitedForever = codeRedemption?.rewardType === "unlimited" ? codeRedemption.unlimitedForever : false;
-          const unlimitedUntil = codeRedemption?.rewardType === "unlimited" ? codeRedemption.unlimitedUntil : null;
-          await conn.execute(
-            `INSERT INTO ai_wallets (user_id, balance_milli_vnd, reserved_milli_vnd, ai_enabled, unlimited_forever, unlimited_until, version, created_at, updated_at)
-             VALUES (?, ?, 0, TRUE, ?, ?, 0, NOW(3), NOW(3))`,
-            [
-              userId,
-              totalBalanceMilliVnd.toString(),
-              isUnlimitedForever ? 1 : 0,
-              unlimitedUntil
-            ]
-          );
-          const initialTxId = "tx_" + import_crypto6.default.randomUUID().replace(/-/g, "").substring(0, 24);
-          await conn.execute(
-            `INSERT INTO ai_wallet_transactions
-             (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, idempotency_key, reason, created_at)
-             VALUES (?, ?, NULL, 'initial_grant', ?, ?, 0, ?, 'C\u1EA5p ng\xE2n s\xE1ch AI ban \u0111\u1EA7u (25.000\u0111)', NOW(3))`,
-            [
-              initialTxId,
-              userId,
-              defaultGrantMilliVnd.toString(),
-              defaultGrantMilliVnd.toString(),
-              `init_grant_${userId}`
-            ]
-          );
-          if (bonusCreditMilliVnd > 0n && codeRedemption) {
-            const codeTxId = "tx_" + import_crypto6.default.randomUUID().replace(/-/g, "").substring(0, 24);
+          if (env.AI_WALLET_ENABLED) {
+            const bonusCreditMilliVnd = codeRedemption?.rewardType === "credit" ? codeRedemption.creditMilliVnd : 0n;
+            const totalBalanceMilliVnd = defaultGrantMilliVnd + bonusCreditMilliVnd;
+            const isUnlimitedForever = codeRedemption?.rewardType === "unlimited" ? codeRedemption.unlimitedForever : false;
+            const unlimitedUntil = codeRedemption?.rewardType === "unlimited" ? codeRedemption.unlimitedUntil : null;
             await conn.execute(
-              `INSERT INTO ai_wallet_transactions
-               (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, registration_code_id, idempotency_key, reason, created_at)
-               VALUES (?, ?, NULL, 'code_credit', ?, ?, 0, ?, ?, 'C\u1ED9ng ng\xE2n s\xE1ch AI t\u1EEB m\xE3 \u01B0u \u0111\xE3i', NOW(3))`,
+              `INSERT INTO ai_wallets (user_id, balance_milli_vnd, reserved_milli_vnd, ai_enabled, unlimited_forever, unlimited_until, version, created_at, updated_at)
+               VALUES (?, ?, 0, TRUE, ?, ?, 0, NOW(3), NOW(3))`,
               [
-                codeTxId,
                 userId,
-                bonusCreditMilliVnd.toString(),
                 totalBalanceMilliVnd.toString(),
-                codeRedemption.codeId,
-                `code_credit_${userId}_${codeRedemption.codeId}`
+                isUnlimitedForever ? 1 : 0,
+                unlimitedUntil
               ]
             );
+            const initialTxId = "tx_" + import_crypto6.default.randomUUID().replace(/-/g, "").substring(0, 24);
+            await conn.execute(
+              `INSERT INTO ai_wallet_transactions
+               (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, idempotency_key, reason, created_at)
+               VALUES (?, ?, NULL, 'initial_grant', ?, ?, 0, ?, 'C\u1EA5p ng\xE2n s\xE1ch AI ban \u0111\u1EA7u (25.000\u0111)', NOW(3))`,
+              [
+                initialTxId,
+                userId,
+                defaultGrantMilliVnd.toString(),
+                defaultGrantMilliVnd.toString(),
+                `init_grant_${userId}`
+              ]
+            );
+            if (bonusCreditMilliVnd > 0n && codeRedemption) {
+              const codeTxId = "tx_" + import_crypto6.default.randomUUID().replace(/-/g, "").substring(0, 24);
+              await conn.execute(
+                `INSERT INTO ai_wallet_transactions
+                 (id, user_id, actor_user_id, type, amount_milli_vnd, balance_after_milli_vnd, reserved_after_milli_vnd, registration_code_id, idempotency_key, reason, created_at)
+                 VALUES (?, ?, NULL, 'code_credit', ?, ?, 0, ?, ?, 'C\u1ED9ng ng\xE2n s\xE1ch AI t\u1EEB m\xE3 \u01B0u \u0111\xE3i', NOW(3))`,
+                [
+                  codeTxId,
+                  userId,
+                  bonusCreditMilliVnd.toString(),
+                  totalBalanceMilliVnd.toString(),
+                  codeRedemption.codeId,
+                  `code_credit_${userId}_${codeRedemption.codeId}`
+                ]
+              );
+            }
           }
           await conn.execute(
             `INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, revoked_at, user_agent, ip_address, is_demo, created_at)
@@ -18977,7 +19002,7 @@ var AuthService = class _AuthService {
       const codeSnapshot = registrationCodeService.createDemoSnapshot();
       try {
         let codeRedemption = null;
-        if (data.registrationCode && data.registrationCode.trim()) {
+        if (env.AI_WALLET_ENABLED && data.registrationCode && data.registrationCode.trim()) {
           codeRedemption = await registrationCodeService.redeemInTransaction(null, userId, data.registrationCode.trim());
         }
         const { user: createdUser, profile: createdProfile } = await userRepo.createUser({
@@ -18987,12 +19012,14 @@ var AuthService = class _AuthService {
           preferredName: data.preferredName,
           gradeLevel: data.gradeLevel
         });
-        const bonusVnd = codeRedemption?.rewardType === "credit" ? Number((codeRedemption.creditMilliVnd || 0n) / 1000n) : 0;
-        const initialTotalVnd = defaultGrantVnd + bonusVnd;
-        const wallet = await aiWalletRepo.ensureWallet(createdUser.id, initialTotalVnd);
-        if (codeRedemption?.rewardType === "unlimited") {
-          wallet.unlimitedForever = Boolean(codeRedemption.unlimitedForever);
-          wallet.unlimitedUntil = codeRedemption.unlimitedUntil || null;
+        if (env.AI_WALLET_ENABLED) {
+          const bonusVnd = codeRedemption?.rewardType === "credit" ? Number((codeRedemption.creditMilliVnd || 0n) / 1000n) : 0;
+          const initialTotalVnd = defaultGrantVnd + bonusVnd;
+          const wallet = await aiWalletRepo.ensureWallet(createdUser.id, initialTotalVnd);
+          if (codeRedemption?.rewardType === "unlimited") {
+            wallet.unlimitedForever = Boolean(codeRedemption.unlimitedForever);
+            wallet.unlimitedUntil = codeRedemption.unlimitedUntil || null;
+          }
         }
         const sess = await sessionRepo.createSession(createdUser.id, false, !!data.rememberMe);
         return { user: createdUser, profile: createdProfile, rawToken: sess.rawToken };
@@ -23548,27 +23575,32 @@ var TtsService = class _TtsService {
     if (!client) {
       throw new Error("AI_NOT_CONFIGURED");
     }
-    const model = env.OPENAI_TTS_MODEL || "tts-1";
-    const format = env.OPENAI_TTS_FORMAT || "mp3";
+    const model = env.OPENAI_TTS_MODEL;
+    const format = env.OPENAI_TTS_FORMAT;
     const baseVoice = env.OPENAI_TTS_VOICE || env.OPENAI_VOICE || "shimmer";
     const voice = baseVoice;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), env.JAMI_TTS_CLOUD_TIMEOUT_MS);
     try {
       const response = await client.audio.speech.create({
         model,
         voice,
         input: text,
         response_format: format
-      });
+      }, { signal: controller.signal });
       const arrayBuffer = await response.arrayBuffer();
       return Buffer.from(arrayBuffer);
     } catch (error) {
       if (error?.status === 401) {
-        throw new Error("AI_UNAUTHORIZED");
+        throw new Error("AI_UNAUTHORIZED", { cause: error });
       }
       if (error?.status === 429) {
-        throw new Error("AI_RATE_LIMIT_EXCEEDED");
+        throw new Error("AI_RATE_LIMIT_EXCEEDED", { cause: error });
       }
+      if (error?.name === "AbortError") throw new Error("AI_TTS_TIMEOUT", { cause: error });
       throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 };
@@ -23576,6 +23608,17 @@ var ttsService = TtsService.getInstance();
 
 // server/routes/api.ts
 var apiRouter = (0, import_express.Router)();
+apiRouter.use((req, res, next) => {
+  if (!env.AI_WALLET_ENABLED) {
+    if (req.path.includes("/ai-wallet") || req.path.includes("/admin/registration-codes")) {
+      return res.status(404).json({ message: "AI Wallet is disabled" });
+    }
+  }
+  next();
+});
+apiRouter.get("/app-config", (req, res) => {
+  res.json({ features: { aiWalletEnabled: env.AI_WALLET_ENABLED } });
+});
 var userRepo6 = UserRepository.getInstance();
 var authService2 = AuthService.getInstance();
 var RealtimeToolCallRequestSchema = import_zod9.z.object({
@@ -26836,10 +26879,12 @@ apiRouter.delete("/jami/messages", requireAuth, asyncHandler(async (req, res) =>
   res.json({ success });
 }));
 apiRouter.post("/jami/tts", requireAuth, aiRateLimiter, asyncHandler(async (req, res) => {
-  const userId = req.userId;
+  if (!env.JAMI_TTS_ALLOW_CLOUD_FALLBACK && env.JAMI_TTS_MODE !== "cloud") {
+    return sendError(req, res, 503, "TTS_CLOUD_DISABLED", "Gi\u1ECDng tr\u1EF1c tuy\u1EBFn \u0111ang t\u1EAFt. H\xE3y d\xF9ng gi\u1ECDng tr\xEAn thi\u1EBFt b\u1ECB.");
+  }
   const bodySchema = import_zod9.z.object({
-    text: import_zod9.z.string().max(4096),
-    language: import_zod9.z.string().default("vi-VN"),
+    text: import_zod9.z.string().trim().min(1).max(2e3),
+    language: import_zod9.z.enum(["vi-VN", "en-US"]).default("vi-VN"),
     messageId: import_zod9.z.string().optional()
   });
   const parsed = bodySchema.safeParse(req.body);
@@ -26850,7 +26895,15 @@ apiRouter.post("/jami/tts", requireAuth, aiRateLimiter, asyncHandler(async (req,
   const { text, language } = parsed.data;
   try {
     const audioBuffer = await ttsService.generateSpeech(text, language);
-    res.set("Content-Type", env.OPENAI_TTS_FORMAT === "opus" ? "audio/ogg" : "audio/mpeg");
+    const mimeByFormat = {
+      mp3: "audio/mpeg",
+      opus: "audio/ogg; codecs=opus",
+      aac: "audio/aac",
+      flac: "audio/flac",
+      wav: "audio/wav",
+      pcm: "audio/L16"
+    };
+    res.set("Content-Type", mimeByFormat[env.OPENAI_TTS_FORMAT]);
     res.set("Cache-Control", "no-store");
     res.send(audioBuffer);
   } catch (error) {

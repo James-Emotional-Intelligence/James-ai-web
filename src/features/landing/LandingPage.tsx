@@ -152,6 +152,7 @@ export const LandingPage: React.FC = () => {
                     size="lg"
                     bubbleMessage="Chào bạn! Nói mục tiêu của bạn cho Jami, mình sẽ cùng lên lịch nhé."
                     bubbleActions={['Lịch học', 'Hẹn giờ tập trung']}
+                    showBubble={false}
                   />
                 </div>
 

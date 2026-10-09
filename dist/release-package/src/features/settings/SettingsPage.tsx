@@ -15,6 +15,9 @@ import { useNotifications } from '../../context/NotificationContext';
 import { useTheme, AppTheme } from '../../context/ThemeContext';
 import { HAI_BA_TRUNG_ASSETS } from '../../assets/themes/hai-ba-trung';
 import confetti from '../../lib/safe-confetti';
+import { useVoiceJami } from '../../context/VoiceJamiContext';
+import { jamiTts } from '../../lib/jami-tts';
+import { OFFLINE_TTS_TOTAL_BYTES } from '../../lib/tts-offline-manifest';
 
 export const SettingsPage: React.FC = () => {
   const { showToast } = useNotifications();
@@ -25,6 +28,79 @@ export const SettingsPage: React.FC = () => {
   const [isSavingPrefs, setIsSavingPrefs] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const { theme, setTheme } = useTheme();
+  const voice = useVoiceJami();
+  const [speechRate, setSpeechRate] = useState(() => Number(localStorage.getItem('jami.tts.rate') || 0.95));
+  const [hasLocalVietnameseVoice, setHasLocalVietnameseVoice] = useState(false);
+  const [localVietnameseVoices, setLocalVietnameseVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVietnameseVoice, setSelectedVietnameseVoice] = useState(() => localStorage.getItem('jami.tts.voice.vi-VN') || '');
+  const [offlineVoiceState, setOfflineVoiceState] = useState<'checking' | 'missing' | 'downloading' | 'ready' | 'error'>('checking');
+  const [offlineProgress, setOfflineProgress] = useState(0);
+  const [offlineError, setOfflineError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return;
+    const inspectVoices = () => {
+      const voices = window.speechSynthesis.getVoices().filter((item) =>
+        item.localService === true && item.lang.replace('_', '-').toLowerCase().startsWith('vi-')
+      );
+      setLocalVietnameseVoices(voices);
+      setHasLocalVietnameseVoice(voices.length > 0);
+    };
+    inspectVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', inspectVoices);
+    return () => window.speechSynthesis.removeEventListener?.('voiceschanged', inspectVoices);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void jamiTts.getOfflineVoiceStatus()
+      .then((ready) => { if (mounted) setOfflineVoiceState(ready ? 'ready' : 'missing'); })
+      .catch((error: unknown) => {
+        if (!mounted) return;
+        setOfflineVoiceState('error');
+        setOfflineError(error instanceof Error ? error.message : String(error));
+      });
+    return () => { mounted = false; };
+  }, []);
+
+  const updateSpeechRate = (value: number) => {
+    setSpeechRate(value);
+    localStorage.setItem('jami.tts.rate', String(value));
+  };
+
+  const updateVietnameseVoice = (name: string) => {
+    setSelectedVietnameseVoice(name);
+    if (name) localStorage.setItem('jami.tts.voice.vi-VN', name);
+    else localStorage.removeItem('jami.tts.voice.vi-VN');
+  };
+
+  const downloadOfflineVoice = async () => {
+    setOfflineVoiceState('downloading');
+    setOfflineError(null);
+    setOfflineProgress(0);
+    try {
+      await jamiTts.prepareOfflineVoice(({ loaded, total }) => setOfflineProgress(total ? loaded / total : 0));
+      setOfflineProgress(1);
+      setOfflineVoiceState('ready');
+      showToast('Đã tải giọng ngoại tuyến', 'Jami có thể đọc tiếng Việt trên thiết bị mà không gọi API TTS.', 'success');
+    } catch (error) {
+      setOfflineVoiceState('error');
+      setOfflineError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const removeOfflineVoice = async () => {
+    try {
+      await jamiTts.removeOfflineVoice();
+      setOfflineVoiceState('missing');
+      setOfflineProgress(0);
+      setOfflineError(null);
+      showToast('Đã xóa gói giọng', 'Bộ nhớ dành cho giọng ngoại tuyến đã được giải phóng.', 'success');
+    } catch (error) {
+      setOfflineVoiceState('error');
+      setOfflineError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   const handleSelectTheme = (newTheme: AppTheme) => {
     setTheme(newTheme);
@@ -290,6 +366,113 @@ export const SettingsPage: React.FC = () => {
                 onChange={(e) => handleToggleSound(e.target.checked)}
                 className="w-5 h-5 accent-[#16A34A] rounded cursor-pointer disabled:opacity-50"
               />
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.18)] space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-[#F3FAF5]">Giọng đọc trên thiết bị</div>
+                  <div className="text-[11px] text-[#A9B8AE]">
+                    {hasLocalVietnameseVoice
+                      ? 'Đã tìm thấy giọng tiếng Việt cục bộ — không gọi API TTS.'
+                      : offlineVoiceState === 'ready'
+                        ? 'Windows chưa có giọng Việt; Jami sẽ dùng gói Piper ngoại tuyến đã tải.'
+                        : 'Windows chưa có giọng Việt. Tải gói ngoại tuyến bên dưới để tránh giọng Anh đọc sai.'}
+                  </div>
+                </div>
+                <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${hasLocalVietnameseVoice ? 'text-[#86EFAC] border-[#22C55E]/30' : 'text-amber-300 border-amber-400/30'}`}>
+                  {hasLocalVietnameseVoice ? 'Giọng trên thiết bị' : 'Cần cài giọng'}
+                </span>
+              </div>
+              <label htmlFor="setting-speech-rate" className="block text-[11px] text-[#A9B8AE]">
+                Tốc độ đọc: {speechRate.toFixed(2)}×
+              </label>
+              <input
+                id="setting-speech-rate"
+                type="range"
+                min="0.75"
+                max="1.5"
+                step="0.05"
+                value={speechRate}
+                onChange={(event) => updateSpeechRate(Number(event.target.value))}
+                className="w-full accent-[#16A34A]"
+              />
+              {localVietnameseVoices.length > 0 && (
+                <label className="block text-[11px] text-[#A9B8AE]" htmlFor="setting-vietnamese-voice">
+                  Giọng tiếng Việt
+                  <select
+                    id="setting-vietnamese-voice"
+                    value={selectedVietnameseVoice}
+                    onChange={(event) => updateVietnameseVoice(event.target.value)}
+                    className="mt-1 w-full rounded-xl bg-[#080D09] border border-[#22C55E]/25 px-3 py-2 text-[#F3FAF5]"
+                  >
+                    <option value="">Tự động chọn giọng tốt nhất</option>
+                    {localVietnameseVoices.map((item) => (
+                      <option key={`${item.name}:${item.lang}`} value={item.name}>
+                        {item.name} ({item.lang}){item.default ? ' — mặc định' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => voice.speak('Xin chào! Đây là giọng tiếng Việt của Jami.', { rate: speechRate, lang: 'vi-VN' })}
+                  className="px-3 py-2 rounded-xl bg-[#14532D] text-[#F3FAF5] text-xs font-bold hover:bg-[#166534]"
+                >
+                  Thử giọng
+                </button>
+                <button
+                  type="button"
+                  onClick={voice.stopSpeaking}
+                  disabled={!voice.isSpeaking}
+                  className="px-3 py-2 rounded-xl border border-[#22C55E]/30 text-[#A9B8AE] text-xs font-bold disabled:opacity-40"
+                >
+                  Dừng đọc
+                </button>
+              </div>
+              {voice.errorMessage && (
+                <div role="alert" className="flex items-start gap-2 text-[11px] text-amber-300">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{voice.errorMessage}</span>
+                </div>
+              )}
+              <div className="text-[11px] text-[#A9B8AE] border-t border-white/5 pt-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <strong className="text-[#F3FAF5]">Giọng ngoại tuyến Piper (Vais1000):</strong>{' '}
+                    {offlineVoiceState === 'ready'
+                      ? 'đã sẵn sàng.'
+                      : offlineVoiceState === 'downloading'
+                        ? `đang tải ${Math.round(offlineProgress * 100)}%.`
+                        : offlineVoiceState === 'checking'
+                          ? 'đang kiểm tra.'
+                          : `chưa tải (khoảng ${Math.round(OFFLINE_TTS_TOTAL_BYTES / 1024 / 1024)} MB).`}
+                  </div>
+                  {offlineVoiceState === 'ready' ? (
+                    <button type="button" onClick={removeOfflineVoice} className="px-3 py-1.5 rounded-lg border border-rose-400/30 text-rose-300 font-bold">
+                      Xóa gói giọng
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={downloadOfflineVoice}
+                      disabled={offlineVoiceState === 'downloading' || offlineVoiceState === 'checking'}
+                      className="px-3 py-1.5 rounded-lg bg-[#14532D] text-[#F3FAF5] font-bold disabled:opacity-50"
+                    >
+                      {offlineVoiceState === 'downloading' ? 'Đang tải…' : 'Tải giọng ngoại tuyến'}
+                    </button>
+                  )}
+                </div>
+                {offlineVoiceState === 'downloading' && (
+                  <div className="h-1.5 rounded-full bg-[#050806] overflow-hidden" aria-label="Tiến độ tải giọng ngoại tuyến">
+                    <div className="h-full bg-[#22C55E] transition-all" style={{ width: `${Math.round(offlineProgress * 100)}%` }} />
+                  </div>
+                )}
+                {offlineError && <div role="alert" className="text-amber-300">{offlineError}</div>}
+                <div>Model và runtime được chạy trong Web Worker; văn bản không rời khỏi thiết bị.</div>
+              </div>
             </div>
           </div>
         </div>
