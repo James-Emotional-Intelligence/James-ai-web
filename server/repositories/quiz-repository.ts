@@ -3,6 +3,7 @@ import { Quiz, QuizQuestion, QuizSubmission, QuizAttemptResult, QuizAttempt } fr
 import { examRepo } from './exam-repository';
 import { subjectRepo } from './subject-repository';
 import { AiAdapter } from '../services/ai-adapter';
+import { userRepo } from './user-repository';
 import crypto from 'crypto';
 
 /**
@@ -113,7 +114,7 @@ export class QuizRepository {
   public async getById(userId: string, quizId: string, includeAnswers = false): Promise<(Quiz & { questions: QuizQuestion[] }) | null> {
     if (db.isHealthy()) {
       const [quizRow] = await db.query<any>(
-        `SELECT q.id, q.user_id, q.exam_id, q.subject_id, q.title, q.type, q.milestone, q.difficulty, q.status, q.created_at,
+        `SELECT q.id, q.user_id, q.exam_id, q.subject_id, q.title, q.type, q.milestone, q.difficulty, q.status, q.generated_by_ai, q.created_at,
                 s.name as subject_name
          FROM quizzes q
          JOIN subjects s ON q.subject_id = s.id
@@ -136,6 +137,7 @@ export class QuizRepository {
         difficulty: quizRow.difficulty,
         status: quizRow.status,
         questionCount: questions.length,
+        generatedByAi: Boolean(quizRow.generated_by_ai),
         questions,
         createdAt: quizRow.created_at?.toISOString?.() || String(quizRow.created_at),
       };
@@ -222,10 +224,12 @@ export class QuizRepository {
     const milestone = options.milestone || 'D-7';
     const questionCount = options.questionCount || 5;
     const difficulty = options.difficulty || 'medium';
+    const profile = await userRepo.getProfile(userId);
 
     // 1. Generate structured draft via OpenAI
     const draft = await AiAdapter.generateQuizDraft({
       subject: exam.subjectName || 'Toán học',
+      gradeLevel: profile?.gradeLevel,
       scope: exam.scopeText || '',
       topics: (exam.topics || []).map((t) => t.name),
       milestone,
@@ -346,9 +350,11 @@ export class QuizRepository {
     const difficulty = options.difficulty || 'medium';
     const questionCount = Math.min(30, Math.max(3, options.questionCount || 5));
     const topics = options.topics && options.topics.length > 0 ? options.topics : [subjectName];
+    const profile = await userRepo.getProfile(userId);
 
     const draft = await AiAdapter.generateQuizDraft({
       subject: subjectName,
+      gradeLevel: profile?.gradeLevel,
       scope: options.scope || 'Kiến thức trọng tâm',
       topics,
       milestone: 'D-7',
@@ -436,7 +442,15 @@ export class QuizRepository {
     }
 
     const originalQuestions = await this.getQuizQuestions(userId, originalQuizId, true);
-    const wrongQuestions = originalQuestions.filter((q) => wrongQuestionIds.includes(q.id));
+    const disputedIds = new Set<string>();
+    if (db.isHealthy()) {
+      const rows = await db.query<any>(
+        `SELECT DISTINCT question_id FROM quiz_question_reports WHERE quiz_id = ?
+         AND status IN ('pending', 'reviewing', 'confirmed_error')`, [originalQuizId]
+      );
+      for (const row of rows) disputedIds.add(row.question_id);
+    }
+    const wrongQuestions = originalQuestions.filter((q) => wrongQuestionIds.includes(q.id) && !disputedIds.has(q.id));
 
     if (wrongQuestions.length === 0) {
       throw new Error('Không tìm thấy câu hỏi sai hợp lệ trong đề thi này để làm lại.');
@@ -539,6 +553,16 @@ export class QuizRepository {
     return attempt;
   }
 
+  public async ownsAttempt(userId: string, quizId: string, attemptId: string): Promise<boolean> {
+    if (db.isHealthy()) {
+      const rows = await db.query<any>('SELECT id FROM quiz_attempts WHERE id = ? AND user_id = ? AND quiz_id = ?', [attemptId, userId, quizId]);
+      return rows.length > 0;
+    }
+    const active = this.demoActiveAttempts.get(attemptId);
+    if (active) return active.userId === userId && active.quizId === quizId;
+    return (this.demoAttempts.get(quizId) || []).some((attempt) => attempt.attemptId === attemptId);
+  }
+
   /**
    * Submits and grades quiz attempt, updates topic mastery per topic, and marks milestone completed
    */
@@ -583,20 +607,29 @@ export class QuizRepository {
             'SELECT question_id, answer_json, is_correct, feedback FROM quiz_answers WHERE attempt_id = ?',
             [submission.attemptId]
           );
+          const disputedRows = await db.query<any>(
+            `SELECT DISTINCT question_id FROM quiz_question_reports
+             WHERE quiz_id = ? AND status IN ('pending', 'reviewing', 'confirmed_error')`,
+            [submission.quizId]
+          );
+          const disputedIds = new Set<string>(disputedRows.map((row: any) => row.question_id));
           return {
             attemptId: submission.attemptId,
             quizId: submission.quizId,
             score: Number(attRow.score) || 0,
             maxScore: 10,
             totalQuestions: questions.length,
-            correctCount: existingAnswers.filter((a: any) => a.is_correct).length,
+            correctCount: existingAnswers.filter((a: any) => a.is_correct && !disputedIds.has(a.question_id)).length,
             feedbackSummary: attRow.feedback_summary || '',
             answers: existingAnswers.map((a: any) => ({
               questionId: a.question_id,
               userAnswer: typeof a.answer_json === 'string' ? JSON.parse(a.answer_json) : a.answer_json,
               correctAnswer: questions.find((q) => q.id === a.question_id)?.correctAnswer || '',
-              isCorrect: Boolean(a.is_correct),
-              explanation: a.feedback || '',
+              isCorrect: Boolean(a.is_correct) && !disputedIds.has(a.question_id),
+              needsReview: a.is_correct === null || disputedIds.has(a.question_id),
+              explanation: disputedIds.has(a.question_id)
+                ? `Câu này đang được kiểm tra; tạm không tính vào điểm và chủ đề yếu. ${a.feedback || ''}`
+                : a.feedback || '',
             })),
             submittedAt: attRow.submitted_at?.toISOString?.() || String(attRow.submitted_at),
           };
@@ -614,7 +647,18 @@ export class QuizRepository {
     }
 
     let correctCount = 0;
+    const disputedQuestionIds = new Set<string>();
+    if (db.isHealthy()) {
+      const disputed = await db.query<any>(
+        `SELECT DISTINCT question_id FROM quiz_question_reports
+         WHERE quiz_id = ? AND status IN ('pending', 'reviewing', 'confirmed_error')`,
+        [submission.quizId]
+      );
+      for (const row of disputed) disputedQuestionIds.add(row.question_id);
+    }
+    let eligibleQuestionCount = 0;
     const scoredAnswers: QuizAttemptResult['answers'] = [];
+    const needsReviewQuestionIds = new Set<string>();
     const topicPerformance: Record<string, { total: number; correct: number }> = {};
 
     for (const q of questions) {
@@ -623,9 +667,14 @@ export class QuizRepository {
       if (!topicPerformance[topic]) {
         topicPerformance[topic] = { total: 0, correct: 0 };
       }
-      topicPerformance[topic].total++;
+      const disputed = disputedQuestionIds.has(q.id);
+      if (!disputed) {
+        topicPerformance[topic].total++;
+        eligibleQuestionCount++;
+      }
 
       let isCorrect: boolean;
+      let needsReview = false;
       let explanation = q.explanation || 'Đáp án chính xác.';
 
       if (q.type === 'multiple_choice' || q.type === 'true_false') {
@@ -651,12 +700,18 @@ export class QuizRepository {
           userId,
         });
         isCorrect = gradeRes.isCorrect;
+        needsReview = Boolean(gradeRes.needsReview);
+        if (needsReview) needsReviewQuestionIds.add(q.id);
+        if (needsReview && !disputed) {
+          topicPerformance[topic].total--;
+          eligibleQuestionCount--;
+        }
         if (gradeRes.feedback) {
           explanation += ` [Nhận xét: ${gradeRes.feedback}]`;
         }
       }
 
-      if (isCorrect) {
+      if (isCorrect && !disputed && !needsReview) {
         correctCount++;
         topicPerformance[topic].correct++;
       }
@@ -666,11 +721,12 @@ export class QuizRepository {
         userAnswer: userAns,
         correctAnswer: q.correctAnswer || '',
         isCorrect,
-        explanation,
+        needsReview,
+        explanation: disputed ? `Câu này đang được kiểm tra; tạm không tính vào điểm và chủ đề yếu. ${explanation}` : explanation,
       });
     }
 
-    const score = Number(((correctCount / questions.length) * 10).toFixed(2));
+    const score = eligibleQuestionCount ? Number(((correctCount / eligibleQuestionCount) * 10).toFixed(2)) : 10;
     const attemptId = submission.attemptId || 'att_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
     const submittedAt = new Date().toISOString();
 
@@ -722,8 +778,8 @@ export class QuizRepository {
               attemptId,
               ans.questionId,
               JSON.stringify(ans.userAnswer),
-              ans.isCorrect ? 1 : 0,
-              ans.isCorrect ? 10 / questions.length : 0,
+              needsReviewQuestionIds.has(ans.questionId) ? null : ans.isCorrect ? 1 : 0,
+              needsReviewQuestionIds.has(ans.questionId) ? null : ans.isCorrect ? 10 / questions.length : 0,
               ans.explanation,
             ]
           );
@@ -732,6 +788,7 @@ export class QuizRepository {
         // Update Topic Mastery per topic
         const subjectId = quizRow?.subject_id || 'subj-math';
         for (const [topicKey, perf] of Object.entries(topicPerformance)) {
+          if (perf.total === 0) continue;
           const topicScore = Math.round((perf.correct / perf.total) * 100);
           const mastId = 'mast_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
 
@@ -791,6 +848,12 @@ export class QuizRepository {
          WHERE attempt_id = ?`,
          [attemptId]
       );
+      const disputedRows = await db.query<any>(
+        `SELECT DISTINCT question_id FROM quiz_question_reports
+         WHERE quiz_id = ? AND status IN ('pending', 'reviewing', 'confirmed_error')`,
+        [attRow.quiz_id]
+      );
+      const disputedIds = new Set<string>(disputedRows.map((row: any) => row.question_id));
 
       const parseAnswer = (val: any) => {
         if (!val) return '';
@@ -810,8 +873,11 @@ export class QuizRepository {
           questionId: a.question_id,
           userAnswer: parseAnswer(a.answer_json),
           correctAnswer: question?.correctAnswer || '',
-          isCorrect: Boolean(a.is_correct),
-          explanation: a.feedback || question?.explanation || '',
+          isCorrect: Boolean(a.is_correct) && !disputedIds.has(a.question_id),
+          needsReview: a.is_correct === null || disputedIds.has(a.question_id),
+          explanation: disputedIds.has(a.question_id)
+            ? `Câu này đang được kiểm tra; tạm không tính vào điểm và chủ đề yếu. ${a.feedback || question?.explanation || ''}`
+            : a.feedback || question?.explanation || '',
         };
       });
 

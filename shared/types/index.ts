@@ -379,7 +379,8 @@ export interface ExamStudyPlanReplanProposal {
     plannedDate: string;
     startAt: string;
     endAt: string;
-  };
+  } | null;
+  unscheduledReason?: string;
   explanation: string;
 }
 
@@ -847,6 +848,7 @@ export interface QuizAttemptResult {
     userAnswer: string;
     correctAnswer: string;
     isCorrect: boolean;
+    needsReview?: boolean;
     explanation: string;
   }[];
 }

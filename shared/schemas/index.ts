@@ -738,6 +738,17 @@ export const QuizAttemptSubmitSchema = z.object({
   })).default([]),
 });
 
+export const QuizQuestionReportCreateSchema = z.object({
+  reason: z.enum(['wrong_answer', 'wrong_explanation', 'off_topic', 'unclear', 'other']),
+  description: z.string().trim().max(1000).optional(),
+  attemptId: z.string().max(64).optional(),
+}).strict();
+
+export const QuizQuestionReportReviewSchema = z.object({
+  status: z.enum(['reviewing', 'confirmed_error', 'rejected']),
+  note: z.string().trim().max(1000).optional(),
+}).strict();
+
 export const JamiChatRequestSchema = z.object({
   message: z.string().min(1, { message: 'Nội dung tin nhắn không được để trống' }).max(2000),
   conversationId: z.string().optional(),

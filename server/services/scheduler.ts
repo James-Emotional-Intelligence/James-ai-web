@@ -402,9 +402,9 @@ export class DeterministicScheduler {
       allBusyIntervals.push(...expanded);
     }
 
-    // 2. Add existing locked tasks
+    // 2. Protect every already scheduled student task, not only locked tasks.
     for (const t of existingTasks) {
-      if (t.locked && t.scheduledStartAt && t.scheduledEndAt) {
+      if (t.scheduledStartAt && t.scheduledEndAt && t.status !== 'cancelled') {
         const start = new Date(t.scheduledStartAt);
         const end = new Date(t.scheduledEndAt);
         if (end > rangeStart && start < rangeEnd) {
@@ -429,7 +429,7 @@ export class DeterministicScheduler {
       // Initialize daily study load from existing locked tasks
       let initialDailyMinutes = 0;
       for (const t of existingTasks) {
-        if (t.locked && t.scheduledStartAt) {
+        if (t.scheduledStartAt && t.status !== 'cancelled') {
           const tLocal = getLocalParts(new Date(t.scheduledStartAt), timezone);
           if (tLocal.dateKey === dateKey) {
             initialDailyMinutes += t.estimatedMinutes || 45;
@@ -507,7 +507,7 @@ export class DeterministicScheduler {
       const combinedDayBusy = [...overlappingGlobalBusy, ...daySpecificBusy];
 
       // If day overlaps current reference time, don't schedule slots in the past
-      const referenceNow = startDate < now ? startDate : now;
+      const referenceNow = now;
       if (dayAvailStart < referenceNow && dayAvailEnd > referenceNow) {
         combinedDayBusy.push({ start: dayAvailStart, end: referenceNow });
       }
@@ -561,7 +561,7 @@ export class DeterministicScheduler {
         }
 
         // Check deadline constraint
-        if (task.dueAt && slot.start >= new Date(task.dueAt)) {
+        if (task.dueAt && slot.start.getTime() + requiredMinutes * 60_000 > new Date(task.dueAt).getTime()) {
           continue;
         }
 

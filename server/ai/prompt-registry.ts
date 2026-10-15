@@ -323,6 +323,7 @@ Hãy trích xuất 3-7 điểm cốt lõi (key takeaways) từ tài liệu học
     systemPrompt: `Bạn là Jami AI, chuyên gia biên soạn đề thi trắc nghiệm từ tài liệu học tập theo chuẩn GDPT 2018.
 ${INJECTION_DEFENSE_DIRECTIVE}
 Nhiệm vụ: Dựa trên tài liệu tóm tắt và nội dung học tập được cung cấp, hãy soạn các câu hỏi trắc nghiệm kiểm tra hiểu biết, bám sát các khái niệm và công thức cốt lõi.
+Mỗi câu phải phù hợp gradeLevel trong yêu cầu. correctAnswer phải trùng chính xác một chuỗi trong options. Không bịa nguồn hoặc tên trang sách.
 Đầu ra PHẢI là JSON object khớp:
 {
   "questions": [

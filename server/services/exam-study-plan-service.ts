@@ -11,6 +11,9 @@ import {
   ExamPlanActivityType,
 } from '../../shared/types';
 import { localDateTimeToUtc } from '../../shared/utils/date-utils';
+import { DeterministicScheduler, getLocalParts } from './scheduler';
+import { BusyEvent, StudyTask } from '../../shared/types';
+import { db } from '../db/mysql';
 
 function timeToMinutes(t: string): number {
   const [h, m] = t.split(':').map(Number);
@@ -36,6 +39,43 @@ function formatDateVN(date: Date, timezone: string): string {
 }
 
 export class ExamStudyPlanService {
+  private async proposeMissedSlot(userId: string, item: ExamStudyPlanItem, examAt: string, timezone: string,
+    exactSlot?: { plannedDate: string; startAt: string; endAt: string }) {
+    const profile = await userRepo.getProfile(userId);
+    if (!profile) throw new Error('Chưa có hồ sơ để kiểm tra lịch trống.');
+    const [existing, busy, timetable, rules] = await Promise.all([
+      taskRepo.getByUserId(userId), timetableRepo.getBusyEvents(userId),
+      timetableRepo.getTimetableEntries(userId), timetableRepo.getAvailabilityRules(userId),
+    ]);
+    const source: StudyTask = {
+      id: `missed-${item.id}`, userId, subjectId: item.subjectId || '', subjectName: item.subjectName,
+      title: item.title, status: 'pending', priority: 'high', difficulty: 'medium',
+      dueAt: examAt, estimatedMinutes: item.plannedMinutes,
+      minSessionMinutes: item.plannedMinutes, maxSessionMinutes: item.plannedMinutes,
+      splittable: false, locked: false, completionPercent: 0,
+    };
+    const exactRule = exactSlot ? [{ id: `requested-${item.id}`, userId,
+      dayOfWeek: getLocalParts(new Date(localDateTimeToUtc(exactSlot.plannedDate, exactSlot.startAt, timezone)), timezone).dayOfWeek,
+      startLocalTime: exactSlot.startAt, endLocalTime: exactSlot.endAt,
+      type: 'available' as const, isEnabled: true }] : [];
+    const start = exactSlot ? new Date(localDateTimeToUtc(exactSlot.plannedDate, exactSlot.startAt, timezone)) : new Date();
+    const proposal = DeterministicScheduler.generateScheduleProposal(
+      [source], existing.filter((task) => task.id !== item.taskId), busy, timetable, profile,
+      start, exactSlot ? 1 : 7, 'Dời phiên ôn bị bỏ lỡ vào giờ trống', [...exactRule, ...rules], timezone,
+    );
+    const scheduled = proposal.tasksToSchedule[0];
+    if (!scheduled) return { slot: null, reason: proposal.unscheduledItems[0]?.reason || 'Không còn giờ trống trước kỳ kiểm tra.' };
+    const localStart = getLocalParts(new Date(scheduled.proposedStart), timezone);
+    const localEnd = getLocalParts(new Date(scheduled.proposedEnd), timezone);
+    const slot = { plannedDate: localStart.dateKey,
+      startAt: minutesToTime(localStart.hour * 60 + localStart.minute),
+      endAt: minutesToTime(localEnd.hour * 60 + localEnd.minute) };
+    if (exactSlot && (slot.plannedDate !== exactSlot.plannedDate || slot.startAt !== exactSlot.startAt || slot.endAt !== exactSlot.endAt)) {
+      return { slot: null, reason: 'Khung giờ tự chọn trùng lịch bận hoặc không đủ thời lượng.' };
+    }
+    return { slot, reason: undefined };
+  }
+
   /**
    * Generates a multi-day adaptive exam study plan based on exam syllabus and mistake notebook
    */
@@ -308,6 +348,47 @@ export class ExamStudyPlanService {
       currentDayCursor.setDate(currentDayCursor.getDate() + 1);
     }
 
+    const profile = await userRepo.getProfile(userId);
+    if (!profile) throw new Error('Cần có hồ sơ học sinh trước khi lập lịch ôn.');
+    const [existingTasks, busyEvents, timetableEntries, availabilityRules] = await Promise.all([
+      taskRepo.getByUserId(userId), timetableRepo.getBusyEvents(userId),
+      timetableRepo.getTimetableEntries(userId), timetableRepo.getAvailabilityRules(userId),
+    ]);
+    const blackoutEvents: BusyEvent[] = [...blackoutSet].map((date) => ({
+      id: `blackout-${date}`, userId, type: 'personal', title: 'Ngày không học',
+      startsAt: localDateTimeToUtc(date, '00:00', timezone),
+      endsAt: new Date(new Date(localDateTimeToUtc(date, '00:00', timezone)).getTime() + 86_400_000).toISOString(),
+      timezone, isFixed: true,
+    }));
+    const sourceTasks: StudyTask[] = planItems.map((item, index) => ({
+      id: `exam-plan-${index}`, userId, subjectId: item.subjectId || exam.subjectId,
+      subjectName: item.subjectName, title: item.title, objective: item.description,
+      status: 'pending', priority: item.priority, difficulty: 'medium',
+      dueAt: exam.examAt, estimatedMinutes: item.plannedMinutes,
+      minSessionMinutes: item.plannedMinutes, maxSessionMinutes: item.plannedMinutes,
+      splittable: false, locked: false, completionPercent: 0,
+    }));
+    const schedulerProfile = { ...profile, maxDailyStudyMinutes: Math.min(profile.maxDailyStudyMinutes || 180, Math.max(dailyMinutes, ...planItems.map((item) => item.plannedMinutes))) };
+    const proposal = DeterministicScheduler.generateScheduleProposal(
+      sourceTasks, existingTasks, [...busyEvents, ...blackoutEvents], timetableEntries,
+      schedulerProfile, new Date(localDateTimeToUtc(startDateStr, '07:00', timezone)),
+      Math.min(daysCount + 1, 91), 'Ôn thi vào các khoảng trống thật', availabilityRules, timezone,
+    );
+    if (proposal.unscheduledItems.length > 0 || proposal.tasksToSchedule.length !== planItems.length) {
+      const reason = proposal.unscheduledItems[0]?.reason || 'Không đủ thời gian trống trước giờ thi.';
+      throw new Error(`Chưa xếp được toàn bộ lịch ôn: ${reason} Hãy chọn ít phút ôn hơn hoặc điều chỉnh lịch bận.`);
+    }
+    for (const scheduled of proposal.tasksToSchedule) {
+      const index = Number(scheduled.taskId.replace('exam-plan-', ''));
+      const item = planItems[index];
+      if (!item) throw new Error('Lỗi đối chiếu mục ôn với lịch đề xuất.');
+      const localStart = getLocalParts(new Date(scheduled.proposedStart), timezone);
+      const localEnd = getLocalParts(new Date(scheduled.proposedEnd), timezone);
+      item.plannedDate = localStart.dateKey;
+      item.startAt = minutesToTime(localStart.hour * 60 + localStart.minute);
+      item.endAt = minutesToTime(localEnd.hour * 60 + localEnd.minute);
+    }
+
     const createdPlan = await examStudyPlanRepo.createOrReplacePlan(
       userId,
       {
@@ -355,19 +436,19 @@ export class ExamStudyPlanService {
 
     if (!missedItem) return null;
 
-    // Propose moving missed item to tonight 19:30 or tomorrow
-    const suggestedSlot = {
-      plannedDate: todayStr,
-      startAt: '19:45',
-      endAt: minutesToTime(timeToMinutes('19:45') + missedItem.plannedMinutes),
-    };
+    const exam = await examRepo.getById(userId, examId);
+    if (!exam) return null;
+    const { slot: suggestedSlot, reason: unscheduledReason } = await this.proposeMissedSlot(userId, missedItem, exam.examAt, timezone);
 
     return {
       planId: plan.id,
       examTitle: plan.examTitle || 'Kỳ kiểm tra',
       missedSession: missedItem,
       suggestedSlot,
-      explanation: `Bạn đã bỏ lỡ buổi ôn "${missedItem.title}" vào ngày ${missedItem.plannedDate}. Jami đề xuất chuyển nội dung này sang tối nay và điều chỉnh các buổi còn lại để không ảnh hưởng đến điểm thi.`,
+      unscheduledReason,
+      explanation: suggestedSlot
+        ? `Em đã bỏ lỡ buổi ôn "${missedItem.title}". Jami tìm thấy giờ trống mới, không trùng lịch bận. Hãy xác nhận trước khi đổi.`
+        : `Em đã bỏ lỡ buổi ôn "${missedItem.title}". ${unscheduledReason} Hãy chọn giờ khác hoặc giảm thời lượng.`,
     };
   }
 
@@ -384,35 +465,37 @@ export class ExamStudyPlanService {
     const plan = await examStudyPlanRepo.getPlanById(userId, planId);
     if (!plan) throw new Error('Không tìm thấy kế hoạch');
 
-    // 1. Snapshot previous version before making changes
-    await examStudyPlanRepo.createPlanVersionSnapshot(userId, planId, `Sắp xếp lại sau buổi bỏ lỡ (${action})`);
-
     const now = new Date();
     const todayStr = formatDateVN(now, timezone);
+    const missed = plan.items.find((i) => i.status === 'pending' && i.plannedDate <= todayStr);
+    if (!missed || action === 'keep_as_is') return plan;
 
     if (action === 'accept' || action === 'custom_slot') {
-      const targetSlot = action === 'custom_slot' && customSlot
-        ? customSlot
-        : {
-            plannedDate: todayStr,
-            startAt: '19:45',
-            endAt: '20:30',
-          };
-
-      const missed = plan.items.find((i) => i.status === 'pending' && i.plannedDate <= todayStr);
-      if (missed) {
-        await examStudyPlanRepo.updatePlanItem(userId, planId, missed.id, {
-          plannedDate: targetSlot.plannedDate,
-          startAt: targetSlot.startAt,
-          endAt: targetSlot.endAt,
-          status: 'pending',
+      if (action === 'custom_slot' && !customSlot) throw new Error('Cần chọn khung giờ cụ thể.');
+      const exam = await examRepo.getById(userId, plan.examId);
+      if (!exam) throw new Error('Không tìm thấy kỳ kiểm tra.');
+      const proposed = await this.proposeMissedSlot(userId, missed, exam.examAt, timezone,
+        action === 'custom_slot' ? customSlot : undefined);
+      const targetSlot = proposed.slot;
+      if (!targetSlot) throw new Error(proposed.reason || 'Không có giờ trống hợp lệ.');
+      await examStudyPlanRepo.createPlanVersionSnapshot(userId, planId, `Sắp xếp lại sau buổi bỏ lỡ (${action})`);
+      await examStudyPlanRepo.updatePlanItem(userId, planId, missed.id, {
+        plannedDate: targetSlot.plannedDate,
+        startAt: targetSlot.startAt,
+        endAt: targetSlot.endAt,
+        status: 'pending',
+      });
+      if (missed.taskId) {
+        const updatedTask = await taskRepo.update(userId, missed.taskId, {
+          scheduledStartAt: localDateTimeToUtc(targetSlot.plannedDate, targetSlot.startAt, timezone),
+          scheduledEndAt: localDateTimeToUtc(targetSlot.plannedDate, targetSlot.endAt, timezone),
         });
+        if (!updatedTask) throw new Error('Không cập nhật được nhiệm vụ ôn liên kết.');
       }
     } else if (action === 'skip_session') {
-      const missed = plan.items.find((i) => i.status === 'pending' && i.plannedDate <= todayStr);
-      if (missed) {
-        await examStudyPlanRepo.updatePlanItem(userId, planId, missed.id, { status: 'skipped' });
-      }
+      await examStudyPlanRepo.createPlanVersionSnapshot(userId, planId, 'Bỏ qua buổi ôn bị lỡ');
+      await examStudyPlanRepo.updatePlanItem(userId, planId, missed.id, { status: 'skipped' });
+      if (missed.taskId) await taskRepo.update(userId, missed.taskId, { status: 'cancelled' });
     }
 
     const updated = await examStudyPlanRepo.getPlanById(userId, planId);
@@ -426,7 +509,41 @@ export class ExamStudyPlanService {
     const plan = await examStudyPlanRepo.getPlanById(userId, planId);
     if (!plan) throw new Error('Không tìm thấy kế hoạch');
 
-    await examStudyPlanRepo.updatePlanStatus(userId, planId, 'accepted', new Date().toISOString());
+    if (db.isHealthy()) {
+      await db.withTransaction(async (conn) => {
+        const [rows] = await conn.execute<any[]>(
+          'SELECT status FROM exam_study_plans WHERE id = ? AND user_id = ? FOR UPDATE', [planId, userId]
+        );
+        if (!rows.length) throw new Error('Không tìm thấy kế hoạch');
+        if (rows[0].status === 'accepted') return;
+        if (rows[0].status !== 'draft') throw new Error('Chỉ có thể chấp nhận kế hoạch đang xem trước.');
+        const [items] = await conn.execute<any[]>(
+          'SELECT id, subject_id, title, description, planned_date, start_at, planned_minutes, priority, task_id FROM exam_study_plan_items WHERE plan_id = ? ORDER BY sort_order FOR UPDATE',
+          [planId]
+        );
+        for (const item of items) {
+          if (item.task_id) continue;
+          const task = await taskRepo.create(userId, {
+            id: `task_${item.id}`, planId, examId: plan.examId,
+            subjectId: item.subject_id, title: item.title, objective: item.description,
+            dueAt: localDateTimeToUtc(item.planned_date, '23:59', timezone),
+            scheduledStartAt: localDateTimeToUtc(item.planned_date, item.start_at, timezone),
+            estimatedMinutes: item.planned_minutes,
+            priority: item.priority === 'high' ? 'high' : 'medium', source: 'exam_study_plan',
+          }, conn);
+          await conn.execute(
+            'UPDATE exam_study_plan_items SET task_id = ?, updated_at = NOW(3) WHERE id = ? AND plan_id = ? AND task_id IS NULL',
+            [task.id, item.id, planId]
+          );
+        }
+        await conn.execute(
+          `UPDATE exam_study_plans SET status = 'accepted', accepted_at = NOW(3), updated_at = NOW(3)
+           WHERE id = ? AND user_id = ?`, [planId, userId]
+        );
+      });
+      return (await examStudyPlanRepo.getPlanById(userId, planId))!;
+    }
+    if (plan.status === 'accepted') return plan;
 
     // Link/create StudyTasks for items
     for (const item of plan.items) {
@@ -441,13 +558,12 @@ export class ExamStudyPlanService {
           scheduledStartAt,
           estimatedMinutes: item.plannedMinutes,
           priority: item.priority === 'high' ? 'high' : 'medium',
-        }).catch(() => null);
-
-        if (task) {
-          await examStudyPlanRepo.updatePlanItem(userId, planId, item.id, { taskId: task.id });
-        }
+        });
+        await examStudyPlanRepo.updatePlanItem(userId, planId, item.id, { taskId: task.id });
       }
     }
+
+    await examStudyPlanRepo.updatePlanStatus(userId, planId, 'accepted', new Date().toISOString());
 
     const updated = await examStudyPlanRepo.getPlanById(userId, planId);
     return updated!;

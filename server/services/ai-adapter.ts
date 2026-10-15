@@ -19,6 +19,8 @@ import {
 import { env, isProduction } from '../config/env';
 import { ModelPricingUnavailableError } from '../ai/model-pricing';
 import { getAllOpenAiToolDefinitions } from '../ai/tool-registry';
+import { validateQuizDraft } from './quiz-quality-validator';
+import { equivalentObjectiveAnswer } from './short-answer-normalizer';
 
 function handleAiError(operation: string, err: any): never {
   if (
@@ -571,6 +573,12 @@ export class AiAdapter {
     userId?: string;
   }): Promise<z.infer<typeof QuizDraftSchema>> {
     const questionCount = params.questionCount || 5;
+    if (!Number.isInteger(params.gradeLevel) || params.gradeLevel! < 1 || params.gradeLevel! > 12) {
+      const error = new Error('Cần xác định lớp của học sinh trước khi tạo đề.');
+      (error as any).code = 'GRADE_LEVEL_REQUIRED';
+      (error as any).status = 400;
+      throw error;
+    }
     const difficulty = params.difficulty || 'medium';
     const milestone = params.milestone || 'D-7';
     const topicsText = (params.topics || []).join(', ') || params.scope || 'Kiến thức trọng tâm';
@@ -582,7 +590,7 @@ export class AiAdapter {
           'quiz_draft',
           {
             subject: params.subject,
-            gradeLevel: params.gradeLevel || 11,
+            gradeLevel: params.gradeLevel,
             milestone,
             difficulty,
             questionCount,
@@ -593,8 +601,13 @@ export class AiAdapter {
           { userId: params.userId }
         );
 
-        if (res.data && res.data.questions && res.data.questions.length > 0) {
-          return res.data;
+        if (res.data) {
+          const issues = validateQuizDraft(res.data, { count: questionCount, topics: params.topics });
+          if (issues.length === 0) return res.data;
+          const error = new Error(`Đề AI chưa đạt kiểm tra cấu trúc: ${issues.join('; ')}`);
+          (error as any).code = 'QUIZ_DRAFT_INVALID';
+          (error as any).status = 422;
+          throw error;
         }
         if (res.error) {
           handleAiError('Tạo đề kiểm tra', new Error(res.error));
@@ -604,33 +617,10 @@ export class AiAdapter {
       }
     }
 
-    // High quality deterministic fallback for Offline / Demo Mode
-    const questions: z.infer<typeof QuizDraftSchema>['questions'] = [];
-    const baseTopic = params.topics?.[0] || `${params.subject}: Kiến thức trọng tâm`;
-
-    for (let i = 1; i <= questionCount; i++) {
-      questions.push({
-        type: 'multiple_choice',
-        prompt: `Câu hỏi ôn tập ${i} (${params.subject} - Mốc ${milestone}): Vận dụng kiến thức chủ đề "${baseTopic}" để giải quyết yêu cầu bài toán.`,
-        options: [
-          { id: 'A', text: `Phương án A cho câu hỏi ${i}` },
-          { id: 'B', text: `Phương án B cho câu hỏi ${i}` },
-          { id: 'C', text: `Phương án C cho câu hỏi ${i}` },
-          { id: 'D', text: `Phương án D cho câu hỏi ${i}` },
-        ],
-        correctAnswer: 'A',
-        explanation: `Lời giải chi tiết cho câu ${i}: Áp dụng định nghĩa và công thức lý thuyết của chủ đề ${baseTopic} để suy ra đáp án đúng là phương án A.`,
-        difficulty,
-        topicRef: baseTopic,
-      });
-    }
-
-    return {
-      title: `Đề Luyện Tập AI: ${params.subject} (${milestone})`,
-      sourceScope: params.scope || 'Kiến thức trọng tâm theo chương trình GDPT 2018',
-      learningObjectives: [`Củng cố và đánh giá mức độ hiểu biết chủ đề ${baseTopic}`],
-      questions,
-    };
+    const error = new Error('AI chưa sẵn sàng để tạo đề. Vui lòng thử lại sau.');
+    (error as any).code = 'AI_NOT_CONFIGURED';
+    (error as any).status = 503;
+    throw error;
   }
 
   /**
@@ -642,12 +632,12 @@ export class AiAdapter {
     correctAnswer: string;
     rubric?: string;
     userId?: string;
-  }): Promise<{ isCorrect: boolean; scorePercent: number; feedback: string }> {
+  }): Promise<{ isCorrect: boolean; scorePercent: number; feedback: string; needsReview?: boolean }> {
     const userClean = params.userAnswer.trim().toLowerCase();
     const correctClean = params.correctAnswer.trim().toLowerCase();
 
     // Direct match fast-path
-    if (userClean === correctClean) {
+    if (userClean === correctClean || equivalentObjectiveAnswer(params.userAnswer, params.correctAnswer)) {
       return { isCorrect: true, scorePercent: 100, feedback: 'Đáp án chính xác tuyệt đối!' };
     }
 
@@ -680,12 +670,13 @@ export class AiAdapter {
       }
     }
 
-    // Normalized string comparison fallback
-    const isPartial = userClean.length > 0 && (correctClean.includes(userClean) || userClean.includes(correctClean));
+    // Conservative fallback: never award credit for a substring of the answer.
+    const isPartial = false;
     return {
       isCorrect: isPartial,
-      scorePercent: isPartial ? 80 : 0,
-      feedback: isPartial ? 'Câu trả lời tương đối chính xác.' : 'Chưa đúng với đáp án mẫu.',
+      scorePercent: 0,
+      feedback: 'Chưa thể chấm chắc chắn. Em hãy nhờ giáo viên kiểm tra câu trả lời này.',
+      needsReview: true,
     };
   }
 

@@ -31,7 +31,33 @@ export const AdminUsersPage: React.FC = () => {
   const { user: currentUser } = useAuth();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'users' | 'codes'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'codes' | 'question_reports'>('users');
+  const [questionReports, setQuestionReports] = useState<Awaited<ReturnType<typeof api.getAdminQuestionReports>>['reports']>([]);
+  const [loadingQuestionReports, setLoadingQuestionReports] = useState(false);
+  const [reviewNote, setReviewNote] = useState('');
+
+  const fetchQuestionReports = async () => {
+    setLoadingQuestionReports(true);
+    try {
+      const response = await api.getAdminQuestionReports('pending');
+      setQuestionReports(response.reports);
+    } catch (err: any) {
+      setError(err.message || 'Không tải được phản ánh câu hỏi.');
+    } finally {
+      setLoadingQuestionReports(false);
+    }
+  };
+
+  const reviewQuestionReport = async (id: string, status: 'reviewing' | 'confirmed_error' | 'rejected') => {
+    try {
+      await api.reviewQuestionReport(id, status, reviewNote);
+      setReviewNote('');
+      await fetchQuestionReports();
+      setSuccessMsg('Đã lưu quyết định và nhật ký duyệt.');
+    } catch (err: any) {
+      setError(err.message || 'Chưa lưu được quyết định.');
+    }
+  };
 
   // Users State
   const [users, setUsers] = useState<User[]>([]);
@@ -181,8 +207,10 @@ export const AdminUsersPage: React.FC = () => {
         fetchUsers();
       }, 300);
       return () => clearTimeout(timer);
-    } else {
+    } else if (activeTab === 'codes') {
       fetchCodes();
+    } else {
+      fetchQuestionReports();
     }
   }, [activeTab, userSearchTerm, statusFilter, codeTypeFilter, codeStatusFilter]);
 
@@ -383,14 +411,18 @@ export const AdminUsersPage: React.FC = () => {
                 <span>Mã Ưu Đãi / Kích Hoạt</span>
               </button>
               )}
+              <button onClick={() => setActiveTab('question_reports')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${activeTab === 'question_reports' ? 'bg-[#16A34A] text-[#050806]' : 'text-[#A9B8AE] hover:text-[#F3FAF5]'}`}>
+                Phản ánh câu hỏi
+              </button>
             </div>
 
             <button
-              onClick={activeTab === 'users' ? fetchUsers : fetchCodes}
-              disabled={loadingUsers || loadingCodes}
+              onClick={activeTab === 'users' ? fetchUsers : activeTab === 'codes' ? fetchCodes : fetchQuestionReports}
+              disabled={loadingUsers || loadingCodes || loadingQuestionReports}
               className="inline-flex items-center gap-2 px-3.5 py-2 bg-[#101A13] hover:bg-[#142219] border border-[rgba(34,197,94,0.25)] rounded-xl text-xs font-bold text-[#F3FAF5] transition disabled:opacity-50 cursor-pointer"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${(loadingUsers || loadingCodes) ? 'animate-spin text-[#22C55E]' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${(loadingUsers || loadingCodes || loadingQuestionReports) ? 'animate-spin text-[#22C55E]' : ''}`} />
               Làm mới
             </button>
           </div>
@@ -447,6 +479,29 @@ export const AdminUsersPage: React.FC = () => {
               {justCreatedCode.note && <span>• Ghi chú: <strong className="text-[#F3FAF5]">{justCreatedCode.note}</strong></span>}
             </div>
           </div>
+        )}
+
+        {activeTab === 'question_reports' && (
+          <section className="space-y-4 rounded-2xl border border-amber-500/30 bg-[#0B120D] p-5">
+            <h2 className="text-base font-bold text-[#F3FAF5]">Phản ánh câu hỏi chờ duyệt</h2>
+            <p className="text-xs text-[#A9B8AE]">Chỉ quản trị viên được xem đáp án nội bộ. Không hiển thị tên học sinh báo lỗi. Câu đang chờ duyệt tạm không làm giảm điểm hoặc năng lực theo chủ đề.</p>
+            {loadingQuestionReports ? <p className="text-sm text-[#A9B8AE]">Đang tải...</p> : questionReports.length === 0 ? <p className="text-sm text-[#A9B8AE]">Chưa có phản ánh mới.</p> : questionReports.map((report) => (
+              <article key={report.id} className="space-y-2 rounded-xl border border-amber-500/20 p-4 text-sm text-[#F3FAF5]">
+                <p className="font-bold">{report.questionPrompt || report.questionId}</p>
+                <p>Lý do: {report.reason}. {report.description || ''}</p>
+                <p>Đáp án nội bộ: <strong>{report.correctAnswer}</strong></p>
+                <p>Lời giải: {report.explanation}</p>
+                <label className="block text-xs">Ghi chú duyệt
+                  <textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} maxLength={1000} rows={2} className="mt-1 w-full rounded-lg border border-amber-500/20 bg-[#050806] p-2 text-[#F3FAF5]" />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => reviewQuestionReport(report.id, 'reviewing')} className="rounded-lg border border-amber-500/40 px-3 py-2 text-xs">Đang xem xét</button>
+                  <button onClick={() => reviewQuestionReport(report.id, 'confirmed_error')} className="rounded-lg bg-rose-700 px-3 py-2 text-xs">Đã xác nhận sai</button>
+                  <button onClick={() => reviewQuestionReport(report.id, 'rejected')} className="rounded-lg border border-white/30 px-3 py-2 text-xs">Không có lỗi</button>
+                </div>
+              </article>
+            ))}
+          </section>
         )}
 
         {/* TAB 1: USERS & AI WALLETS */}

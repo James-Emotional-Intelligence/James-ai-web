@@ -35,7 +35,7 @@ import {
 } from 'recharts';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/api-client';
-import { ReportOverviewResponse } from '../../../shared/types';
+import { ReportOverviewResponse, ScheduleProposal } from '../../../shared/types';
 import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportReportsToPdf } from '../../lib/pdf-export-service';
 
@@ -45,6 +45,40 @@ export const ReportsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [reviewProposal, setReviewProposal] = useState<ScheduleProposal | null>(null);
+  const [reviewEvidence, setReviewEvidence] = useState<{ topic: string; subject: string; score: number; attempts: number; correct: number; wrong: number } | null>(null);
+  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+
+  const previewWeakTopicReview = async () => {
+    setReviewLoading(true);
+    setReviewMessage(null);
+    try {
+      const response = await api.previewWeakTopicReview();
+      setReviewProposal(response.proposal);
+      setReviewEvidence(response.evidence || null);
+      if (!response.proposal) setReviewMessage(response.reason || 'Chưa có lịch ôn phù hợp.');
+    } catch (err: any) {
+      setReviewMessage(err.message || 'Chưa xem được lịch ôn đề xuất.');
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const acceptWeakTopicReview = async () => {
+    if (!reviewProposal || reviewLoading) return;
+    setReviewLoading(true);
+    try {
+      await api.confirmProposal(reviewProposal.id, reviewProposal.id);
+      setReviewProposal(null);
+      setReviewMessage('Đã áp dụng lịch ôn sau khi em xác nhận.');
+      await fetchReport();
+    } catch (err: any) {
+      setReviewMessage(err.message || 'Chưa áp dụng được lịch ôn.');
+    } finally {
+      setReviewLoading(false);
+    }
+  };
 
   const fetchReport = useCallback(async () => {
     setIsLoading(true);
@@ -174,6 +208,24 @@ export const ReportsPage: React.FC = () => {
           </div>
 
           {/* 7.1 Overview Metric Cards (4 Cards) */}
+          <section className="rounded-2xl border border-emerald-500/30 bg-[#0B120D] p-5 space-y-3 print:hidden">
+            <h2 className="text-base font-bold text-[#F3FAF5]">JAMI đề xuất ôn gì tiếp?</h2>
+            {report.weakTopics.length ? (
+              <p className="text-sm text-[#A9B8AE]">Chủ đề cần ôn: <strong className="text-[#F3FAF5]">{report.weakTopics[0].topicKey}</strong> ({report.weakTopics[0].subjectName}). Mức hiện tại {report.weakTopics[0].masteryScore}% từ {report.weakTopics[0].evidenceCount} lượt làm bài. Đây là gợi ý, không phải kết luận học lực.</p>
+            ) : <p className="text-sm text-[#A9B8AE]">Chưa đủ bằng chứng về chủ đề yếu. Em có thể làm thêm bài ôn.</p>}
+            <button type="button" onClick={previewWeakTopicReview} disabled={reviewLoading || !report.weakTopics.length}
+              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold text-black disabled:opacity-50">
+              {reviewLoading ? 'Đang kiểm tra lịch...' : 'Xem lịch ôn đề xuất'}
+            </button>
+            {reviewEvidence && <p className="text-xs text-[#A9B8AE]">Bằng chứng: {reviewEvidence.correct} câu đúng, {reviewEvidence.wrong} câu sai ở {reviewEvidence.topic}; chỉ tính câu chưa bị phản ánh sai.</p>}
+            {reviewProposal && <div className="rounded-xl border border-emerald-500/20 p-3 space-y-2">
+              <p className="text-sm text-[#F3FAF5]">{reviewProposal.reason}</p>
+              {reviewProposal.tasksToSchedule.map((item) => <p key={item.taskId} className="text-xs text-[#A9B8AE]">{item.title}: {new Date(item.proposedStart).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })} – {new Date(item.proposedEnd).toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit' })}. {item.reason}</p>)}
+              <button type="button" onClick={acceptWeakTopicReview} disabled={reviewLoading} className="rounded-lg border border-emerald-400 px-4 py-2 text-sm font-bold text-emerald-300 disabled:opacity-50">Áp dụng</button>
+            </div>}
+            {reviewMessage && <p role="status" className="text-xs text-amber-300">{reviewMessage}</p>}
+          </section>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 jami-card-grid">
             {/* Focus Hours vs Goal */}
             <div className="bg-[#0B120D] p-5 rounded-3xl border border-[rgba(34,197,94,0.2)] shadow-xl flex flex-col justify-between space-y-3 print:border-gray-300 jami-card-interactive">

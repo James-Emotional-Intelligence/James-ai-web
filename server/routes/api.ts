@@ -29,6 +29,8 @@ import {
   SubjectQuizGenerateSchema,
   QuizRetakeWrongSchema,
   QuizAttemptSubmitSchema,
+  QuizQuestionReportCreateSchema,
+  QuizQuestionReportReviewSchema,
   JamiChatRequestSchema,
   JamiConversationCreateSchema,
   JamiConversationUpdateSchema,
@@ -95,6 +97,7 @@ import { materialWorker } from '../services/material-worker-service';
 import { focusRepo } from '../repositories/focus-repository';
 import { examRepo } from '../repositories/exam-repository';
 import { quizRepo } from '../repositories/quiz-repository';
+import { quizQuestionReportRepo } from '../repositories/quiz-question-report-repository';
 import { materialRepo } from '../repositories/material-repository';
 import { reportRepo } from '../repositories/report-repository';
 import { notificationRepo } from '../repositories/notification-repository';
@@ -2951,6 +2954,38 @@ apiRouter.get('/quizzes/:id', requireAuth, asyncHandler(async (req: Request, res
   res.json({ quiz });
 }));
 
+apiRouter.post('/quizzes/:quizId/questions/:questionId/report', requireAuth,
+  createRateLimiter(60000, 5, 'question_report', { useUserId: true }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const parsed = QuizQuestionReportCreateSchema.safeParse(req.body);
+    if (!parsed.success) return sendError(req, res, 400, 'VALIDATION_ERROR', 'Thông tin phản ánh không hợp lệ.');
+    const report = await quizQuestionReportRepo.create((req as any).userId, req.params.quizId, req.params.questionId, parsed.data);
+    res.json({ report });
+  }));
+
+apiRouter.get('/quizzes/:quizId/questions/:questionId/report-status', requireAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const report = await quizQuestionReportRepo.getStatus((req as any).userId, req.params.quizId, req.params.questionId);
+    res.json({ report });
+  }));
+
+apiRouter.get('/admin/question-reports', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const statuses = ['all', 'pending', 'reviewing', 'confirmed_error', 'rejected', 'fixed'] as const;
+  const status = typeof req.query.status === 'string' && statuses.includes(req.query.status as any) ? req.query.status as typeof statuses[number] : 'pending';
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const reports = await quizQuestionReportRepo.list(status, limit, offset);
+  res.json({ reports });
+}));
+
+apiRouter.patch('/admin/question-reports/:id', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  if (!(req as any).userId) return sendError(req, res, 403, 'ADMIN_SESSION_REQUIRED', 'Cần đăng nhập tài khoản quản trị để duyệt câu hỏi.');
+  const parsed = QuizQuestionReportReviewSchema.safeParse(req.body);
+  if (!parsed.success) return sendError(req, res, 400, 'VALIDATION_ERROR', 'Quyết định duyệt không hợp lệ.');
+  await quizQuestionReportRepo.review(req.params.id, (req as any).userId, parsed.data.status, parsed.data.note);
+  res.json({ success: true });
+}));
+
 apiRouter.post('/quizzes/:id/attempts', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
   try {
@@ -3894,6 +3929,59 @@ apiRouter.get('/reports/overview', requireAuth, asyncHandler(async (req: Request
 
   const overview = await reportRepo.getOverview(userId, options);
   res.json(overview);
+}));
+
+apiRouter.post('/reports/review-proposal', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  if (!db.isHealthy()) return sendError(req, res, 503, 'EVIDENCE_UNAVAILABLE', 'Chưa có dữ liệu bài làm để đề xuất lịch ôn.');
+  const rows = await db.query<any>(
+    `SELECT subject_id, topic_key, mastery_score, evidence_count FROM topic_mastery
+     WHERE user_id = ? AND evidence_count >= 2 AND mastery_score < 80
+     ORDER BY mastery_score ASC, evidence_count DESC LIMIT 1`, [userId]
+  );
+  if (!rows.length) return res.json({ proposal: null, reason: 'Chưa đủ bằng chứng để xác định chủ đề cần ôn.' });
+  const weak = rows[0];
+  const performanceRows = await db.query<any>(
+    `SELECT COUNT(ans.is_correct) AS total, COALESCE(SUM(ans.is_correct), 0) AS correct_count
+     FROM quiz_answers ans JOIN quiz_attempts a ON a.id = ans.attempt_id
+     JOIN quiz_questions q ON q.id = ans.question_id JOIN quizzes quiz ON quiz.id = q.quiz_id
+     WHERE a.user_id = ? AND a.status = 'submitted' AND quiz.subject_id = ? AND COALESCE(q.topic_ref, 'Kiến thức chung') = ?
+     AND NOT EXISTS (SELECT 1 FROM quiz_question_reports r WHERE r.question_id = q.id
+                     AND r.status IN ('pending', 'reviewing', 'confirmed_error'))`,
+    [userId, weak.subject_id, weak.topic_key]
+  );
+  const total = Number(performanceRows[0]?.total || 0);
+  const correct = Number(performanceRows[0]?.correct_count || 0);
+  const evidence = { topic: weak.topic_key, score: weak.mastery_score, attempts: weak.evidence_count,
+    correct, wrong: total - correct };
+  const [profile, subjects, currentTasks, busyEvents, timetableEntries, availabilityRules] = await Promise.all([
+    userRepo.getProfile(userId), subjectRepo.getByUserId(userId), taskRepo.getByUserId(userId),
+    timetableRepo.getBusyEvents(userId), timetableRepo.getTimetableEntries(userId), timetableRepo.getAvailabilityRules(userId),
+  ]);
+  if (!profile) return sendError(req, res, 400, 'PROFILE_REQUIRED', 'Cần hoàn thành hồ sơ học sinh trước khi lập lịch.');
+  const subject = subjects.find((item) => item.id === weak.subject_id);
+  if (!subject) return sendError(req, res, 404, 'SUBJECT_NOT_FOUND', 'Không tìm thấy môn học.');
+  const count = Number(weak.mastery_score) < 50 ? 2 : 1;
+  const now = new Date();
+  const dueAt = new Date(now.getTime() + 3 * 86_400_000).toISOString();
+  const tasks: StudyTask[] = Array.from({ length: count }, (_, index) => ({
+    id: `review_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`, userId,
+    subjectId: subject.id, subjectName: subject.name, title: `Ôn lại chủ đề yếu: ${weak.topic_key}${count > 1 ? ` (${index + 1}/${count})` : ''}`,
+    status: 'pending', priority: Number(weak.mastery_score) < 50 ? 'high' : 'medium',
+    difficulty: 'medium', dueAt, estimatedMinutes: 45, minSessionMinutes: 45,
+    maxSessionMinutes: 45, splittable: false, locked: false, completionPercent: 0,
+  }));
+  const proposal = DeterministicScheduler.generateScheduleProposal(
+    tasks, currentTasks, busyEvents, timetableEntries, profile, now, 3,
+    `Chủ đề ${weak.topic_key} đang ở mức ${weak.mastery_score}% qua ${weak.evidence_count} lần làm bài; đề xuất ${count} phiên ôn.`,
+    availabilityRules, (req as any).user?.timezone || 'Asia/Ho_Chi_Minh'
+  );
+  if (proposal.unscheduledItems.length) {
+    return res.json({ proposal: null, reason: proposal.unscheduledItems[0].reason,
+      evidence: { ...evidence, subject: subject.name } });
+  }
+  await plannerRepo.saveProposal(proposal);
+  res.json({ proposal, evidence: { ...evidence, subject: subject.name } });
 }));
 
 apiRouter.get('/reports/export', requireAuth, asyncHandler(async (req: Request, res: Response) => {

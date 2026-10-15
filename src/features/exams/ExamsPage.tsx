@@ -78,6 +78,12 @@ export const ExamsPage: React.FC = () => {
   const [isStartingQuiz, setIsStartingQuiz] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRetaking, setIsRetaking] = useState(false);
+  const [reportQuestionId, setReportQuestionId] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState('wrong_answer');
+  const [reportDescription, setReportDescription] = useState('');
+  const [reportStatuses, setReportStatuses] = useState<Record<string, string>>({});
+  const [isReporting, setIsReporting] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [generatingMilestone, setGeneratingMilestone] = useState<{ examId: string; milestone: 'D-14' | 'D-7' | 'D-3' | 'D-1' } | null>(null);
 
   // Add Exam Form State (5.1)
@@ -499,8 +505,38 @@ export const ExamsPage: React.FC = () => {
     }
   };
 
-  const wrongFeedbacks = quizResult?.answersFeedback?.filter((fb) => !fb.isCorrect) || [];
-  const correctCount = (quizResult?.answersFeedback?.length || 0) - wrongFeedbacks.length;
+  const wrongFeedbacks = quizResult?.answersFeedback?.filter((fb) => !fb.isCorrect && !fb.needsReview) || [];
+  const correctCount = quizResult?.answersFeedback?.filter((fb) => fb.isCorrect && !fb.needsReview).length || 0;
+
+  const openQuestionReport = async (questionId: string) => {
+    if (!activeQuiz) return;
+    setReportError(null);
+    setReportQuestionId(questionId);
+    try {
+      const response = await api.getQuizQuestionReportStatus(activeQuiz.id, questionId);
+      if (response.report) setReportStatuses((prev) => ({ ...prev, [questionId]: response.report!.status }));
+    } catch (err: any) {
+      setReportError(err.message || 'Chưa tải được trạng thái phản ánh.');
+    }
+  };
+
+  const submitQuestionReport = async () => {
+    if (!activeQuiz || !reportQuestionId || isReporting) return;
+    setIsReporting(true);
+    setReportError(null);
+    try {
+      const response = await api.reportQuizQuestion(activeQuiz.id, reportQuestionId, {
+        reason: reportReason, description: reportDescription.trim(), attemptId: activeAttempt?.id,
+      });
+      setReportStatuses((prev) => ({ ...prev, [reportQuestionId]: response.report.status }));
+      setReportQuestionId(null);
+      setReportDescription('');
+    } catch (err: any) {
+      setReportError(err.message || 'Chưa gửi được phản ánh. Em hãy thử lại.');
+    } finally {
+      setIsReporting(false);
+    }
+  };
 
   return (
     <div className="space-y-6 font-sans">
@@ -553,6 +589,7 @@ export const ExamsPage: React.FC = () => {
 
       {activeQuiz && (
         <div className="bg-[#0B120D] rounded-3xl border border-[rgba(34,197,94,0.3)] shadow-2xl p-5 sm:p-8 space-y-6">
+          <p className="rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">Chưa được giáo viên xác minh. Nếu thấy câu hỏi hoặc đáp án có lỗi, em hãy bấm “Câu này sai”.</p>
           <div className="flex flex-wrap items-center justify-between pb-4 border-b border-[rgba(34,197,94,0.18)] gap-3">
             <div>
               <div className="flex items-center gap-2">
@@ -601,6 +638,11 @@ export const ExamsPage: React.FC = () => {
                       {q.prompt}
                     </div>
                   </div>
+
+                  <button type="button" onClick={() => openQuestionReport(q.id)}
+                    className="ml-0 sm:ml-9 text-xs text-amber-300 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-amber-300">
+                    {reportStatuses[q.id] ? 'Đang xem xét phản ánh' : 'Câu này sai'}
+                  </button>
 
                   {q.type !== 'short_answer' && q.options && Array.isArray(q.options) && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pl-0 sm:pl-9">
@@ -745,6 +787,11 @@ export const ExamsPage: React.FC = () => {
                           {q?.prompt || `Câu hỏi ${idx + 1}`}
                         </div>
                       </div>
+
+                      {q && <button type="button" onClick={() => openQuestionReport(q.id)}
+                        className="ml-0 sm:ml-9 text-xs text-amber-300 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-amber-300">
+                        {reportStatuses[q.id] ? 'Đang xem xét phản ánh' : 'Câu này sai'}
+                      </button>}
 
                       <div className="pl-0 sm:pl-9 space-y-1.5 text-xs">
                         <div className="flex items-center gap-2">
@@ -1296,7 +1343,9 @@ export const ExamsPage: React.FC = () => {
                     <div className="font-bold text-rose-200">Phát hiện buổi ôn bị bỏ lỡ:</div>
                     <p className="text-zinc-300 leading-relaxed">{missedProposal.explanation}</p>
                     <div className="text-rose-300 font-semibold pt-1">
-                      Đề xuất chuyển sang: {missedProposal.suggestedSlot.plannedDate} ({missedProposal.suggestedSlot.startAt} - {missedProposal.suggestedSlot.endAt})
+                      {missedProposal.suggestedSlot
+                        ? `Đề xuất chuyển sang: ${missedProposal.suggestedSlot.plannedDate} (${missedProposal.suggestedSlot.startAt} - ${missedProposal.suggestedSlot.endAt})`
+                        : `Chưa xếp được: ${missedProposal.unscheduledReason || 'Không có giờ trống hợp lệ.'}`}
                     </div>
                   </div>
                 </div>
@@ -1304,7 +1353,7 @@ export const ExamsPage: React.FC = () => {
                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-rose-500/20">
                   <button
                     onClick={() => handleConfirmReplan(missedProposal.planId, 'accept')}
-                    disabled={isPlanActionLoading}
+                    disabled={isPlanActionLoading || !missedProposal.suggestedSlot}
                     className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold transition shadow"
                   >
                     Chấp nhận sắp xếp lại
@@ -1510,6 +1559,33 @@ export const ExamsPage: React.FC = () => {
         description="Chọn đề thi/tài liệu có sẵn trong Kho hoặc tải file mới từ máy tính (kèm lưu vào kho)"
         onFileSelected={handleCreateQuizFromMaterial}
       />
+      {reportQuestionId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReportQuestionId(null); }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="question-report-title" className="w-full max-w-md rounded-2xl border border-amber-400/30 bg-[#101A13] p-5 text-[#F3FAF5] space-y-4">
+            <h2 id="question-report-title" className="text-lg font-bold">Câu này sai</h2>
+            {reportStatuses[reportQuestionId] ? (
+              <p className="text-sm text-amber-200">Phản ánh của em đang ở trạng thái: {reportStatuses[reportQuestionId] === 'confirmed_error' ? 'Đã xác nhận sai' : reportStatuses[reportQuestionId] === 'fixed' ? 'Đã sửa' : 'Đang xem xét'}.</p>
+            ) : (
+              <>
+                <label className="block text-sm">Lý do
+                  <select value={reportReason} onChange={(event) => setReportReason(event.target.value)} className="mt-1 w-full rounded-lg bg-[#050806] p-2 border border-amber-400/30">
+                    <option value="wrong_answer">Sai đáp án</option><option value="wrong_explanation">Sai lời giải</option>
+                    <option value="off_topic">Không đúng bài học</option><option value="unclear">Nội dung khó hiểu</option><option value="other">Khác</option>
+                  </select>
+                </label>
+                <label className="block text-sm">Mô tả thêm (không bắt buộc)
+                  <textarea value={reportDescription} onChange={(event) => setReportDescription(event.target.value)} maxLength={1000} rows={3} className="mt-1 w-full rounded-lg bg-[#050806] p-2 border border-amber-400/30" />
+                </label>
+              </>
+            )}
+            {reportError && <p role="alert" className="text-sm text-rose-300">{reportError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setReportQuestionId(null)} className="rounded-lg px-4 py-2 text-sm border border-white/20">Đóng</button>
+              {!reportStatuses[reportQuestionId] && <button type="button" onClick={submitQuestionReport} disabled={isReporting} className="rounded-lg px-4 py-2 text-sm font-bold bg-amber-400 text-black disabled:opacity-50">{isReporting ? 'Đang gửi...' : 'Gửi phản ánh'}</button>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

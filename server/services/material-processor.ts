@@ -4,6 +4,7 @@ import { StructuredSummarySchema } from '../../shared/schemas';
 import { storageService } from './storage-service';
 import { materialRepo } from '../repositories/material-repository';
 import { quizRepo } from '../repositories/quiz-repository';
+import { userRepo } from '../repositories/user-repository';
 import { AiAdapter } from './ai-adapter';
 import { bookParserService } from './book-parser-service';
 import { aiGateway } from '../ai/ai-gateway';
@@ -227,11 +228,14 @@ export class MaterialProcessor {
     const summaryText = material.summaryJson
       ? JSON.stringify(material.summaryJson)
       : material.summary || material.title;
+    if (summaryText.trim().length < 40) {
+      return { success: false, error: 'Tài liệu chưa có đủ nội dung đã xử lý để tạo đề đáng tin cậy.' };
+    }
+    const profile = await userRepo.getProfile(userId);
 
     let questions: Partial<QuizQuestion>[] = [];
 
     if (aiGateway.isAvailable()) {
-      try {
         const QuizResponseSchema = z.object({
           questions: z.array(
             z.object({
@@ -247,22 +251,16 @@ export class MaterialProcessor {
 
         const result = await aiGateway.executeStructured(
           'material_quiz_generation',
-          { title: material.title, subjectName: material.subjectName, summaryText, questionCount, difficulty },
+          { title: material.title, subjectName: material.subjectName, gradeLevel: profile?.gradeLevel, summaryText, questionCount, difficulty },
           QuizResponseSchema,
           { userId }
         );
 
-        if (result.data && Array.isArray(result.data.questions) && result.data.questions.length > 0) {
+        if (result.data && Array.isArray(result.data.questions) && result.data.questions.length === questionCount) {
           questions = result.data.questions as any;
         } else if (result.error) {
           throw new Error(`AI Quiz Generation error: ${result.error}`);
         }
-      } catch (err: any) {
-        if (isProduction) {
-          throw err;
-        }
-        console.warn('[MaterialProcessor] AI Gateway quiz generation error, falling back to heuristic builder in demo mode:', err.message);
-      }
     } else if (isProduction) {
       const err = new Error('Dịch vụ AI chưa được cấu hình (thiếu OPENAI_API_KEY) để tạo đề ôn tập.');
       (err as any).code = 'AI_NOT_CONFIGURED';
@@ -270,25 +268,18 @@ export class MaterialProcessor {
       throw err;
     }
 
-    // Heuristic generator fallback
+    // Never publish invented questions as if they came from the material.
     if (questions.length === 0) {
-      for (let i = 1; i <= questionCount; i++) {
-        questions.push({
-          order: i,
-          type: 'multiple_choice',
-          prompt: `Câu hỏi ${i}: Đâu là kiến thức cốt lõi được nêu trong phần ${i} của tài liệu "${material.title}"?`,
-          options: [
-            `Đáp án A: Khái niệm và phương pháp giải ${i}`,
-            `Đáp án B: Lỗi sai thường gặp khi làm bài ${i}`,
-            `Đáp án C: Công thức mở rộng không thuộc phạm vi ${i}`,
-            `Đáp án D: Tất cả các nội dung trên`,
-          ],
-          correctAnswer: `Đáp án A: Khái niệm và phương pháp giải ${i}`,
-          explanation: `Theo tài liệu "${material.title}", phần ${i} tập trung vào khái niệm và phương pháp giải trọng tâm.`,
-          difficulty,
-          topicRef: material.subjectName || 'Toán học',
-        });
-      }
+      return { success: false, error: 'AI chưa sẵn sàng để tạo đề từ tài liệu. Vui lòng thử lại sau.' };
+    }
+    const invalid = questions.some((q) => {
+      const options = Array.isArray(q.options) ? q.options.map(String) : [];
+      return !q.prompt?.trim() || !q.explanation?.trim() || options.length !== 4 ||
+        new Set(options.map((option) => option.trim().toLowerCase())).size !== 4 ||
+        !options.includes(q.correctAnswer || '');
+    });
+    if (invalid) {
+      return { success: false, error: 'Đề AI chưa đạt kiểm tra cấu trúc và đáp án. Chưa phát hành đề này.' };
     }
 
     // Save quiz & questions transactionally in MySQL

@@ -774,6 +774,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ answers, attemptId }),
     }),
+  reportQuizQuestion: (quizId: string, questionId: string, data: { reason: string; description?: string; attemptId?: string }) =>
+    fetchJson<{ report: { id: string; status: string } }>(`/quizzes/${quizId}/questions/${questionId}/report`, {
+      method: 'POST', body: JSON.stringify(data),
+    }),
+  getQuizQuestionReportStatus: (quizId: string, questionId: string) =>
+    fetchJson<{ report: { id: string; status: string } | null }>(`/quizzes/${quizId}/questions/${questionId}/report-status`),
+  getAdminQuestionReports: (status = 'pending') =>
+    fetchJson<{ reports: { id: string; quizId: string; questionId: string; reason: string; description?: string; status: string; questionPrompt?: string; correctAnswer?: string; explanation?: string }[] }>(`/admin/question-reports?status=${encodeURIComponent(status)}`),
+  reviewQuestionReport: (id: string, status: 'reviewing' | 'confirmed_error' | 'rejected', note?: string) =>
+    fetchJson<{ success: boolean }>(`/admin/question-reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status, note }) }),
+  previewWeakTopicReview: () =>
+    fetchJson<{ proposal: ScheduleProposal | null; reason?: string; evidence?: { topic: string; subject: string; score: number; attempts: number; correct: number; wrong: number } }>('/reports/review-proposal', { method: 'POST' }),
 
   // Learning Materials
   getMaterials: () => fetchJson<{ materials: LearningMaterial[] }>('/materials'),
