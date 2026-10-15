@@ -476,7 +476,13 @@ export const api = {
     dueOnly?: boolean;
     search?: string;
   }) => {
-    const query = filters ? `?${new URLSearchParams(filters as any).toString()}` : '';
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters || {})) {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    }
+    const query = params.size ? `?${params.toString()}` : '';
     return fetchJson<{ mistakes: MistakeNotebookEntry[] }>(`/mistakes${query}`);
   },
   createMistake: (data: Partial<MistakeNotebookEntry>) =>

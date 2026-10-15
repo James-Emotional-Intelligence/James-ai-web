@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { normalizeApiBaseUrl, buildApiUrl, getBaseUrl, ApiError } from '../../src/lib/api-client';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { normalizeApiBaseUrl, buildApiUrl, getBaseUrl, ApiError, api } from '../../src/lib/api-client';
 
 describe('api-client URL construction', () => {
   const originalWindow = (global as any).window;
@@ -69,5 +69,21 @@ describe('api-client URL construction', () => {
       expect(error.code).toBe('NOT_FOUND');
       expect(error.data).toEqual({ detail: 'Book not found' });
     });
+  });
+
+  it('omits unset mistake filters while preserving selected filters', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ mistakes: [] }), {
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await api.getMistakes({ subjectId: undefined, status: undefined, dueOnly: undefined });
+      await api.getMistakes({ subjectId: 'subj-math', dueOnly: true });
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/mistakes');
+      expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/mistakes?subjectId=subj-math&dueOnly=true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
