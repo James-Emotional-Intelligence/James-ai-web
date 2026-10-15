@@ -1,0 +1,17 @@
+{
+  "version": "provisional-2026-10-15",
+  "approval": "pending_teacher_review",
+  "subject": "Toán 7",
+  "questions": [
+    { "id": "Q01", "topic": "Giá trị tuyệt đối", "prompt": "|-5| bằng bao nhiêu?", "expected_answer": "5", "rubric": "Giá trị tuyệt đối là khoảng cách đến 0." },
+    { "id": "Q02", "topic": "Số nguyên", "prompt": "(-3) + 7 bằng bao nhiêu?", "expected_answer": "4", "rubric": "Cộng hai số nguyên." },
+    { "id": "Q03", "topic": "Phân số", "prompt": "2/3 + 1/6 bằng bao nhiêu?", "expected_answer": "5/6", "rubric": "Quy đồng mẫu số rồi cộng." },
+    { "id": "Q04", "topic": "Lũy thừa", "prompt": "3^2 × 3^1 bằng bao nhiêu?", "expected_answer": "27", "rubric": "Cùng cơ số thì cộng số mũ." },
+    { "id": "Q05", "topic": "Tỉ lệ phần trăm", "prompt": "15% của 200 bằng bao nhiêu?", "expected_answer": "30", "rubric": "Nhân 200 với 0,15." },
+    { "id": "Q06", "topic": "Tam giác", "prompt": "Tam giác có hai góc 50° và 60°. Góc còn lại?", "expected_answer": "70°", "rubric": "Tổng ba góc là 180°." },
+    { "id": "Q07", "topic": "Hình vuông", "prompt": "Hình vuông cạnh 6 cm, chu vi?", "expected_answer": "24 cm", "rubric": "Chu vi bằng bốn lần cạnh." },
+    { "id": "Q08", "topic": "Phân số", "prompt": "0,75 viết dưới dạng phân số tối giản?", "expected_answer": "3/4", "rubric": "0,75 = 75/100 = 3/4." },
+    { "id": "Q09", "topic": "Phương trình", "prompt": "x/3 = 5. Tìm x.", "expected_answer": "15", "rubric": "Nhân hai vế với 3." },
+    { "id": "Q10", "topic": "Trung bình cộng", "prompt": "Trung bình cộng của 4, 6, 8?", "expected_answer": "6", "rubric": "Lấy tổng chia cho 3." }
+  ]
+}

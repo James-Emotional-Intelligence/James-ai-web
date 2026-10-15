@@ -3,7 +3,6 @@ import request from 'supertest';
 import { createApp } from '../../server/app';
 import { authService } from '../../server/services/auth-service';
 import { materialRepo } from '../../server/repositories/material-repository';
-import { quizRepo } from '../../server/repositories/quiz-repository';
 
 describe('Learning Materials & R2 Subsystem Integration Tests', () => {
   const app = createApp();
@@ -87,7 +86,7 @@ describe('Learning Materials & R2 Subsystem Integration Tests', () => {
     expect(contentRes.headers['x-content-type-options']).toBe('nosniff');
   });
 
-  it('2. Direct Notes Creation & AI Quiz Generation', async () => {
+  it('2. Direct Notes Creation & no invented quiz when AI is offline', async () => {
     // 1. Create text note
     const noteRes = await request(app)
       .post('/api/v1/materials/note')
@@ -110,14 +109,9 @@ describe('Learning Materials & R2 Subsystem Integration Tests', () => {
       .set('Cookie', [userASession])
       .send({ questionCount: 3, difficulty: 'medium' });
 
-    expect(quizRes.status).toBe(200);
-    expect(quizRes.body.success).toBe(true);
-    expect(quizRes.body.quizId).toBeDefined();
-
-    // Verify Quiz row persisted
-    const savedQuiz = await quizRepo.getById(userAId, quizRes.body.quizId);
-    expect(savedQuiz).toBeDefined();
-    expect(savedQuiz?.questions.length).toBe(3);
+    expect(quizRes.status).toBe(400);
+    expect(quizRes.body.error.code).toBe('QUIZ_GENERATION_FAILED');
+    expect(quizRes.body.quizId).toBeUndefined();
   });
 
   it('3. Security & Isolation: User B cannot access or tamper with User A materials', async () => {

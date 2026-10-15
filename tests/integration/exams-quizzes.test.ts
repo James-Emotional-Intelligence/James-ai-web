@@ -1,10 +1,26 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../server/app';
 import { authService } from '../../server/services/auth-service';
 import { subjectRepo } from '../../server/repositories/subject-repository';
+import { AiAdapter } from '../../server/services/ai-adapter';
+import { userRepo } from '../../server/repositories/user-repository';
 
 describe('Exams & Quizzes Revision Subsystem Integration Tests', () => {
+  const quizDraftSpy = vi.spyOn(AiAdapter, 'generateQuizDraft').mockImplementation(async (params) => ({
+    title: 'Đề kiểm thử có kiểm soát', sourceScope: params.scope, learningObjectives: ['Kiểm tra route và quyền truy cập'],
+    questions: Array.from({ length: params.questionCount || 5 }, (_, i) => ({
+      type: 'multiple_choice' as const,
+      prompt: `Câu kiểm thử ${i + 1}: 2 + ${i + 1} bằng bao nhiêu?`,
+      options: [
+        { id: 'A', text: String(i + 3) }, { id: 'B', text: String(i + 4) },
+        { id: 'C', text: String(i + 5) }, { id: 'D', text: String(i + 6) },
+      ],
+      correctAnswer: 'A', explanation: `2 + ${i + 1} = ${i + 3}.`,
+      difficulty: 'easy' as const, topicRef: params.topics?.[0] || params.subject,
+    })),
+  }));
+  afterAll(() => quizDraftSpy.mockRestore());
   const app = createApp();
   let userAId: string;
   let userASession: string;
@@ -243,5 +259,40 @@ describe('Exams & Quizzes Revision Subsystem Integration Tests', () => {
       });
 
     expect(res.status).toBe(404);
+  });
+
+  it('13. lets the owner report a question once and read only their status', async () => {
+    const quizRes = await request(app).get(`/api/v1/quizzes/${quizId}`).set('Cookie', [userASession]);
+    const questionId = quizRes.body.quiz.questions[0].id;
+    const endpoint = `/api/v1/quizzes/${quizId}/questions/${questionId}/report`;
+    const first = await request(app).post(endpoint).set('Cookie', [userASession]).send({ reason: 'wrong_answer', description: '<script>test</script>' });
+    expect(first.status).toBe(200);
+    expect(first.body.report.status).toBe('pending');
+    expect(first.body.report.description).not.toContain('<');
+    const again = await request(app).post(endpoint).set('Cookie', [userASession]).send({ reason: 'wrong_answer' });
+    expect(again.body.report.id).toBe(first.body.report.id);
+    const status = await request(app).get(`${endpoint}-status`).set('Cookie', [userASession]);
+    expect(status.body.report.id).toBe(first.body.report.id);
+    const otherUser = await request(app).get(`${endpoint}-status`).set('Cookie', [userBSession]);
+    expect(otherUser.status).toBe(404);
+    const reviewByStudent = await request(app).patch(`/api/v1/admin/question-reports/${first.body.report.id}`).set('Cookie', [userASession]).send({ status: 'rejected' });
+    expect(reviewByStudent.status).toBe(403);
+  });
+
+  it('14. lets an admin review reports without exposing the reporter identity', async () => {
+    const admin = await authService.registerAtomic({
+      email: `review.admin.${Date.now()}@jami.edu.vn`, password: 'Password123!', displayName: 'Quản trị kiểm duyệt', gradeLevel: 7,
+    });
+    await userRepo.setUserRole(admin.user.id, 'admin');
+    const adminSession = `jami_session=${admin.rawToken}`;
+    const list = await request(app).get('/api/v1/admin/question-reports').set('Cookie', [adminSession]);
+    expect(list.status).toBe(200);
+    expect(list.body.reports.length).toBeGreaterThan(0);
+    expect(JSON.stringify(list.body.reports)).not.toContain('reporterUserId');
+    const reportId = list.body.reports[0].id;
+    const reviewed = await request(app).patch(`/api/v1/admin/question-reports/${reportId}`).set('Cookie', [adminSession]).send({ status: 'confirmed_error', note: 'Đáp án cần sửa.' });
+    expect(reviewed.status).toBe(200);
+    const reviewedAgain = await request(app).patch(`/api/v1/admin/question-reports/${reportId}`).set('Cookie', [adminSession]).send({ status: 'confirmed_error' });
+    expect(reviewedAgain.status).toBe(200);
   });
 });

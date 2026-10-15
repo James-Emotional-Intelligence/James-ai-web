@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { env } from '../../server/config/env';
 import {
   aiWalletRepo,
   AiCreditExhaustedError,
@@ -8,7 +9,10 @@ import {
 import { aiBillingService } from '../../server/services/ai-billing-service';
 
 describe('AiWalletRepository & AiBillingService Unit Tests (Fail-Closed Billing)', () => {
+  const walletEnabledBeforeTests = env.AI_WALLET_ENABLED;
+  afterAll(() => { env.AI_WALLET_ENABLED = walletEnabledBeforeTests; });
   beforeEach(() => {
+    env.AI_WALLET_ENABLED = true;
     aiWalletRepo.resetDemoData();
   });
 

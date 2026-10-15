@@ -22,7 +22,7 @@ test.describe('Timetable & Scheduler Browser E2E Lifecycle', () => {
 
     // 2. Navigate to Timetable Page
     await page.goto('/timetable');
-    await expect(page.getByRole('heading', { name: /Lịch Học Thông Minh/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Lịch Học & Kế Hoạch Cá Nhân/i })).toBeVisible();
 
     // Verify no hardcoded mock school strings
     const content = await page.content();
@@ -31,7 +31,7 @@ test.describe('Timetable & Scheduler Browser E2E Lifecycle', () => {
     // 3. Switch between Week and Day views
     const dayBtn = page.getByRole('button', { name: 'Ngày' });
     await dayBtn.click();
-    await expect(page.getByText(/Chi tiết ngày:/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Tiết học ngày/i })).toBeVisible();
 
     const weekBtn = page.getByRole('button', { name: 'Tuần', exact: true });
     await weekBtn.click();
@@ -48,9 +48,10 @@ test.describe('Timetable & Scheduler Browser E2E Lifecycle', () => {
     await expect(page.getByText(/Vật Lý 9 - Nhiệt học/i).first()).toBeVisible();
 
     // 5. Add a Busy Event
-    const addEventBtn = page.getByRole('button', { name: /Thêm lịch bận/i });
+    await page.getByRole('button', { name: 'Bảng 2' }).click();
+    const addEventBtn = page.getByRole('button', { name: /Thêm lịch học thêm \/ việc bận/i });
     await addEventBtn.click();
-    await expect(page.getByText(/Thêm lịch học thêm hoặc việc bận/i)).toBeVisible();
+    await expect(page.getByText(/Thêm lịch học thêm, CLB hoặc việc bận/i)).toBeVisible();
 
     await page.fill('input[placeholder*="Ví dụ: Học thêm Toán"]', 'Học thêm Hóa Học Thầy Đức');
     await page.click('button:has-text("Lưu vào lịch")');
@@ -75,6 +76,7 @@ test.describe('Timetable & Scheduler Browser E2E Lifecycle', () => {
     // 7. Reload page -> verify persistence
     await page.reload();
     await expect(page.getByText(/Vật Lý 9 - Nhiệt học/i).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Bảng 2' }).click();
     await expect(page.getByText(/Học thêm Hóa Học Thầy Đức/i).first()).toBeVisible();
   });
 });

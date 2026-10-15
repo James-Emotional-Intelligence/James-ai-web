@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { createApp } from '../../server/app';
 import { AuthService } from '../../server/services/auth-service';
 import { UserRepository } from '../../server/repositories/user-repository';
@@ -8,11 +8,14 @@ import { aiBillingService } from '../../server/services/ai-billing-service';
 import { env } from '../../server/config/env';
 
 describe('AI Budget Wallet, Registration Codes & Last Admin Protection Integration Tests', () => {
+  const walletEnabledBeforeTests = env.AI_WALLET_ENABLED;
+  afterAll(() => { env.AI_WALLET_ENABLED = walletEnabledBeforeTests; });
   let app: any;
   const authService = AuthService.getInstance();
   const userRepo = UserRepository.getInstance();
 
   beforeEach(() => {
+    env.AI_WALLET_ENABLED = true;
     app = createApp();
     registrationCodeService.resetDemoData();
     aiWalletRepo.resetDemoData();

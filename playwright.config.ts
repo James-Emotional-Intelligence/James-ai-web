@@ -11,7 +11,7 @@ export default defineConfig({
     trace: 'off',
   },
   webServer: {
-    command: 'npx tsx server.ts',
+    command: 'node dist/server/server.cjs',
     url: 'http://localhost:3000/api/v1/health/live',
     reuseExistingServer: true,
     timeout: 30000,

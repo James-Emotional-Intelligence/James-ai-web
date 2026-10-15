@@ -2,7 +2,7 @@
 
 ## Trạng thái P0
 
-Tại commit gốc `e6bbbd0eefea3918be1579649e785a98c6cef641`, Git vẫn theo dõi đường dẫn `.env`. Lịch sử nhánh `main` cũng có commit chứa đường dẫn đó. Giá trị trong tệp không được đọc, in hoặc chép vào tài liệu này. Thay đổi hiện tại đã dùng `git rm --cached .env`: tệp cục bộ còn nguyên, Git ngừng theo dõi ở commit kế tiếp. `.gitignore` và `check:tracked-secrets` ngăn tệp môi trường, khóa, bản sao lưu, log, tài liệu tải lên và kết quả kiểm thử bị thêm lại.
+Tại commit gốc `e6bbbd0eefea3918be1579649e785a98c6cef641`, Git vẫn theo dõi đường dẫn `.env`. Lịch sử nhánh `main` cũng có commit chứa đường dẫn đó. Giá trị trong tệp không được in hoặc chép vào tài liệu này. Commit `45b0749f` đã bỏ `.env` cùng `storage/materials`, `dist`, `release-artifacts`, `test-results` khỏi Git index mà giữ nguyên tệp cục bộ. `.gitignore` và `check:tracked-secrets` ngăn thêm lại. `.env.example` được thay các trường khóa bằng placeholder và vẫn được quét nội dung.
 
 Chủ sở hữu cần kiểm tra và xoay vòng các khóa có khả năng từng lộ: Aiven/MySQL, OpenAI, session, cron, admin, R2 và email. Thay khóa qua bảng điều khiển nhà cung cấp rồi cập nhật bí mật trên môi trường vận hành. Việc thay `SESSION_SECRET` sẽ làm hết hiệu lực phiên đang dùng; chọn thời điểm phù hợp. Xem thêm `MANUAL_SECRET_ROTATION_REQUIRED.md`. Không dán khóa vào chat hoặc issue.
 

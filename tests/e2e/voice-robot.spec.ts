@@ -194,36 +194,25 @@ test.describe('Robot Jami Voice & Hands-free E2E Suite', () => {
 
   // ── 5. TTS onerror (not-allowed) surfaces UI error banner ─────────────────
   test('5. TTS onerror not-allowed shows error banner in UI', async ({ page }) => {
-    // Override speechSynthesis.speak to immediately fire not-allowed
-    await page.addInitScript(() => {
-      const original = (window as any).__speechSynthesisMockInstalled;
-      if (original) return; // already set in beforeEach
-      (window as any).__speechSynthesisMockInstalled = true;
-    });
-
-    // Re-override speak to fire not-allowed
-    await page.evaluate(() => {
-      const ss = window.speechSynthesis as any;
-      const originalSpeak = ss.speak.bind(ss);
-      ss.speak = (utterance: any) => {
-        // fire the first utterance as not-allowed, subsequent ones normally
-        if (!(window as any).__notAllowedFired) {
-          (window as any).__notAllowedFired = true;
-          utterance.onerror?.(Object.assign(new Event('error'), { error: 'not-allowed' }));
-        } else {
-          originalSpeak(utterance);
-        }
-      };
-    });
-
     await page.goto('/jami');
     await page.waitForLoadState('networkidle');
 
-    // Send a message so TTS is triggered
+    // Send a message, then explicitly ask Jami to read its reply.
     const input = page.locator('input[placeholder*="Nhắn tin"]');
     await input.fill('Chào Jami');
     await page.click('form button[type="submit"]');
-    await page.waitForTimeout(4000);
+    const listenButton = page.getByText('Nghe đọc').last();
+    await expect(listenButton).toBeVisible({ timeout: 8000 });
+    // Install the failure on the user-initiated playback, after any automatic reply audio.
+    await page.evaluate(() => {
+      const ss = window.speechSynthesis as any;
+      ss.speak = (utterance: any) => {
+        (window as any).__notAllowedFired = true;
+        queueMicrotask(() => utterance.onerror?.({ error: 'not-allowed' }));
+      };
+    });
+    await listenButton.click();
+    await expect.poll(() => page.evaluate(() => Boolean((window as any).__notAllowedFired))).toBe(true);
 
     // Should see TTS error banner (amber)
     const errorBanner = page.locator('[class*="amber"]').filter({ hasText: /chặn âm thanh|Nghe đọc/ });
