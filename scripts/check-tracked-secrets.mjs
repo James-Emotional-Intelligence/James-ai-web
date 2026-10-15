@@ -7,16 +7,20 @@ const tracked = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' })
   .filter(Boolean);
 
 const violations = [];
-const forbiddenName = /(^|\/)(\.env(?:\..*)?|id_rsa|.*\.(?:key|p12|pfx|bak|log))(?:$|\/)/i;
-const forbiddenPath = /(^|\/)(node_modules|\.git|storage\/materials|backup|backups|test-results)(\/|$)/i;
+const forbiddenName = /(^|\/)(\.env(?:\..*)?|id_rsa|.*\.(?:pem|key|p12|pfx|bak|log))(?:$|\/)/i;
+const forbiddenPath = /(^|\/)(node_modules|\.git|storage\/materials|backup|backups|logs|test-results)(\/|$)/i;
 const secretPatterns = [/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/];
 
 for (const file of tracked) {
   const normalized = file.replaceAll('\\', '/');
   const publicCertificate = normalized === 'certs/ca.pem';
   if ((!publicCertificate && forbiddenName.test(normalized)) || forbiddenPath.test(normalized)) {
-    if (!/^\.env\.example$/.test(normalized)) violations.push(`${file}: forbidden tracked path`);
-    continue;
+    if (/^\.env\.example$/.test(normalized)) {
+      // Allowed template: still scan its contents below.
+    } else {
+      violations.push(`${file}: forbidden tracked path`);
+      continue;
+    }
   }
   const absolute = path.resolve(process.cwd(), file);
   if (!fs.existsSync(absolute) || fs.statSync(absolute).size > 2 * 1024 * 1024 || normalized.startsWith('tests/')) continue;
