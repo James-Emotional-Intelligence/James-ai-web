@@ -95,6 +95,7 @@ class QuizQuestionReportRepository {
       return (await this.getStatus(userId, quizId, questionId))!;
     }
     this.demo.set(`${userId}:${questionId}`, { ...report, reporterUserId: userId });
+    quizRepo.setDemoQuestionDisputed(questionId, true);
     return report;
   }
 
@@ -115,7 +116,15 @@ class QuizQuestionReportRepository {
   }
 
   async list(status: QuestionReportStatus | 'all', limit: number, offset: number): Promise<QuestionReport[]> {
-    if (!db.isHealthy()) return [...this.demo.values()].filter((r) => status === 'all' || r.status === status).slice(offset, offset + limit).map(({ reporterUserId: _reporterUserId, ...report }) => report);
+    if (!db.isHealthy()) {
+      const reports = [...this.demo.values()].filter((r) => status === 'all' || r.status === status).slice(offset, offset + limit);
+      return Promise.all(reports.map(async ({ reporterUserId, ...report }) => {
+        const quiz = await quizRepo.getById(reporterUserId, report.quizId, true);
+        const question = quiz?.questions.find((item) => item.id === report.questionId);
+        return { ...report, questionPrompt: question?.prompt, correctAnswer: question?.correctAnswer,
+          explanation: question?.explanation };
+      }));
+    }
     const rows = await db.query<any>(
       `SELECT r.id, r.quiz_id, r.question_id, r.attempt_id, r.reason, r.description_sanitized, r.status, r.reviewer_note, r.created_at,
               q.prompt AS question_prompt, q.correct_answer_server_only AS correct_answer, q.explanation_server_only AS explanation
@@ -136,6 +145,9 @@ class QuizQuestionReportRepository {
       if (!report) throw Object.assign(new Error('Không tìm thấy phản ánh.'), { status: 404 });
       report.status = status;
       report.reviewerNote = clean(note);
+      quizRepo.setDemoQuestionDisputed(report.questionId,
+        [...this.demo.values()].some((item) => item.questionId === report.questionId &&
+          ['pending', 'reviewing', 'confirmed_error'].includes(item.status)));
       return;
     }
     await db.withTransaction(async (conn) => {

@@ -39,6 +39,16 @@ import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportExamsPlanToPdf, exportQuizToPdf } from '../../lib/pdf-export-service';
 import confetti from '../../lib/safe-confetti';
 
+const questionReportStatusLabel = (status?: string) => {
+  if (!status) return 'Câu này sai';
+  if (status === 'pending') return 'Chờ duyệt phản ánh';
+  if (status === 'reviewing') return 'Đang xem xét phản ánh';
+  if (status === 'confirmed_error') return 'Đã xác nhận sai';
+  if (status === 'fixed') return 'Đã sửa';
+  if (status === 'rejected') return 'Không có lỗi';
+  return 'Trạng thái phản ánh';
+};
+
 export const ExamsPage: React.FC = () => {
   const [exams, setExams] = useState<Exam[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -507,6 +517,7 @@ export const ExamsPage: React.FC = () => {
 
   const wrongFeedbacks = quizResult?.answersFeedback?.filter((fb) => !fb.isCorrect && !fb.needsReview) || [];
   const correctCount = quizResult?.answersFeedback?.filter((fb) => fb.isCorrect && !fb.needsReview).length || 0;
+  const scoredCount = quizResult?.answersFeedback?.filter((fb) => !fb.needsReview).length || 0;
 
   const openQuestionReport = async (questionId: string) => {
     if (!activeQuiz) return;
@@ -641,7 +652,7 @@ export const ExamsPage: React.FC = () => {
 
                   <button type="button" onClick={() => openQuestionReport(q.id)}
                     className="ml-0 sm:ml-9 text-xs text-amber-300 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-amber-300">
-                    {reportStatuses[q.id] ? 'Đang xem xét phản ánh' : 'Câu này sai'}
+                    {questionReportStatusLabel(reportStatuses[q.id])}
                   </button>
 
                   {q.type !== 'short_answer' && q.options && Array.isArray(q.options) && (
@@ -655,7 +666,7 @@ export const ExamsPage: React.FC = () => {
                           <button
                             key={optKey}
                             type="button"
-                            onClick={() => handleAnswerSelect(q.id, optKey)}
+                            onClick={() => handleAnswerSelect(q.id, typeof opt === 'string' ? optText : optKey)}
                             className={`text-left p-3 rounded-xl text-xs font-medium border transition-all flex items-center gap-2.5 cursor-pointer ${
                               isSelected
                                 ? 'bg-[#14532D] border-[#22C55E] text-[#86EFAC] font-bold ring-2 ring-[#22C55E]/30'
@@ -714,7 +725,7 @@ export const ExamsPage: React.FC = () => {
                     <div className="text-2xl font-black text-[#F3FAF5]">
                       {quizResult.attempt.score} <span className="text-sm font-normal text-[#86EFAC]">/ 10 điểm</span>
                       <span className="text-xs font-bold text-[#A9B8AE] ml-2">
-                        ({correctCount} / {activeQuiz.questions?.length || 0} câu đúng)
+                        ({correctCount} / {scoredCount} câu được chấm{scoredCount < (activeQuiz.questions?.length || 0) ? `, ${(activeQuiz.questions?.length || 0) - scoredCount} câu đang xem xét` : ''})
                       </span>
                     </div>
                     <p className="text-xs text-[#A9B8AE] mt-0.5">{quizResult.attempt.feedbackSummary}</p>
@@ -778,7 +789,7 @@ export const ExamsPage: React.FC = () => {
                       <div className="flex items-start gap-3">
                         <div
                           className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0 mt-0.5 ${
-                            fb.isCorrect ? 'bg-[#16A34A] text-[#050806]' : 'bg-rose-600 text-white'
+                            fb.needsReview ? 'bg-amber-600 text-white' : fb.isCorrect ? 'bg-[#16A34A] text-[#050806]' : 'bg-rose-600 text-white'
                           }`}
                         >
                           {idx + 1}
@@ -790,17 +801,18 @@ export const ExamsPage: React.FC = () => {
 
                       {q && <button type="button" onClick={() => openQuestionReport(q.id)}
                         className="ml-0 sm:ml-9 text-xs text-amber-300 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-amber-300">
-                        {reportStatuses[q.id] ? 'Đang xem xét phản ánh' : 'Câu này sai'}
+                        {questionReportStatusLabel(reportStatuses[q.id])}
                       </button>}
 
                       <div className="pl-0 sm:pl-9 space-y-1.5 text-xs">
                         <div className="flex items-center gap-2">
                           <span className="text-[#A9B8AE]">Câu trả lời của em:</span>
-                          <strong className={fb.isCorrect ? 'text-[#86EFAC]' : 'text-rose-400'}>
+                          <strong className={fb.needsReview ? 'text-amber-300' : fb.isCorrect ? 'text-[#86EFAC]' : 'text-rose-400'}>
                             {fb.userAnswer || '(Bỏ trống)'}
                           </strong>
                         </div>
-                        {!fb.isCorrect && (
+                        {fb.needsReview && <p className="text-amber-300">Câu này đang được xem xét và chưa tính vào điểm.</p>}
+                        {!fb.isCorrect && !fb.needsReview && (
                           <div className="space-y-2">
                             <div className="flex items-center gap-2">
                               <span className="text-[#A9B8AE]">Đáp án chính xác:</span>
@@ -1564,7 +1576,7 @@ export const ExamsPage: React.FC = () => {
           <div role="dialog" aria-modal="true" aria-labelledby="question-report-title" className="w-full max-w-md rounded-2xl border border-amber-400/30 bg-[#101A13] p-5 text-[#F3FAF5] space-y-4">
             <h2 id="question-report-title" className="text-lg font-bold">Câu này sai</h2>
             {reportStatuses[reportQuestionId] ? (
-              <p className="text-sm text-amber-200">Phản ánh của em đang ở trạng thái: {reportStatuses[reportQuestionId] === 'confirmed_error' ? 'Đã xác nhận sai' : reportStatuses[reportQuestionId] === 'fixed' ? 'Đã sửa' : 'Đang xem xét'}.</p>
+              <p className="text-sm text-amber-200">Trạng thái phản ánh: {questionReportStatusLabel(reportStatuses[reportQuestionId])}.</p>
             ) : (
               <>
                 <label className="block text-sm">Lý do

@@ -364,11 +364,16 @@ export class ExamStudyPlanService {
       id: `exam-plan-${index}`, userId, subjectId: item.subjectId || exam.subjectId,
       subjectName: item.subjectName, title: item.title, objective: item.description,
       status: 'pending', priority: item.priority, difficulty: 'medium',
-      dueAt: exam.examAt, estimatedMinutes: item.plannedMinutes,
+      dueAt: new Date(Math.min(
+        new Date(exam.examAt).getTime(),
+        new Date(localDateTimeToUtc(item.plannedDate, '23:59', timezone)).getTime(),
+      )).toISOString(), estimatedMinutes: item.plannedMinutes,
       minSessionMinutes: item.plannedMinutes, maxSessionMinutes: item.plannedMinutes,
       splittable: false, locked: false, completionPercent: 0,
     }));
-    const schedulerProfile = { ...profile, maxDailyStudyMinutes: Math.min(profile.maxDailyStudyMinutes || 180, Math.max(dailyMinutes, ...planItems.map((item) => item.plannedMinutes))) };
+    // The chosen minutes limit each new review session; existing homework still
+    // counts toward the student's separate total daily study limit.
+    const schedulerProfile = { ...profile, maxDailyStudyMinutes: profile.maxDailyStudyMinutes || 180 };
     const proposal = DeterministicScheduler.generateScheduleProposal(
       sourceTasks, existingTasks, [...busyEvents, ...blackoutEvents], timetableEntries,
       schedulerProfile, new Date(localDateTimeToUtc(startDateStr, '07:00', timezone)),
@@ -552,6 +557,7 @@ export class ExamStudyPlanService {
         const dueAt = localDateTimeToUtc(item.plannedDate, '23:59', timezone);
         const task = await taskRepo.create(userId, {
           subjectId: item.subjectId,
+          subjectName: item.subjectName,
           title: item.title,
           objective: item.description,
           dueAt,

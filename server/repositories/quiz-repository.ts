@@ -24,6 +24,7 @@ export class QuizRepository {
   private static instance: QuizRepository;
   private demoQuizzes: Map<string, Quiz[]> = new Map();
   private demoQuestions: Map<string, QuizQuestion[]> = new Map();
+  private demoDisputedQuestionIds = new Set<string>();
   private demoAttempts: Map<string, QuizAttemptResult[]> = new Map();
   private demoActiveAttempts: Map<string, QuizAttempt> = new Map();
 
@@ -106,7 +107,7 @@ export class QuizRepository {
     const attempts: QuizAttemptResult[] = [];
     for (const q of quizzes) {
       const list = this.demoAttempts.get(q.id) || [];
-      attempts.push(...list);
+      attempts.push(...list.map((attempt) => this.withDemoDisputes(attempt)));
     }
     return attempts;
   }
@@ -647,7 +648,7 @@ export class QuizRepository {
     }
 
     let correctCount = 0;
-    const disputedQuestionIds = new Set<string>();
+    const disputedQuestionIds = new Set<string>(this.demoDisputedQuestionIds);
     if (db.isHealthy()) {
       const disputed = await db.query<any>(
         `SELECT DISTINCT question_id FROM quiz_question_reports
@@ -690,6 +691,12 @@ export class QuizRepository {
               (o.id && String(o.id).toLowerCase() === cleanUser && String(o.text || '').toLowerCase() === cleanCorrect)
           );
           if (matchedOpt) isCorrect = true;
+          if (!isCorrect && /^\d+$/.test(cleanUser)) {
+            const selectedOption = q.options[Number(cleanUser) - 1];
+            if (typeof selectedOption === 'string' && selectedOption.trim().toLowerCase() === cleanCorrect) {
+              isCorrect = true;
+            }
+          }
         }
       } else {
         // Short answer grading
@@ -722,7 +729,9 @@ export class QuizRepository {
         correctAnswer: q.correctAnswer || '',
         isCorrect,
         needsReview,
-        explanation: disputed ? `Câu này đang được kiểm tra; tạm không tính vào điểm và chủ đề yếu. ${explanation}` : explanation,
+        explanation: disputed && db.isHealthy()
+          ? `Câu này đang được kiểm tra; tạm không tính vào điểm và chủ đề yếu. ${explanation}`
+          : explanation,
       });
     }
 
@@ -821,7 +830,7 @@ export class QuizRepository {
       this.demoAttempts.set(submission.quizId, list);
     }
 
-    return result;
+    return db.isHealthy() ? result : this.withDemoDisputes(result);
   }
 
   public async getAttemptResult(
@@ -904,7 +913,7 @@ export class QuizRepository {
       if (att) {
         const quiz = await this.getById(userId, quizId, true);
         if (quiz) {
-          return { attempt: att, quiz };
+          return { attempt: this.withDemoDisputes(att), quiz };
         }
       }
     }
@@ -1006,6 +1015,38 @@ export class QuizRepository {
     for (const [k, v] of questionMap.entries()) {
       this.demoQuestions.set(k, v);
     }
+  }
+
+  public setDemoQuestionDisputed(questionId: string, disputed: boolean): void {
+    if (disputed) this.demoDisputedQuestionIds.add(questionId);
+    else this.demoDisputedQuestionIds.delete(questionId);
+  }
+
+  private withDemoDisputes(attempt: QuizAttemptResult): QuizAttemptResult {
+    const eligible = attempt.answers.filter((answer) =>
+      !answer.needsReview && !this.demoDisputedQuestionIds.has(answer.questionId)
+    );
+    const correctCount = eligible.filter((answer) => answer.isCorrect).length;
+    const score = eligible.length ? Number((correctCount / eligible.length * 10).toFixed(2)) : 10;
+    return {
+      ...attempt,
+      score,
+      correctCount,
+      feedbackSummary: score >= 8
+        ? 'Xuất sắc! Em đã nắm rất vững kiến thức và làm chủ các dạng bài.'
+        : score >= 6.5
+          ? 'Khá tốt! Em hãy chú ý xem lại những câu sai và củng cố phương pháp giải.'
+          : 'Cần ôn tập thêm! Hãy đọc lại tóm tắt tài liệu lý thuyết trọng tâm trước khi làm lại đề mới.',
+      answers: attempt.answers.map((answer) => {
+        if (!this.demoDisputedQuestionIds.has(answer.questionId)) return answer;
+        return {
+          ...answer,
+          isCorrect: false,
+          needsReview: true,
+          explanation: `Câu này đang được kiểm tra; tạm không tính vào điểm và chủ đề yếu. ${answer.explanation}`,
+        };
+      }),
+    };
   }
 }
 

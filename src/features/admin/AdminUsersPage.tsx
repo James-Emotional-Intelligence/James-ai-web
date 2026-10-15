@@ -39,7 +39,7 @@ export const AdminUsersPage: React.FC = () => {
   const fetchQuestionReports = async () => {
     setLoadingQuestionReports(true);
     try {
-      const response = await api.getAdminQuestionReports('pending');
+      const response = await api.getAdminQuestionReports('all');
       setQuestionReports(response.reports);
     } catch (err: any) {
       setError(err.message || 'Không tải được phản ánh câu hỏi.');
@@ -483,22 +483,23 @@ export const AdminUsersPage: React.FC = () => {
 
         {activeTab === 'question_reports' && (
           <section className="space-y-4 rounded-2xl border border-amber-500/30 bg-[#0B120D] p-5">
-            <h2 className="text-base font-bold text-[#F3FAF5]">Phản ánh câu hỏi chờ duyệt</h2>
+            <h2 className="text-base font-bold text-[#F3FAF5]">Phản ánh câu hỏi</h2>
             <p className="text-xs text-[#A9B8AE]">Chỉ quản trị viên được xem đáp án nội bộ. Không hiển thị tên học sinh báo lỗi. Câu đang chờ duyệt tạm không làm giảm điểm hoặc năng lực theo chủ đề.</p>
-            {loadingQuestionReports ? <p className="text-sm text-[#A9B8AE]">Đang tải...</p> : questionReports.length === 0 ? <p className="text-sm text-[#A9B8AE]">Chưa có phản ánh mới.</p> : questionReports.map((report) => (
+            {loadingQuestionReports ? <p className="text-sm text-[#A9B8AE]">Đang tải...</p> : questionReports.length === 0 ? <p className="text-sm text-[#A9B8AE]">Chưa có phản ánh.</p> : questionReports.map((report) => (
               <article key={report.id} className="space-y-2 rounded-xl border border-amber-500/20 p-4 text-sm text-[#F3FAF5]">
                 <p className="font-bold">{report.questionPrompt || report.questionId}</p>
+                <p>Trạng thái: {report.status === 'pending' ? 'Chờ duyệt' : report.status === 'reviewing' ? 'Đang xem xét' : report.status === 'confirmed_error' ? 'Đã xác nhận sai' : report.status === 'rejected' ? 'Không có lỗi' : 'Đã sửa'}</p>
                 <p>Lý do: {report.reason}. {report.description || ''}</p>
                 <p>Đáp án nội bộ: <strong>{report.correctAnswer}</strong></p>
                 <p>Lời giải: {report.explanation}</p>
-                <label className="block text-xs">Ghi chú duyệt
+                {(report.status === 'pending' || report.status === 'reviewing') && <><label className="block text-xs">Ghi chú duyệt
                   <textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} maxLength={1000} rows={2} className="mt-1 w-full rounded-lg border border-amber-500/20 bg-[#050806] p-2 text-[#F3FAF5]" />
                 </label>
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={() => reviewQuestionReport(report.id, 'reviewing')} className="rounded-lg border border-amber-500/40 px-3 py-2 text-xs">Đang xem xét</button>
+                  {report.status === 'pending' && <button onClick={() => reviewQuestionReport(report.id, 'reviewing')} className="rounded-lg border border-amber-500/40 px-3 py-2 text-xs">Đang xem xét</button>}
                   <button onClick={() => reviewQuestionReport(report.id, 'confirmed_error')} className="rounded-lg bg-rose-700 px-3 py-2 text-xs">Đã xác nhận sai</button>
                   <button onClick={() => reviewQuestionReport(report.id, 'rejected')} className="rounded-lg border border-white/30 px-3 py-2 text-xs">Không có lỗi</button>
-                </div>
+                </div></>}
               </article>
             ))}
           </section>

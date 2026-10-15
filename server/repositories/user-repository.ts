@@ -89,17 +89,19 @@ export class UserRepository {
     this.demoUsers.set(DEMO_USER.email.toLowerCase(), demoStored);
     this.demoProfiles.set(DEMO_USER.id, { ...DEMO_PROFILE });
 
-    const adminPassword = process.env.DEMO_ADMIN_PASSWORD || 'Minhtriet14';
-    const adminSalt = 'demo_salt_seed_james_1234';
-    const adminHash = crypto.createHash('sha256').update(adminPassword + adminSalt).digest('hex');
-    const adminStored: StoredUser = {
-      ...ADMIN_USER,
-      role: 'admin',
-      passwordHash: adminHash,
-      passwordSalt: adminSalt,
-      passwordScheme: 'sha256',
-    };
-    this.demoUsers.set(ADMIN_USER.email.toLowerCase(), adminStored);
+    const adminPassword = process.env.DEMO_ADMIN_PASSWORD || (process.env.NODE_ENV === 'test' ? 'TestAdmin123!' : undefined);
+    if (adminPassword) {
+      const adminSalt = 'demo_salt_seed_james_1234';
+      const adminHash = crypto.createHash('sha256').update(adminPassword + adminSalt).digest('hex');
+      const adminStored: StoredUser = {
+        ...ADMIN_USER,
+        role: 'admin',
+        passwordHash: adminHash,
+        passwordSalt: adminSalt,
+        passwordScheme: 'sha256',
+      };
+      this.demoUsers.set(ADMIN_USER.email.toLowerCase(), adminStored);
+    }
   }
 
   public async hashPassword(password: string): Promise<{ passwordHash: string; passwordSalt: string; scheme: string }> {

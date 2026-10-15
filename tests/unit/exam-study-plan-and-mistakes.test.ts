@@ -113,6 +113,7 @@ describe('Exam Study Planner & Personal Mistake Notebook Unit Tests', () => {
       const activityTypes = plan.items.map((i) => i.activityType);
       expect(activityTypes).toContain('theory_review');
       expect(activityTypes).toContain('mock_test');
+      expect(new Set(plan.items.map((item) => item.plannedDate)).size).toBeGreaterThanOrEqual(4);
     });
 
     it('3. Generates 14-day extended plan with spaced pacing and rest/recap days', async () => {
@@ -142,6 +143,7 @@ describe('Exam Study Planner & Personal Mistake Notebook Unit Tests', () => {
         timezone,
       });
       await examStudyPlanService.acceptPlan(userId, plan.id);
+      expect((await taskRepo.getByUserId(userId)).find((task) => task.title === plan.items[0].title)?.subjectName).toBe('Toán học');
 
       // Artificially make an item missed in the past
       await examStudyPlanRepo.updatePlanItem(userId, plan.id, plan.items[0].id, {

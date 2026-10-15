@@ -35,11 +35,25 @@ So sánh baseline và lần mới chỉ có ý nghĩa khi cùng fixture, cùng m
 
 | Lệnh | Kết quả |
 | --- | --- |
-| `npm run release:verify` | PASS: secret check, typecheck, mojibake, lint, 337 unit, 110 integration, client/server build và gói phát hành |
+| `npm run release:verify` | PASS: secret check, typecheck, mojibake, lint, 337 unit, 112 integration, client/server build và gói phát hành |
 | `npm run test:jami-quality` | PASS offline 5/5 lịch; 10 câu AI, 20 câu AI và live `NOT_RUN` |
 | `npm run test:e2e` | PASS 8/8 trên Chromium ở chế độ demo khi server demo đã chạy sẵn trên cổng 3000; Playwright tự khởi động server trên Windows chạy xong test nhưng không đóng tiến trình sạch trong lần thử trước |
 
 Kết quả E2E trên là smoke test cho các luồng hiện có, chưa bao phủ thao tác phản ánh câu sai trên trình duyệt. Integration test dùng mock và demo, chưa chứng minh giao dịch MySQL thật hay migration production. Không dùng những kết quả này để suy ra độ chính xác AI.
+
+## Kiểm tra trực tiếp bằng @Browser trên server demo
+
+Ngày 15/10/2026, đã đăng nhập học sinh và admin demo bằng mật khẩu thử chỉ cấp cho tiến trình local. Kết quả quan sát sau khi sửa các lỗi phát hiện trong lúc kiểm tra:
+
+| Luồng | Kết quả nhìn thấy |
+| --- | --- |
+| Tạo đề AI và tạo đề từ tài liệu khi provider offline | Báo “AI chưa sẵn sàng”; không đưa đề placeholder |
+| Làm đề có lựa chọn dạng chuỗi | Bốn đáp án đúng được chấm đúng; câu đang tranh chấp tạm không tính vào điểm, hiện “3/3 câu được chấm, 1 câu đang xem xét” |
+| Phản ánh và admin duyệt | Học sinh thấy trạng thái; admin thấy câu hỏi, đáp án, lời giải nhưng không thấy tên người báo; trạng thái “Đang xem xét” còn trong danh sách để duyệt tiếp; bác bỏ hiện “Không có lỗi” |
+| Kế hoạch ôn thi | Bản nháp 7 buổi trải trên 15–21/10 trước kỳ thi 22/10; chỉ sau khi bấm chấp nhận mới xuất hiện nhiệm vụ ở “Học tập hôm nay” |
+| Đề xuất chủ đề yếu | Tài khoản demo không có đủ bằng chứng năng lực; nút xem đề xuất bị khóa và hiện lý do rõ |
+
+Đây là kiểm tra UI trên dữ liệu demo trong bộ nhớ. Không thay thế kiểm tra provider AI live, migration và giao dịch MySQL thật, hay kiểm toán quyền truy cập toàn bộ hệ thống.
 
 ## Demo 60–90 giây
 

@@ -5,6 +5,8 @@ import { authService } from '../../server/services/auth-service';
 import { subjectRepo } from '../../server/repositories/subject-repository';
 import { AiAdapter } from '../../server/services/ai-adapter';
 import { userRepo } from '../../server/repositories/user-repository';
+import { quizRepo } from '../../server/repositories/quiz-repository';
+import { quizQuestionReportRepo } from '../../server/repositories/quiz-question-report-repository';
 
 describe('Exams & Quizzes Revision Subsystem Integration Tests', () => {
   const quizDraftSpy = vi.spyOn(AiAdapter, 'generateQuizDraft').mockImplementation(async (params) => ({
@@ -294,5 +296,56 @@ describe('Exams & Quizzes Revision Subsystem Integration Tests', () => {
     expect(reviewed.status).toBe(200);
     const reviewedAgain = await request(app).patch(`/api/v1/admin/question-reports/${reportId}`).set('Cookie', [adminSession]).send({ status: 'confirmed_error' });
     expect(reviewedAgain.status).toBe(200);
+  });
+
+  it('15. grades a numbered choice from a legacy string-options quiz correctly', async () => {
+    const legacyQuizId = `quiz-legacy-${Date.now()}`;
+    const questionId = `q-legacy-${Date.now()}`;
+    quizRepo.seedDemo(userAId, [{
+      id: legacyQuizId, userId: userAId, subjectId, title: 'Đề lựa chọn chuỗi',
+      subjectName: 'Toán học', type: 'practice', difficulty: 'easy', status: 'ready',
+      questionCount: 1, createdAt: new Date().toISOString(),
+    } as any], new Map([[legacyQuizId, [{
+      id: questionId, quizId: legacyQuizId, order: 1, type: 'multiple_choice',
+      prompt: '2 + 2 bằng bao nhiêu?', options: ['A. 4', 'B. 5'],
+      correctAnswer: 'A. 4', explanation: '2 + 2 = 4.', difficulty: 'easy', topicRef: 'Phép cộng',
+    } as any]]]));
+    const res = await request(app)
+      .post(`/api/v1/quizzes/${legacyQuizId}/attempts/submit`)
+      .set('Cookie', [userASession])
+      .send({ answers: [{ questionId, answer: '1' }] });
+    expect(res.status).toBe(200);
+    expect(res.body.attempt.score).toBe(10);
+    expect(res.body.answersFeedback[0].isCorrect).toBe(true);
+  });
+
+  it('16. recalculates demo score while a question is disputed and restores it after rejection', async () => {
+    const suffix = Date.now();
+    const demoQuizId = `quiz-dispute-${suffix}`;
+    const firstId = `q-correct-${suffix}`;
+    const secondId = `q-wrong-${suffix}`;
+    quizRepo.seedDemo(userAId, [{ id: demoQuizId, userId: userAId, subjectId,
+      title: 'Đề phản ánh', subjectName: 'Toán học', type: 'practice', difficulty: 'easy',
+      status: 'ready', questionCount: 2, createdAt: new Date().toISOString() } as any],
+    new Map([[demoQuizId, [
+      { id: firstId, quizId: demoQuizId, order: 1, type: 'multiple_choice', prompt: '1 + 1?',
+        options: ['A. 2', 'B. 3'], correctAnswer: 'A. 2', explanation: '1 + 1 = 2.', difficulty: 'easy', topicRef: 'Cộng' } as any,
+      { id: secondId, quizId: demoQuizId, order: 2, type: 'multiple_choice', prompt: '2 + 2?',
+        options: ['A. 5', 'B. 4'], correctAnswer: 'B. 4', explanation: '2 + 2 = 4.', difficulty: 'easy', topicRef: 'Cộng' } as any,
+    ]]]));
+    const submitted = await quizRepo.submitQuizAttempt(userAId, { quizId: demoQuizId,
+      answers: [{ questionId: firstId, answer: '1' }, { questionId: secondId, answer: '1' }] });
+    expect(submitted.score).toBe(5);
+    const report = await quizQuestionReportRepo.create(userAId, demoQuizId, secondId, { reason: 'unclear' });
+    const pending = await quizRepo.getAttemptResult(userAId, submitted.attemptId);
+    expect(pending?.attempt.score).toBe(10);
+    expect(pending?.attempt.answers.find((answer) => answer.questionId === secondId)?.needsReview).toBe(true);
+    const queue = await quizQuestionReportRepo.list('all', 20, 0);
+    expect(queue.find((item) => item.id === report.id)?.questionPrompt).toBe('2 + 2?');
+    expect(JSON.stringify(queue)).not.toContain('reporterUserId');
+    await quizQuestionReportRepo.review(report.id, userAId, 'rejected', 'Đáp án đúng.');
+    const restored = await quizRepo.getAttemptResult(userAId, submitted.attemptId);
+    expect(restored?.attempt.score).toBe(5);
+    expect(restored?.attempt.answers.find((answer) => answer.questionId === secondId)?.needsReview).toBe(false);
   });
 });
