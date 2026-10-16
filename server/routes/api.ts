@@ -120,6 +120,7 @@ import {
   sanitizeFileName,
 } from '../services/storage-service';
 import { materialProcessor } from '../services/material-processor';
+import { libraryService } from '../services/library-service';
 import { aiBillingService } from '../services/ai-billing-service';
 import { registrationCodeService } from '../services/registration-code-service';
 import { aiWalletRepo } from '../repositories/ai-wallet-repository';
@@ -763,6 +764,14 @@ apiRouter.get('/ai-wallet/me/transactions', requireAuth, asyncHandler(async (req
 // Authentication & User Identity Routes
 // ==========================================
 
+function localDemoLoginEnabled(req: Request): boolean {
+  if (!env.DEMO_LOGIN_ENABLED || isProductionRuntime) return false;
+  const host = new URL(env.APP_BASE_URL).hostname;
+  const remoteAddress = req.socket.remoteAddress;
+  return ['localhost', '127.0.0.1', '[::1]'].includes(host)
+    && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remoteAddress || '');
+}
+
 /**
  * Bootstrap Session Endpoint
  * Safe unauthenticated bootstrap without triggering noisy 401 console errors.
@@ -771,7 +780,7 @@ apiRouter.get('/ai-wallet/me/transactions', requireAuth, asyncHandler(async (req
 apiRouter.get('/auth/session', asyncHandler(async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 
-  const demoLoginEnabled = Boolean(env.DEMO_LOGIN_ENABLED && !isProductionRuntime);
+  const demoLoginEnabled = localDemoLoginEnabled(req);
   const sessionToken = getSessionToken(req);
 
   if (!sessionToken) {
@@ -944,13 +953,32 @@ apiRouter.post('/auth/login', authRateLimiter, asyncHandler(async (req: Request,
 }));
 
 apiRouter.post('/auth/demo-login', authRateLimiter, asyncHandler(async (req: Request, res: Response) => {
-  if (isProductionRuntime || !env.DEMO_LOGIN_ENABLED) {
-    return sendError(req, res, 403, 'DEMO_DISABLED', 'Tài khoản demo đã bị vô hiệu hóa trên môi trường này.');
+  if (!localDemoLoginEnabled(req)) {
+    return sendError(req, res, 403, 'DEMO_DISABLED', 'Chế độ dùng thử chỉ khả dụng trên localhost khi được bật trong cấu hình.');
   }
 
-  let demoUser = await userRepo.findByEmail('minh.hocsinh@jami.edu.vn');
-  if (!demoUser) {
-    demoUser = await userRepo.findById('usr_student_demo_01');
+  let demoUser;
+  let profile;
+  if (isProduction) {
+    if (!db.isHealthy()) {
+      return sendError(req, res, 503, 'DATABASE_UNAVAILABLE', 'Cơ sở dữ liệu đang tạm gián đoạn.');
+    }
+    const identity = crypto.randomUUID().replace(/-/g, '');
+    const created = await userRepo.createUser({
+      email: `demo-${identity}@demo.jami.invalid`,
+      password: crypto.randomBytes(32).toString('hex'),
+      displayName: 'Học sinh Demo',
+      preferredName: 'Demo',
+      gradeLevel: 9,
+    });
+    demoUser = created.user;
+    profile = created.profile;
+  } else {
+    demoUser = await userRepo.findByEmail('minh.hocsinh@jami.edu.vn');
+    if (!demoUser) {
+      demoUser = await userRepo.findById('usr_student_demo_01');
+    }
+    if (demoUser) profile = await userRepo.getProfile(demoUser.id);
   }
 
   if (!demoUser) {
@@ -960,7 +988,6 @@ apiRouter.post('/auth/demo-login', authRateLimiter, asyncHandler(async (req: Req
   const sessionToken = await authService.createSession(demoUser.id, true, true);
   authService.setAuthCookie(res, sessionToken, true);
 
-  const profile = await userRepo.getProfile(demoUser.id);
   const { passwordHash, passwordSalt, passwordScheme, ...safeUser } = demoUser;
 
   res.json({
@@ -3510,6 +3537,59 @@ apiRouter.post(
 // ==========================================
 // General Learning Materials Routes
 // ==========================================
+
+apiRouter.get('/library', requireAuth, asyncHandler(async (_req: Request, res: Response) => {
+  res.json({ documents: await libraryService.list() });
+}));
+
+apiRouter.get('/library/:id/:action', requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  if (!['preview', 'download'].includes(req.params.action)) {
+    return sendError(req, res, 404, 'NOT_FOUND', 'Đường dẫn tài liệu không tồn tại.');
+  }
+  const result = await libraryService.get(req.params.id);
+  if (!result) return sendError(req, res, 404, 'DOCUMENT_NOT_FOUND', 'Không tìm thấy tài liệu.');
+
+  const fileName = encodeURIComponent(result.document.fileName);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `${req.params.action === 'download' ? 'attachment' : 'inline'}; filename="document.pdf"; filename*=UTF-8''${fileName}`);
+  return res.sendFile(result.filePath, { acceptRanges: true });
+}));
+
+apiRouter.post('/admin/library', requireAdmin, uploadDisk.single('file'), asyncHandler(async (req: Request, res: Response) => {
+  const file = req.file;
+  if (!file) return sendError(req, res, 400, 'MISSING_FILE', 'Vui lòng chọn một tệp PDF.');
+  try {
+    const grade = Number(req.body?.grade);
+    const kind = req.body?.kind || 'other';
+    if (!Number.isInteger(grade) || grade < 6 || grade > 12 || !['sgk', 'sbt', 'other'].includes(kind)) {
+      return sendError(req, res, 400, 'VALIDATION_ERROR', 'Lớp hoặc loại tài liệu không hợp lệ.');
+    }
+    if (!file.originalname.toLowerCase().endsWith('.pdf')) {
+      return sendError(req, res, 400, 'INVALID_FILE', 'Thư viện chỉ nhận tệp PDF.');
+    }
+    const result = await libraryService.addFromFile(file.path, {
+      title: String(req.body?.title || file.originalname.replace(/\.pdf$/i, '')),
+      grade,
+      subject: String(req.body?.subject || 'Khác'),
+      kind,
+      fileName: file.originalname,
+    });
+    res.status(201).json(result);
+  } catch (error: any) {
+    console.error('[JAMI Library] Admin upload failed:', { code: error.code, syscall: error.syscall, path: error.path, dest: error.dest });
+    throw error;
+  } finally {
+    await fs.promises.rm(file.path, { force: true }).catch(() => {});
+  }
+}));
+
+apiRouter.delete('/admin/library/:id', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const success = await libraryService.delete(req.params.id);
+  if (!success) return sendError(req, res, 404, 'DOCUMENT_NOT_FOUND', 'Không tìm thấy tài liệu.');
+  res.json({ success: true });
+}));
 
 apiRouter.get('/materials', requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;

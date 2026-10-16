@@ -795,6 +795,30 @@ export const api = {
 
   // Learning Materials
   getMaterials: () => fetchJson<{ materials: LearningMaterial[] }>('/materials'),
+  getLibraryDocuments: () => fetchJson<{ documents: import('../../shared/types').LibraryDocument[] }>('/library'),
+  getLibraryPreviewUrl: (id: string) => buildApiUrl(`/library/${encodeURIComponent(id)}/preview`),
+  getLibraryDownloadUrl: (id: string) => buildApiUrl(`/library/${encodeURIComponent(id)}/download`),
+  deleteLibraryDocument: (id: string) => fetchJson<{ success: boolean }>(`/admin/library/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  uploadLibraryDocument: (file: File, meta: { title: string; grade: number; subject: string; kind: 'sgk' | 'sbt' | 'other' }): Promise<{ document: import('../../shared/types').LibraryDocument }> =>
+    new Promise((resolve, reject) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('title', meta.title);
+      form.append('grade', String(meta.grade));
+      form.append('subject', meta.subject);
+      form.append('kind', meta.kind);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', buildApiUrl('/admin/library'));
+      xhr.withCredentials = true;
+      xhr.onload = () => {
+        let data: any;
+        try { data = JSON.parse(xhr.responseText); } catch { data = {}; }
+        if (xhr.status === 201) resolve(data);
+        else reject(new Error(data.error?.message || `Tải tài liệu thất bại (HTTP ${xhr.status}).`));
+      };
+      xhr.onerror = () => reject(new Error('Không thể kết nối đến máy chủ.'));
+      xhr.send(form);
+    }),
   getMaterial: (id: string) => fetchJson<{ material: LearningMaterial }>(`/materials/${id}`),
   createMaterialUploadIntent: (data: {
     title: string;

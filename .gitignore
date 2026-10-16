@@ -10,6 +10,7 @@ node_modules
 backup/
 backups/
 storage/materials/
+storage/library/
 test-results/
 dist/
 release-artifacts/

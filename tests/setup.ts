@@ -2,6 +2,8 @@ import '@testing-library/jest-dom/vitest';
 
 // Ensure test runner isolates from external OpenAI live network calls
 process.env.OPENAI_API_KEY = '';
+// Integration tests create their own users; keep the localhost demo flag out of test state.
+process.env.DEMO_LOGIN_ENABLED = 'false';
 
 // Global Web Speech Mocks for testing environment
 if (typeof global !== 'undefined') {

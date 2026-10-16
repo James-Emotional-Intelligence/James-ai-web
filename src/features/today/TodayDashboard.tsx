@@ -2080,7 +2080,7 @@ export const TodayDashboard: React.FC = () => {
             <div className="flex items-center justify-between pb-2 border-b border-[rgba(34,197,94,0.18)]">
               <div className="flex items-center gap-2">
                 <BookOpen className="w-4 h-4 text-[#22C55E]" />
-                <h3 className="text-xs font-black text-[#F3FAF5]">Kho tài liệu ({overview.materials.totalMaterialsCount})</h3>
+                <h3 className="text-xs font-black text-[#F3FAF5]">Tài liệu cá nhân ({overview.materials.totalMaterialsCount})</h3>
               </div>
               <button
                 onClick={() => navigate('/materials')}
@@ -2102,7 +2102,7 @@ export const TodayDashboard: React.FC = () => {
               </div>
             ) : (
               <div className="p-4 text-center text-xs text-[#A9B8AE]">
-                Chưa có tài liệu nào được tải lên.
+                Bạn chưa tải tài liệu cá nhân. Mở kho để xem thư viện sách chung.
               </div>
             )}
           </div>

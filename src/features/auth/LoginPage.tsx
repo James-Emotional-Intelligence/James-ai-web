@@ -59,11 +59,6 @@ export const LoginPage: React.FC = () => {
 
   const fromPath = getSafeReturnUrl((location.state as any)?.from?.pathname);
 
-  const fillDemoCredentials = () => {
-    setValue('email', 'minh.hocsinh@jami.edu.vn');
-    setValue('password', 'Demo1234!');
-  };
-
   const onSubmit = async (data: LoginFormData) => {
     setErrorMessage(null);
     setIsSubmitting(true);
@@ -142,12 +137,6 @@ export const LoginPage: React.FC = () => {
             </p>
           </div>
         </div>
-
-        {/* Bottom Security Note */}
-        <div className="relative z-10 flex items-center gap-2 text-xs text-[#A9B8AE]">
-          <ShieldCheck className="w-4 h-4 text-[#22C55E]" />
-          <span>Bảo mật an toàn cho học sinh Lớp 6 — 12</span>
-        </div>
       </div>
 
       {/* Right Panel: Clean Login Form */}
@@ -172,24 +161,15 @@ export const LoginPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Quick Demo Fill Banner (Only rendered when demo mode is active) */}
+          {/* Local demo session uses a separate student workspace. */}
           {demoLoginEnabled && (
             <div className="p-3.5 rounded-2xl bg-[#101A13] border border-[rgba(34,197,94,0.25)] space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-[#86EFAC] flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
-                  Tài khoản Dùng thử (Demo)
-                </span>
-                <button
-                  type="button"
-                  onClick={fillDemoCredentials}
-                  className="text-[11px] font-bold text-[#22C55E] hover:underline cursor-pointer"
-                >
-                  Tự động điền &rarr;
-                </button>
+              <div className="font-bold text-[#86EFAC] flex items-center gap-1.5 text-xs">
+                <Sparkles className="w-3.5 h-3.5 text-[#22C55E]" />
+                Dùng thử Jami AI
               </div>
               <p className="text-[11px] text-[#A9B8AE]">
-                Tài khoản mẫu: <strong>minh.hocsinh@jami.edu.vn</strong>
+                Mở không gian học sinh riêng để khám phá các chức năng. Không cần nhập email hay mật khẩu.
               </p>
               <button
                 type="button"
@@ -198,7 +178,7 @@ export const LoginPage: React.FC = () => {
                 className="w-full py-2 px-3 rounded-xl bg-[#14532D] hover:bg-[#16A34A] text-[#86EFAC] hover:text-[#050806] text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer border border-[#22C55E]/30"
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
-                <span>{isDemoLoading ? 'Đang vào Demo...' : 'Đăng nhập nhanh một chạm vào Demo'}</span>
+                <span>{isDemoLoading ? 'Đang mở Demo...' : 'Vào Demo'}</span>
               </button>
             </div>
           )}

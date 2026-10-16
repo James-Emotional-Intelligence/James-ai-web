@@ -34,13 +34,14 @@ import { PrintPdfButton } from '../../components/common/PrintPdfButton';
 import { exportMaterialSummaryToPdf } from '../../lib/pdf-export-service';
 import { ModalPortal } from '../../components/common/ModalPortal';
 import confetti from '../../lib/safe-confetti';
+import { LibraryTab } from './LibraryTab';
 
-type ActiveTab = 'materials' | 'books' | 'outlines';
+type ActiveTab = 'library' | 'materials' | 'books' | 'outlines';
 type ModalMode = 'upload' | 'upload_book' | 'note' | 'create_outline' | null;
 
 export const MaterialsPage: React.FC = () => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<ActiveTab>('books');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('library');
   const [materials, setMaterials] = useState<LearningMaterial[]>([]);
   const [books, setBooks] = useState<LearningMaterial[]>([]);
   const [outlines, setOutlines] = useState<Outline[]>([]);
@@ -591,6 +592,15 @@ export const MaterialsPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[rgba(34,197,94,0.18)] pb-2 gap-3">
         <div className="flex items-center gap-4 overflow-x-auto">
           <button
+            onClick={() => setActiveTab('library')}
+            className={`pb-2 text-xs font-black transition-all cursor-pointer flex items-center gap-2 border-b-2 whitespace-nowrap ${
+              activeTab === 'library' ? 'border-[#22C55E] text-[#86EFAC]' : 'border-transparent text-[#A9B8AE] hover:text-[#F3FAF5]'
+            }`}
+          >
+            <BookOpen className="w-4 h-4" />
+            <span>Thư viện chung</span>
+          </button>
+          <button
             onClick={() => setActiveTab('books')}
             className={`pb-2 text-xs font-black transition-all cursor-pointer flex items-center gap-2 border-b-2 whitespace-nowrap ${
               activeTab === 'books'
@@ -628,7 +638,7 @@ export const MaterialsPage: React.FC = () => {
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-2">
+        {activeTab !== 'library' && <div className="flex items-center gap-2">
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
@@ -652,8 +662,10 @@ export const MaterialsPage: React.FC = () => {
               </option>
             ))}
           </select>
-        </div>
+        </div>}
       </div>
+
+      {activeTab === 'library' && <LibraryTab />}
 
       {/* TAB 1: SÁCH MỀM */}
       {activeTab === 'books' && (

@@ -815,6 +815,17 @@ export interface Outline {
 
 export type LearningMaterial = Material;
 
+export interface LibraryDocument {
+  id: string;
+  title: string;
+  grade: number;
+  subject: string;
+  kind: 'sgk' | 'sbt' | 'other';
+  fileName: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
 export interface TopicMastery {
   id: string;
   subjectId: string;
