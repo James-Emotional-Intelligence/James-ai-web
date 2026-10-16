@@ -1282,7 +1282,17 @@ export class TimetableRepository {
   }
 
   public seedDemo(userId: string, timetable: TimetableEntry[], busyEvents: BusyEvent[]) {
-    this.demoEntries.set(userId, [...timetable]);
+    const timetableId = `tt_demo_${userId}`;
+    const entries = timetable.map((entry) => ({ ...entry, timetableId }));
+    this.demoTimetables.set(userId, [{
+      id: timetableId,
+      userId,
+      name: 'Thời khóa biểu chính khóa',
+      timezone: 'Asia/Ho_Chi_Minh',
+      isActive: true,
+      entries,
+    }]);
+    this.demoEntries.set(userId, entries);
     this.demoBusyEvents.set(userId, [...busyEvents]);
   }
 }

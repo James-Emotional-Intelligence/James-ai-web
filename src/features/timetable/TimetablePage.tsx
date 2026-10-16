@@ -1052,7 +1052,8 @@ export const TimetablePage: React.FC = () => {
     const dayEvents = busyEvents.filter((b) => doesEventOccurOnLocalDate(b, dateStr, 'Asia/Ho_Chi_Minh'));
     const dayTasks = tasks.filter((t) => {
       if (!t.scheduledStartAt) return false;
-      const taskDate = formatDateVN(new Date(t.scheduledStartAt));
+      const start = new Date(t.scheduledStartAt);
+      const taskDate = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
       return taskDate === dateStr;
     });
 

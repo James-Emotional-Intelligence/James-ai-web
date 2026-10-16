@@ -696,6 +696,9 @@ export class BookRepository {
 
     let list = this.demoChunks.get(materialId) || [];
     if (options?.chapterId) list = list.filter((c) => c.chapterId === options.chapterId);
+    if (options?.startPage !== undefined && options?.endPage !== undefined) {
+      list = list.filter((c) => c.pageStart <= options.endPage! && c.pageEnd >= options.startPage!);
+    }
     if (options?.limit) list = list.slice(0, options.limit);
     return list;
   }

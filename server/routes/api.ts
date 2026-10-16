@@ -3871,11 +3871,20 @@ apiRouter.patch('/materials/:id', requireAuth, asyncHandler(async (req: Request,
 
 apiRouter.post('/materials/:id/outline', requireAuth, aiRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).userId;
-  const outline = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, {
+  const generated = await materialProcessor.generateOutlineFromMaterial(userId, req.params.id, {
     chapter: req.body?.chapter,
     customPrompt: req.body?.customPrompt,
   });
-  res.json({ outline });
+  const outline = await materialRepo.createOutline(userId, {
+    materialId: req.params.id,
+    subjectId: generated.outline.subjectId,
+    title: generated.outline.title,
+    chapter: generated.outline.chapter,
+    contentMarkdown: generated.outline.markdown,
+    keyPoints: generated.outline.summaryJson?.keyPoints || [],
+    formulas: generated.outline.summaryJson?.formulas || [],
+  });
+  res.status(201).json({ outline });
 }));
 
 apiRouter.delete('/materials/:id', requireAuth, asyncHandler(async (req: Request, res: Response) => {

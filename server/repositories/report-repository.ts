@@ -851,7 +851,8 @@ export class ReportRepository {
         totalTasks: tasks.length,
         completedTasks,
         completionRate: tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0,
-        onTimeRate: tasks.length > 0 ? 100 : null,
+        // Demo tasks do not carry a reliable completion timestamp, so punctuality is unknown.
+        onTimeRate: null,
         averageQuizScore,
         totalQuizAttempts,
         streakDays: (actualFocusMinutes > 0 || completedTasks > 0) ? 1 : 0,

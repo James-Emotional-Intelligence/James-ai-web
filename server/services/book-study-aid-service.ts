@@ -42,11 +42,14 @@ export class BookStudyAidService {
       selectedChapter = chapters[0];
     }
 
+    const rangeStart = params.startPage ?? selectedChapter?.startPage ?? 1;
+    const rangeEnd = params.endPage ?? selectedChapter?.endPage ?? book.pageCount ?? 100;
+
     // Retrieve chunks within target range
     const chunks = await bookRepo.getChunks(materialId, {
       chapterId: params.chapterId,
-      startPage: params.startPage || selectedChapter?.startPage,
-      endPage: params.endPage || selectedChapter?.endPage,
+      startPage: rangeStart,
+      endPage: rangeEnd,
       limit: 10,
     });
 
@@ -65,7 +68,7 @@ export class BookStudyAidService {
       return {
         action: params.action,
         title: `Ôn tập ${book.title}`,
-        contentMarkdown: `Không tìm thấy đủ dữ liệu văn bản trong phạm vi trang đã chọn (${params.startPage || 1} - ${params.endPage || book.pageCount || 100}). Bạn hãy thử mở rộng phạm vi chương hoặc chọn toàn bộ sách nhé!`,
+        contentMarkdown: `Không tìm thấy đủ dữ liệu văn bản trong phạm vi trang đã chọn (${rangeStart} - ${rangeEnd}). Bạn hãy thử mở rộng phạm vi chương hoặc chọn toàn bộ sách nhé!`,
         citations: [],
       };
     }

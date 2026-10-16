@@ -450,14 +450,9 @@ export class AiAdapter {
 
     if (msg.includes('tóm tắt') || msg.includes('sơ lược')) {
       return {
-        message: `📋 **Tóm tắt bài học trọng tâm cho ${studentName}:**\n\n` +
-          `1. **Khái niệm cốt lõi:** Nắm vững định nghĩa và tính chất cơ bản.\n` +
-          `2. **Công thức & Quy tắc:** Ghi nhớ các bước biến đổi và điều kiện áp dụng.\n` +
-          `3. **Dạng bài thường gặp:** Nhận diện dấu hiệu bài toán và phương pháp giải chuẩn.\n` +
-          `4. **Lỗi sai cần tránh:** Đọc kỹ đề bài, kiểm tra điều kiện xác định và đơn vị đo.\n\n` +
-          `Em muốn Jami giải thích sâu hơn về phần nào hay tạo một ví dụ mẫu tương tự?`,
-        emotion: 'speaking',
-        suggestedActions: ['Tạo ví dụ tương tự', 'Hướng dẫn từng bước', 'Làm đề kiểm tra'],
+        message: 'Jami chưa thể tóm tắt chính xác nội dung này vì dịch vụ AI chưa sẵn sàng. Em có thể mở tài liệu để đọc trực tiếp và thử lại sau.',
+        emotion: 'guiding',
+        suggestedActions: ['Mở Kho Tài Liệu'],
         requiresConfirmation: false,
         citationsToUserMaterial: [],
       };
@@ -465,15 +460,9 @@ export class AiAdapter {
 
     if (msg.includes('ví dụ tương tự') || msg.includes('bài mẫu') || msg.includes('ví dụ')) {
       return {
-        message: `✨ **Ví dụ tương tự có lời giải mẫu cho ${studentName}:**\n\n` +
-          `• **Bài toán:** Cho biểu thức $P = \\frac{2x + 1}{x - 3}$ (với $x \\neq 3$). Tìm giá trị của $x$ để $P = 5$.\n` +
-          `• **Bước 1:** Đặt điều kiện: $x \\neq 3$.\n` +
-          `• **Bước 2:** Quy đồng khử mẫu: $2x + 1 = 5(x - 3) \\Leftrightarrow 2x + 1 = 5x - 15$.\n` +
-          `• **Bước 3:** Chuyển vế: $3x = 16 \\Leftrightarrow x = \\frac{16}{3}$ (thỏa mãn điều kiện).\n` +
-          `• **Kết luận:** Vậy $x = \\frac{16}{3}$.\n\n` +
-          `Em có muốn thử giải một bài tương tự để Jami nhận xét không?`,
+        message: 'Jami chưa thể tạo ví dụ đúng với bài đang học vì dịch vụ AI chưa sẵn sàng. Em hãy thử lại sau.',
         emotion: 'guiding',
-        suggestedActions: ['Giải bài tập tiếp theo', 'Giải thích lại bước 2', 'Tạo đề ôn tập'],
+        suggestedActions: [],
         requiresConfirmation: false,
         citationsToUserMaterial: [],
       };

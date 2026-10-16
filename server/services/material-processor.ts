@@ -320,6 +320,13 @@ export class MaterialProcessor {
       throw new Error('Tài liệu chưa được xử lý xong nội dung. Vui lòng chờ vài giây.');
     }
 
+    if (!aiGateway.isAvailable()) {
+      const error = new Error('Chức năng tạo đề cương AI hiện chưa khả dụng. Vui lòng thử lại khi dịch vụ AI được kết nối.');
+      (error as any).code = 'AI_NOT_CONFIGURED';
+      (error as any).status = 503;
+      throw error;
+    }
+
     const summary = material.summaryJson || await this.generateStructuredSummary(
       material.title,
       material.subjectName || 'Môn học',

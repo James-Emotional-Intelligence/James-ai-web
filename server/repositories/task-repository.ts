@@ -2,6 +2,7 @@ import { db } from '../db/mysql';
 import { StudyTask, ExecutionGuide, ExecutionStep, TaskEvidence, PreparationChecklistItem } from '../../shared/types';
 import crypto from 'crypto';
 import { DbExecutor } from '../db/mysql';
+import { subjectRepo } from './subject-repository';
 
 export class TaskRepository {
   private static instance: TaskRepository;
@@ -105,12 +106,15 @@ export class TaskRepository {
 
   public async create(userId: string, task: Partial<StudyTask>, executor?: DbExecutor): Promise<StudyTask> {
     const id = task.id || 'task_' + crypto.randomUUID().replace(/-/g, '').substring(0, 24);
+    const subjectName = !db.isHealthy() && task.subjectId
+      ? (await subjectRepo.getByUserId(userId)).find((subject) => subject.id === task.subjectId)?.name
+      : undefined;
     const newTask: StudyTask = {
       id,
       userId,
       planId: task.planId,
       subjectId: task.subjectId || null,
-      subjectName: task.subjectName,
+      subjectName: subjectName || task.subjectName,
       examId: task.examId,
       title: (task.title || 'Nhiệm vụ mới').trim(),
       objective: task.objective || '',
@@ -250,6 +254,9 @@ export class TaskRepository {
       if (!task) return null;
 
       Object.assign(task, updates);
+      if (updates.subjectId !== undefined) {
+        task.subjectName = (await subjectRepo.getByUserId(userId)).find((subject) => subject.id === updates.subjectId)?.name;
+      }
       if (updates.status === 'completed') {
         task.completionPercent = 100;
       }
